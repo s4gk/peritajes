@@ -30,6 +30,7 @@ import { analyze, riskTone } from "@/lib/rules-engine";
 import type { StoredInspection } from "@/lib/types";
 import { formatDate } from "@/lib/utils";
 
+import { BackupControls } from "./backup-controls";
 import { ThemeToggle } from "./theme-toggle";
 import { UIPreferencesProvider } from "./ui-preferences";
 
@@ -91,6 +92,7 @@ function InspectionsInner() {
           </p>
         </div>
         <div className="flex items-center gap-2 sm:self-auto">
+          <BackupControls onChange={refresh} />
           <ThemeToggle />
           <Button onClick={handleNew} size="lg" className="hidden h-10 sm:inline-flex">
             <Plus className="mr-1 h-4 w-4" /> Nuevo peritaje

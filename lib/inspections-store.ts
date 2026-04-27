@@ -305,3 +305,93 @@ export async function resetStore(): Promise<void> {
 export function migrateLegacyIfNeeded(): void {
   // No-op: initStore() handles legacy migration as part of hydration.
 }
+
+/* -----------------------------------------------------------
+ *  Backup: export / import
+ * --------------------------------------------------------- */
+
+const BACKUP_VERSION = 1;
+
+export type InspectionsBackup = {
+  version: number;
+  exportedAt: string;
+  count: number;
+  inspections: StoredInspection[];
+};
+
+export function exportAllInspections(): InspectionsBackup {
+  const inspections = listInspections();
+  return {
+    version: BACKUP_VERSION,
+    exportedAt: new Date().toISOString(),
+    count: inspections.length,
+    inspections,
+  };
+}
+
+export type ImportResult = {
+  added: number;
+  updated: number;
+  skipped: number;
+  errors: string[];
+};
+
+export type ImportMode = "merge" | "replace";
+
+/**
+ * Imports a backup JSON. By default merges (newer updatedAt wins per id).
+ * `replace` mode wipes the store first.
+ */
+export async function importInspections(
+  raw: unknown,
+  mode: ImportMode = "merge",
+): Promise<ImportResult> {
+  const result: ImportResult = { added: 0, updated: 0, skipped: 0, errors: [] };
+
+  let payload: InspectionsBackup;
+  try {
+    payload =
+      typeof raw === "string" ? (JSON.parse(raw) as InspectionsBackup) : (raw as InspectionsBackup);
+  } catch (e) {
+    result.errors.push(`JSON inválido: ${(e as Error).message}`);
+    return result;
+  }
+
+  if (!payload || typeof payload !== "object" || !Array.isArray(payload.inspections)) {
+    result.errors.push("Archivo no parece ser un backup de Perito.");
+    return result;
+  }
+  if (payload.version !== BACKUP_VERSION) {
+    result.errors.push(`Versión de backup no soportada (${payload.version}).`);
+    return result;
+  }
+
+  if (mode === "replace") {
+    await resetStore();
+  }
+
+  for (const row of payload.inspections) {
+    if (!row || typeof row.id !== "string" || !row.data) {
+      result.skipped += 1;
+      continue;
+    }
+    const merged = mergeDefaults(row);
+    const existing = memory.get(merged.id);
+    if (existing) {
+      // Newer updatedAt wins
+      if ((merged.updatedAt ?? "") > (existing.updatedAt ?? "")) {
+        memory.set(merged.id, merged);
+        persistAsync(merged);
+        result.updated += 1;
+      } else {
+        result.skipped += 1;
+      }
+    } else {
+      memory.set(merged.id, merged);
+      persistAsync(merged);
+      result.added += 1;
+    }
+  }
+
+  return result;
+}

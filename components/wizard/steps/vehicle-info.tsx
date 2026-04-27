@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { Loader2, Search, Sparkles } from "lucide-react";
+import { CheckCircle2, ImageIcon, Loader2, Search, Sparkles } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -18,6 +18,7 @@ import { useToast } from "@/components/ui/toast";
 import { listKnownVehicles } from "@/lib/inspections-store";
 import type { VehicleInfo } from "@/lib/types";
 import { useInspection } from "../inspection-context";
+import { useBodyworkImage } from "./use-bodywork-image";
 
 const FUEL_OPTIONS: { value: VehicleInfo["fuel"]; label: string }[] = [
   { value: "gasoline", label: "Gasolina" },
@@ -36,6 +37,71 @@ const TX_OPTIONS: { value: VehicleInfo["transmission"]; label: string }[] = [
 
 const BODY_TYPES = ["Sedán", "Hatchback", "SUV", "Pickup", "Van", "Coupé", "Convertible"];
 
+function BodyworkImageIndicator({
+  state,
+}: {
+  state: ReturnType<typeof useBodyworkImage>;
+}) {
+  if (state.status === "idle") return null;
+  return (
+    <div className="space-y-1.5 sm:col-span-2 lg:col-span-3">
+      <div className="flex items-center gap-2 rounded-md border bg-muted/30 px-3 py-2 text-xs">
+        {state.status === "checking" && (
+          <>
+            <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
+            <span className="text-muted-foreground">Buscando imagen del vehículo…</span>
+          </>
+        )}
+        {state.status === "generating" && (
+          <>
+            <ImageIcon className="h-3.5 w-3.5 animate-pulse text-primary" />
+            <span className="text-muted-foreground">
+              Generando imagen del vehículo en segundo plano (puede tardar 20–40s)…
+            </span>
+          </>
+        )}
+        {state.status === "ready" && state.url && (
+          <>
+            <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" />
+            <span className="text-muted-foreground">
+              Imagen lista ·{" "}
+              <a
+                href={state.url}
+                target="_blank"
+                rel="noreferrer"
+                className="font-medium text-primary underline-offset-2 hover:underline"
+              >
+                ver
+              </a>
+              {state.slug && (
+                <>
+                  {" · "}
+                  <a
+                    href={`/calibrate/${state.slug}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="font-medium text-primary underline-offset-2 hover:underline"
+                  >
+                    calibrar paneles
+                  </a>
+                </>
+              )}
+            </span>
+          </>
+        )}
+        {state.status === "error" && (
+          <>
+            <ImageIcon className="h-3.5 w-3.5 text-amber-500" />
+            <span className="text-muted-foreground">
+              No se pudo generar la imagen ahora. El reporte usará la tabla clásica.
+            </span>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export function VehicleInfoStep() {
   const { id: currentId, data, setData } = useInspection();
   const v = data.vehicle;
@@ -43,6 +109,13 @@ export function VehicleInfoStep() {
   const [known, setKnown] = React.useState<VehicleInfo[]>([]);
   const [plateFocused, setPlateFocused] = React.useState(false);
   const [runtLoading, setRuntLoading] = React.useState(false);
+
+  const bodywork = useBodyworkImage({
+    make: v.make,
+    model: v.model,
+    year: v.year,
+    bodyType: v.bodyType,
+  });
 
   React.useEffect(() => {
     setKnown(listKnownVehicles().filter((x) => x.plate));
@@ -372,6 +445,7 @@ export function VehicleInfoStep() {
               className="h-11 sm:h-10"
             />
           </div>
+          <BodyworkImageIndicator state={bodywork} />
         </CardContent>
       </Card>
 

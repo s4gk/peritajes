@@ -1,3 +1,4 @@
+import type { PanelCoord } from "./bodywork-coords";
 import {
   BODYWORK_SECTION,
   CHASSIS_SECTION,
@@ -15,6 +16,13 @@ import type {
   InspectionEntry,
   InspectionSectionDef,
 } from "./types";
+
+export type BodyworkVisual = {
+  /** Data URL or path to the rendered vehicle image. */
+  imageSrc: string;
+  /** Panel id → coord. Missing or null entries get no callout. */
+  coords: Record<string, PanelCoord | null>;
+};
 
 function escapeHtml(str: string): string {
   return str
@@ -251,7 +259,124 @@ function riskTone(level: "low" | "medium" | "high"): string {
   return level === "low" ? "success" : level === "medium" ? "warning" : "danger";
 }
 
-export function renderReportHtml(data: InspectionData, report: RiskReport): string {
+type BodyworkCallout = {
+  index: number;
+  itemId: string;
+  itemLabel: string;
+  groupLabel: string;
+  findingLabel: string;
+  tone: "neutral" | "success" | "warning" | "danger";
+  notes: string;
+  coord: PanelCoord | null;
+};
+
+function collectBodyworkFindings(
+  data: Record<string, InspectionEntry>,
+  coords: Record<string, PanelCoord | null>,
+): BodyworkCallout[] {
+  const out: BodyworkCallout[] = [];
+  let idx = 0;
+  for (const group of BODYWORK_SECTION.groups) {
+    for (const item of group.items) {
+      const entry = data?.[item.id];
+      const opt = findOption(entry?.status);
+      if (!opt) continue;
+      if (opt.tone !== "warning" && opt.tone !== "danger") continue;
+      idx += 1;
+      out.push({
+        index: idx,
+        itemId: item.id,
+        itemLabel: item.label,
+        groupLabel: group.label,
+        findingLabel: opt.label,
+        tone: opt.tone,
+        notes: entry?.notes ?? "",
+        coord: coords[item.id] ?? null,
+      });
+    }
+  }
+  return out;
+}
+
+function renderBodyworkVisual(
+  data: Record<string, InspectionEntry>,
+  visual: BodyworkVisual,
+): string {
+  const callouts = collectBodyworkFindings(data, visual.coords);
+  const visibleCallouts = callouts.filter((c) => c.coord);
+  const offImageCallouts = callouts.filter((c) => !c.coord);
+
+  if (callouts.length === 0) {
+    return `
+      <div class="bodywork-visual">
+        <figure class="bodywork-image">
+          <img src="${escapeHtml(visual.imageSrc)}" alt="Vehículo" />
+        </figure>
+        <p class="muted" style="margin-top:6pt;">
+          Sin hallazgos en carrocería — todos los paneles inspeccionados quedaron en condición original o equivalente.
+        </p>
+      </div>
+    `;
+  }
+
+  const markers = visibleCallouts
+    .map((c) => {
+      const toneClass = c.tone === "danger" ? "danger" : "warning";
+      return `
+        <span class="callout callout-${toneClass}" style="left:${(c.coord!.x * 100).toFixed(2)}%; top:${(c.coord!.y * 100).toFixed(2)}%;">
+          ${c.index}
+        </span>`;
+    })
+    .join("");
+
+  const tableRows = callouts
+    .map((c) => {
+      const toneClass = c.tone === "danger" ? "danger" : "warning";
+      return `
+        <tr>
+          <td class="callout-cell"><span class="pill pill-${toneClass} num">${c.index}</span></td>
+          <td><strong>${escapeHtml(c.itemLabel)}</strong><div class="muted" style="font-size:8.5pt;">${escapeHtml(c.groupLabel)}</div></td>
+          <td><span class="pill pill-${toneClass}">${escapeHtml(c.findingLabel)}</span></td>
+          <td class="notes">${c.notes ? escapeHtml(c.notes) : ""}</td>
+        </tr>`;
+    })
+    .join("");
+
+  const offNote =
+    offImageCallouts.length > 0
+      ? `<p class="muted" style="margin-top:4pt; font-size:8.5pt;">
+          ${offImageCallouts.length} hallazgo${offImageCallouts.length === 1 ? "" : "s"} sin posición visible en esta vista (ver tabla).
+        </p>`
+      : "";
+
+  return `
+    <div class="bodywork-visual">
+      <figure class="bodywork-image">
+        <img src="${escapeHtml(visual.imageSrc)}" alt="Vehículo" />
+        ${markers}
+      </figure>
+      ${offNote}
+      <table class="section-table compact" style="margin-top:8pt;">
+        <thead>
+          <tr>
+            <th style="width:36pt">#</th>
+            <th>Panel</th>
+            <th style="width:30%">Hallazgo</th>
+            <th style="width:30%">Notas</th>
+          </tr>
+        </thead>
+        <tbody>${tableRows}</tbody>
+      </table>
+    </div>
+  `;
+}
+
+export function renderReportHtml(
+  data: InspectionData,
+  report: RiskReport,
+  options?: { bodyworkVisual?: BodyworkVisual | null },
+): string {
+  const bodyworkVisual = options?.bodyworkVisual ?? null;
   const v = data.vehicle;
   const sections: { title: string; def: InspectionSectionDef; data: Record<string, InspectionEntry> }[] = [
     { title: "Carrocería", def: BODYWORK_SECTION, data: data.bodywork },
@@ -385,6 +510,37 @@ export function renderReportHtml(data: InspectionData, report: RiskReport): stri
   .sig-box { border-bottom: 1px solid #0f172a; height: 22mm; display: flex; align-items: flex-end; justify-content: center; }
   .sig-box img { max-height: 22mm; max-width: 100%; }
   .sig-label { font-size: 9pt; color: #334155; text-align: center; padding-top: 3pt; }
+
+  /* Bodywork visual */
+  .bodywork-visual { margin-top: 6pt; }
+  .bodywork-image {
+    margin: 0;
+    position: relative;
+    border: 1px solid #e2e8f0;
+    border-radius: 6pt;
+    overflow: hidden;
+    background: #0f172a;
+    page-break-inside: avoid;
+  }
+  .bodywork-image img { display: block; width: 100%; height: auto; }
+  .callout {
+    position: absolute;
+    transform: translate(-50%, -50%);
+    width: 18pt;
+    height: 18pt;
+    border-radius: 999px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 9pt;
+    font-weight: 700;
+    color: #ffffff;
+    box-shadow: 0 0 0 2px #ffffff, 0 1pt 3pt rgba(0,0,0,0.4);
+    line-height: 1;
+  }
+  .callout-warning { background: #d97706; }
+  .callout-danger  { background: #b91c1c; }
+  .pill.num { min-width: 16pt; text-align: center; padding: 1pt 5pt; }
 </style>
 </head>
 <body>
@@ -472,7 +628,11 @@ export function renderReportHtml(data: InspectionData, report: RiskReport): stri
   <!-- DETAILED SECTIONS -->
   <section class="page-break">
     <h2>${escapeHtml(sections[0].title)}</h2>
-    ${renderSectionTable(sections[0].def, sections[0].data)}
+    ${
+      bodyworkVisual
+        ? renderBodyworkVisual(sections[0].data, bodyworkVisual)
+        : renderSectionTable(sections[0].def, sections[0].data)
+    }
   </section>
 
   <div class="two-col-grid">

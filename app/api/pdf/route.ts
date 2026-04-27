@@ -1,8 +1,38 @@
+import { readFile } from "node:fs/promises";
+import path from "node:path";
+
 import { NextResponse } from "next/server";
 
+import { readBodyworkCoords } from "@/lib/bodywork-coords";
+import { bodyworkSlug, ImagenError } from "@/lib/imagen";
 import { analyze, type RiskReport } from "@/lib/rules-engine";
-import { renderReportHtml } from "@/lib/pdf-template";
+import { renderReportHtml, type BodyworkVisual } from "@/lib/pdf-template";
 import type { InspectionData } from "@/lib/types";
+
+async function loadBodyworkVisual(data: InspectionData): Promise<BodyworkVisual | null> {
+  const { make, model, year } = data.vehicle;
+  if (!make.trim() || !model.trim() || !year.trim()) return null;
+  let slug: string;
+  try {
+    slug = bodyworkSlug({ make, model, year });
+  } catch (err) {
+    if (err instanceof ImagenError) return null;
+    throw err;
+  }
+  const imagePath = path.join(process.cwd(), "public", "generated", "bodywork", `${slug}.png`);
+  let imageBuffer: Buffer;
+  try {
+    imageBuffer = await readFile(imagePath);
+  } catch {
+    return null;
+  }
+  const coordsRecord = await readBodyworkCoords(slug);
+  if (!coordsRecord) return null;
+  return {
+    imageSrc: `data:image/png;base64,${imageBuffer.toString("base64")}`,
+    coords: coordsRecord.panels,
+  };
+}
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -26,7 +56,8 @@ export async function POST(req: Request) {
   }
 
   const report = body.report ?? analyze(body.data);
-  const html = renderReportHtml(body.data, report);
+  const bodyworkVisual = await loadBodyworkVisual(body.data);
+  const html = renderReportHtml(body.data, report, { bodyworkVisual });
 
   let browser: import("puppeteer").Browser | undefined;
   try {
