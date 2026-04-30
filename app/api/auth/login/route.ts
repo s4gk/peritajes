@@ -7,10 +7,20 @@ import {
   verifyPassword,
 } from "@/lib/server/auth";
 import { logAudit } from "@/lib/server/db";
+import {
+  clientIpFromHeaders,
+  rateLimitMaybeSweep,
+  rateLimitReset,
+  rateLimitTake,
+} from "@/lib/server/rate-limit";
 
 export const runtime = "nodejs";
 
+const LIMIT = { windowMs: 15 * 60 * 1000, max: 8 };
+
 export async function POST(req: Request) {
+  rateLimitMaybeSweep();
+
   let body: { username?: string; password?: string };
   try {
     body = await req.json();
@@ -24,6 +34,26 @@ export async function POST(req: Request) {
     return NextResponse.json(
       { error: "Usuario y contraseña son obligatorios" },
       { status: 400 },
+    );
+  }
+
+  // Bucket per IP + username so an attacker can't lock other accounts by
+  // hitting from one IP, but also can't spread an attack across users.
+  const ip = clientIpFromHeaders(req.headers);
+  const key = `login:${ip}:${username}`;
+  const limit = rateLimitTake(key, LIMIT);
+  if (!limit.allowed) {
+    await logAudit(null, "login.rate_limited", `${ip} ${username}`);
+    return NextResponse.json(
+      {
+        error: `Demasiados intentos. Intenta de nuevo en ${Math.ceil(
+          limit.retryAfterSec / 60,
+        )} minutos.`,
+      },
+      {
+        status: 429,
+        headers: { "retry-after": String(limit.retryAfterSec) },
+      },
     );
   }
 
@@ -44,6 +74,11 @@ export async function POST(req: Request) {
       { status: 401 },
     );
   }
+
+  // Successful login wipes the bad-attempt counter so a long bad streak
+  // followed by a good attempt doesn't leave the user one mistake away
+  // from being locked out.
+  rateLimitReset(key);
 
   const ua = req.headers.get("user-agent") ?? undefined;
   const sid = await createSession(row.id, ua);
