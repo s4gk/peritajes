@@ -30,7 +30,7 @@ const NAV: NavItem[] = [
   { href: "/vehiculos", label: "Vehículos", icon: Car },
   { href: "/empresa", label: "Empresa", icon: Building2, adminOnly: true },
   { href: "/usuarios", label: "Usuarios", icon: Users, adminOnly: true },
-  { href: "/backup", label: "Backup", icon: DatabaseBackup },
+  { href: "/backup", label: "Backup", icon: DatabaseBackup, adminOnly: true },
   { href: "/cuenta", label: "Mi cuenta", icon: UserCircle },
 ];
 

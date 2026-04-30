@@ -35,12 +35,15 @@ import { formatDate } from "@/lib/utils";
 
 import { useToast } from "@/components/ui/toast";
 
+import { useIsAdmin } from "@/components/panel/current-user";
+
 import { BackupControls } from "./backup-controls";
 import { ThemeToggle } from "./theme-toggle";
 import { UIPreferencesProvider } from "./ui-preferences";
 
 function InspectionsInner() {
   const router = useRouter();
+  const isAdmin = useIsAdmin();
   const [items, setItems] = React.useState<StoredInspection[]>([]);
   const [hydrated, setHydrated] = React.useState(false);
 
@@ -96,7 +99,7 @@ function InspectionsInner() {
           </p>
         </div>
         <div className="flex items-center gap-2 sm:self-auto">
-          <BackupControls onChange={refresh} />
+          {isAdmin ? <BackupControls onChange={refresh} /> : null}
           <ThemeToggle />
           <Button onClick={handleNew} size="lg" className="hidden h-10 sm:inline-flex">
             <Plus className="mr-1 h-4 w-4" /> Nuevo peritaje
@@ -127,6 +130,7 @@ function InspectionsInner() {
             <InspectionCard
               key={item.id}
               item={item}
+              canDelete={isAdmin}
               onOpen={() => router.push(`/inspection/${item.id}`)}
               onDuplicate={() => handleDuplicate(item.id)}
               onDelete={() => handleDelete(item.id)}
@@ -152,11 +156,13 @@ function InspectionsInner() {
 
 function InspectionCard({
   item,
+  canDelete,
   onOpen,
   onDuplicate,
   onDelete,
 }: {
   item: StoredInspection;
+  canDelete: boolean;
   onOpen: () => void;
   onDuplicate: () => void;
   onDelete: () => void;
@@ -291,20 +297,22 @@ function InspectionCard({
             >
               <Copy className="h-4 w-4" />
             </Button>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              className="h-10 w-10"
-              onClick={(e) => {
-                e.stopPropagation();
-                onDelete();
-              }}
-              aria-label="Eliminar peritaje"
-              title="Eliminar"
-            >
-              <Trash2 className="h-4 w-4 text-danger" />
-            </Button>
+            {canDelete ? (
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="h-10 w-10"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onDelete();
+                }}
+                aria-label="Eliminar peritaje"
+                title="Eliminar"
+              >
+                <Trash2 className="h-4 w-4 text-danger" />
+              </Button>
+            ) : null}
           </div>
         </div>
       </CardContent>

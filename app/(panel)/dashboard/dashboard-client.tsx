@@ -2,7 +2,6 @@
 
 import * as React from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import {
   AlertTriangle,
   CheckCircle2,
@@ -68,7 +67,6 @@ function compute(items: StoredInspection[]): Stats {
 }
 
 export function DashboardClient() {
-  const router = useRouter();
   const [stats, setStats] = React.useState<Stats | null>(null);
 
   React.useEffect(() => {
@@ -93,18 +91,13 @@ export function DashboardClient() {
 
   return (
     <div className="container max-w-6xl space-y-6 py-6">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h1 className="text-xl font-semibold tracking-tight sm:text-2xl">
-            Dashboard
-          </h1>
-          <p className="text-sm text-muted-foreground">
-            Resumen de tu actividad de peritajes.
-          </p>
-        </div>
-        <Button onClick={() => router.push("/intake")} className="gap-1.5">
-          <Plus className="h-4 w-4" /> Nuevo peritaje
-        </Button>
+      <div>
+        <h1 className="text-xl font-semibold tracking-tight sm:text-2xl">
+          Dashboard
+        </h1>
+        <p className="text-sm text-muted-foreground">
+          Resumen de tu actividad de peritajes.
+        </p>
       </div>
 
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">

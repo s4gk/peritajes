@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { requireUser } from "@/lib/server/auth";
+import { requireAdmin, requireUser } from "@/lib/server/auth";
 import {
   deleteInspectionServer,
   getInspectionServer,
@@ -71,7 +71,7 @@ export async function DELETE(
 ) {
   let user;
   try {
-    user = await requireUser();
+    user = await requireAdmin();
   } catch (e) {
     return unauth(e);
   }
