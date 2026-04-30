@@ -1,5 +1,12 @@
 import { NextResponse } from "next/server";
 
+import { requireUser } from "@/lib/server/auth";
+import { logAudit } from "@/lib/server/db";
+import {
+  clientIpFromHeaders,
+  rateLimitMaybeSweep,
+  rateLimitTake,
+} from "@/lib/server/rate-limit";
 import { fasecoldaToVehicleSeed } from "@/lib/verifik/fasecolda";
 import { runtToVehicleSeed } from "@/lib/verifik/runt";
 import { mergeVerifikSeeds } from "@/lib/verifik/merge";
@@ -11,6 +18,7 @@ import {
 import type { VerifikSnapshot } from "@/lib/verifik/types";
 
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
 /**
  * Plate-lookup endpoint backed by Verifik (FASECOLDA + RUNT).
@@ -27,8 +35,30 @@ export const runtime = "nodejs";
  * Failure mode is partial-on-purpose: if one of the two calls fails, the
  * other's result is still returned with a `warnings` entry. The user already
  * paid for the call that succeeded; throwing it away would be silly.
+ *
+ * Cost gating:
+ *  - Requires a logged-in user (cookie session). Anonymous calls would burn
+ *    Verifik credits at $0.40/call FASECOLDA.
+ *  - Rate-limited per user to LOOKUP_LIMIT (sliding hour window) so a
+ *    runaway loop or compromised account can't drain credits.
+ *  - Every successful call writes to audit_log with placa + cost meta.
  */
+
+const LOOKUP_LIMIT = { windowMs: 60 * 60 * 1000, max: 30 };
+
 export async function GET(request: Request) {
+  rateLimitMaybeSweep();
+
+  let user;
+  try {
+    user = await requireUser();
+  } catch {
+    return NextResponse.json(
+      { error: "No autenticado" },
+      { status: 401 },
+    );
+  }
+
   const url = new URL(request.url);
   const plate = (url.searchParams.get("plate") || "").trim().toUpperCase();
   const documentType = (url.searchParams.get("documentType") || "").trim();
@@ -47,6 +77,27 @@ export async function GET(request: Request) {
           "Verifik no está configurado. Define VERIFIK_TOKEN en el servidor para habilitar las consultas.",
       },
       { status: 501 },
+    );
+  }
+
+  // Per-user rate limit. We bucket by user id (not IP) so a perito on a
+  // shared NAT can't be locked out by a colleague — and an attacker who
+  // steals a session can't move to a fresh IP to bypass it.
+  const limit = rateLimitTake(`lookup:${user.id}`, LOOKUP_LIMIT);
+  if (!limit.allowed) {
+    await logAudit(
+      user.id,
+      "lookup.rate_limited",
+      JSON.stringify({ plate, retryAfterSec: limit.retryAfterSec }),
+    );
+    return NextResponse.json(
+      {
+        error: `Has alcanzado el límite de consultas (${LOOKUP_LIMIT.max} por hora). Vuelve a intentarlo en ${Math.ceil(limit.retryAfterSec / 60)} minutos.`,
+      },
+      {
+        status: 429,
+        headers: { "retry-after": String(limit.retryAfterSec) },
+      },
     );
   }
 
@@ -99,11 +150,27 @@ export async function GET(request: Request) {
     );
 
     if (!snapshot.fasecolda && !snapshot.runt) {
+      await logAudit(
+        user.id,
+        "lookup.failed",
+        JSON.stringify({ plate, calls: wantsRunt ? "fasecolda+runt" : "fasecolda" }),
+      );
       return NextResponse.json(
         { configured: true, plate, error: "Ambas consultas fallaron", warnings },
         { status: 502 },
       );
     }
+
+    // Audit each chargeable call so consumption can be reconciled with
+    // Verifik's own dashboard / invoice.
+    const calls: string[] = [];
+    if (snapshot.fasecolda) calls.push("fasecolda");
+    if (snapshot.runt) calls.push("runt");
+    await logAudit(
+      user.id,
+      "lookup.success",
+      JSON.stringify({ plate, calls, warnings: warnings.length }),
+    );
 
     return NextResponse.json({
       configured: true,
