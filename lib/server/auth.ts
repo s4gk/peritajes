@@ -221,7 +221,11 @@ export function setSessionCookie(sessionId: string) {
   cookies().set(SESSION_COOKIE, sessionId, {
     httpOnly: true,
     sameSite: "lax",
-    secure: process.env.NODE_ENV === "production",
+    // Only mark Secure when explicitly enabled (e.g. behind HTTPS / a TLS proxy).
+    // The previous "secure if NODE_ENV=production" check broke logins on plain
+    // HTTP deployments — browsers silently dropped the cookie. Set
+    // COOKIE_SECURE=true in .env.local when fronting with HTTPS.
+    secure: process.env.COOKIE_SECURE === "true",
     path: "/",
     maxAge: Math.floor(SESSION_TTL_MS / 1000),
   });
@@ -231,7 +235,11 @@ export function clearSessionCookie() {
   cookies().set(SESSION_COOKIE, "", {
     httpOnly: true,
     sameSite: "lax",
-    secure: process.env.NODE_ENV === "production",
+    // Only mark Secure when explicitly enabled (e.g. behind HTTPS / a TLS proxy).
+    // The previous "secure if NODE_ENV=production" check broke logins on plain
+    // HTTP deployments — browsers silently dropped the cookie. Set
+    // COOKIE_SECURE=true in .env.local when fronting with HTTPS.
+    secure: process.env.COOKIE_SECURE === "true",
     path: "/",
     maxAge: 0,
   });
