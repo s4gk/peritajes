@@ -81,6 +81,7 @@ export function emptyInspection(): InspectionData {
       roadTest: emptySection("roadTest"),
       accessories: [],
       confirmedSteps: [],
+      status: "draft",
       conclusion: {
         generalCondition: "",
         observations: "",
@@ -152,6 +153,7 @@ export function emptyInspection(): InspectionData {
       "roadTest",
       "accessories",
     ],
+    status: "draft",
     conclusion: {
       generalCondition: "mech_optimal",
       observations:

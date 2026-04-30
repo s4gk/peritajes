@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { CheckCircle2, ImageIcon, Loader2, Search, Sparkles } from "lucide-react";
+import { CheckCircle2, Loader2, Search, Sparkles } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -18,7 +18,6 @@ import { useToast } from "@/components/ui/toast";
 import { listKnownVehicles } from "@/lib/inspections-store";
 import type { VehicleInfo } from "@/lib/types";
 import { useInspection } from "../inspection-context";
-import { useBodyworkImage } from "./use-bodywork-image";
 
 const FUEL_OPTIONS: { value: VehicleInfo["fuel"]; label: string }[] = [
   { value: "gasoline", label: "Gasolina" },
@@ -37,71 +36,6 @@ const TX_OPTIONS: { value: VehicleInfo["transmission"]; label: string }[] = [
 
 const BODY_TYPES = ["Sedán", "Hatchback", "SUV", "Pickup", "Van", "Coupé", "Convertible"];
 
-function BodyworkImageIndicator({
-  state,
-}: {
-  state: ReturnType<typeof useBodyworkImage>;
-}) {
-  if (state.status === "idle") return null;
-  return (
-    <div className="space-y-1.5 sm:col-span-2 lg:col-span-3">
-      <div className="flex items-center gap-2 rounded-md border bg-muted/30 px-3 py-2 text-xs">
-        {state.status === "checking" && (
-          <>
-            <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
-            <span className="text-muted-foreground">Buscando imagen del vehículo…</span>
-          </>
-        )}
-        {state.status === "generating" && (
-          <>
-            <ImageIcon className="h-3.5 w-3.5 animate-pulse text-primary" />
-            <span className="text-muted-foreground">
-              Generando imagen del vehículo en segundo plano (puede tardar 20–40s)…
-            </span>
-          </>
-        )}
-        {state.status === "ready" && state.url && (
-          <>
-            <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" />
-            <span className="text-muted-foreground">
-              Imagen lista ·{" "}
-              <a
-                href={state.url}
-                target="_blank"
-                rel="noreferrer"
-                className="font-medium text-primary underline-offset-2 hover:underline"
-              >
-                ver
-              </a>
-              {state.slug && (
-                <>
-                  {" · "}
-                  <a
-                    href={`/calibrate/${state.slug}`}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="font-medium text-primary underline-offset-2 hover:underline"
-                  >
-                    calibrar paneles
-                  </a>
-                </>
-              )}
-            </span>
-          </>
-        )}
-        {state.status === "error" && (
-          <>
-            <ImageIcon className="h-3.5 w-3.5 text-amber-500" />
-            <span className="text-muted-foreground">
-              No se pudo generar la imagen ahora. El reporte usará la tabla clásica.
-            </span>
-          </>
-        )}
-      </div>
-    </div>
-  );
-}
-
 export function VehicleInfoStep() {
   const { id: currentId, data, setData } = useInspection();
   const v = data.vehicle;
@@ -109,13 +43,6 @@ export function VehicleInfoStep() {
   const [known, setKnown] = React.useState<VehicleInfo[]>([]);
   const [plateFocused, setPlateFocused] = React.useState(false);
   const [runtLoading, setRuntLoading] = React.useState(false);
-
-  const bodywork = useBodyworkImage({
-    make: v.make,
-    model: v.model,
-    year: v.year,
-    bodyType: v.bodyType,
-  });
 
   React.useEffect(() => {
     setKnown(listKnownVehicles().filter((x) => x.plate));
@@ -257,22 +184,32 @@ export function VehicleInfoStep() {
                 autoComplete="off"
                 className="h-11 flex-1 text-base font-semibold tracking-wider sm:h-10 sm:text-sm"
               />
-              <Button
-                type="button"
-                variant="outline"
-                onClick={lookupPlate}
-                disabled={runtLoading || !v.plate.trim()}
-                className="h-11 shrink-0 px-3 sm:h-10"
-                aria-label="Consultar RUNT"
-                title="Consultar vehículo en el RUNT"
-              >
-                {runtLoading ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : (
-                  <Search className="h-4 w-4" />
-                )}
-                <span className="ml-1.5 hidden sm:inline">RUNT</span>
-              </Button>
+              {data.verifik ? (
+                <span
+                  className="inline-flex h-11 shrink-0 items-center gap-1.5 rounded-md border border-success/40 bg-success/10 px-3 text-xs font-medium text-success sm:h-10"
+                  title={`Consultado el ${new Date(data.verifik.queriedAt).toLocaleString("es-CO")} · datos cacheados (no se vuelve a llamar Verifik)`}
+                >
+                  <CheckCircle2 className="h-4 w-4" />
+                  <span className="hidden sm:inline">Consultado</span>
+                </span>
+              ) : (
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={lookupPlate}
+                  disabled={runtLoading || !v.plate.trim()}
+                  className="h-11 shrink-0 px-3 sm:h-10"
+                  aria-label="Consultar FASECOLDA"
+                  title="Consultar FASECOLDA por placa (no consulta RUNT — para eso usa la pantalla de inicio)"
+                >
+                  {runtLoading ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Search className="h-4 w-4" />
+                  )}
+                  <span className="ml-1.5 hidden sm:inline">Consultar</span>
+                </Button>
+              )}
               {plateFocused && suggestions.length > 0 && (
                 <div className="absolute inset-x-0 top-full z-20 mt-1 overflow-hidden rounded-md border bg-popover shadow-lg">
                   <div className="px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
@@ -445,7 +382,6 @@ export function VehicleInfoStep() {
               className="h-11 sm:h-10"
             />
           </div>
-          <BodyworkImageIndicator state={bodywork} />
         </CardContent>
       </Card>
 

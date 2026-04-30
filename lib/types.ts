@@ -1,3 +1,5 @@
+import type { VerifikSnapshot } from "./verifik/types";
+
 export type RiskLevel = "low" | "medium" | "high";
 
 export type ItemKind = "bodywork" | "structural" | "mechanical" | "road_test" | "leak";
@@ -62,6 +64,13 @@ export type InspectionData = {
   accessories: AccessoryEntry[];
   /** Step IDs the perito has explicitly advanced past (pressed Siguiente). */
   confirmedSteps: string[];
+  /** Lifecycle: "draft" while the perito is filling, "completed" once they've
+   * pressed Finalizar in the summary step. Completed peritajes are read-only
+   * unless explicitly reopened. Older rows without this field default to
+   * "draft" via mergeDefaults. */
+  status: "draft" | "completed";
+  /** ISO timestamp of when the peritaje was finalized. Undefined for drafts. */
+  completedAt?: string;
   conclusion: {
     generalCondition: string; // finding value from mechanical
     observations: string;
@@ -69,6 +78,9 @@ export type InspectionData = {
     inspectorSignature?: string; // dataUrl
     clientSignature?: string; // dataUrl
   };
+  /** Raw Verifik responses kept so the wizard can surface FASECOLDA value,
+   * SOAT/RTM, prendas, etc. without paying for a second lookup. */
+  verifik?: VerifikSnapshot;
 };
 
 export type InspectionItemDef = {

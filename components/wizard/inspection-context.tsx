@@ -44,6 +44,8 @@ type ContextValue = {
   notFound: boolean;
   saveStatus: SaveStatus;
   lastSavedAt: number | null;
+  /** True when data.status === "completed". Inputs should be disabled. */
+  isReadOnly: boolean;
 };
 
 const InspectionContext = React.createContext<ContextValue | null>(null);
@@ -119,9 +121,11 @@ export function InspectionProvider({ id, children }: Props) {
     setDataState((prev) => updater(prev));
   }, []);
 
+  const isReadOnly = data.status === "completed";
+
   const value = React.useMemo<ContextValue>(
-    () => ({ id, data, setData, isHydrated, notFound, saveStatus, lastSavedAt }),
-    [id, data, setData, isHydrated, notFound, saveStatus, lastSavedAt],
+    () => ({ id, data, setData, isHydrated, notFound, saveStatus, lastSavedAt, isReadOnly }),
+    [id, data, setData, isHydrated, notFound, saveStatus, lastSavedAt, isReadOnly],
   );
 
   return <InspectionContext.Provider value={value}>{children}</InspectionContext.Provider>;

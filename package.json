@@ -24,10 +24,12 @@
     "@radix-ui/react-tabs": "^1.1.1",
     "@radix-ui/react-toast": "^1.2.2",
     "@types/qrcode": "^1.5.6",
+    "bcryptjs": "^3.0.3",
     "class-variance-authority": "^0.7.0",
     "clsx": "^2.1.1",
     "lucide-react": "^0.451.0",
     "next": "14.2.15",
+    "pg": "^8.20.0",
     "puppeteer": "^23.5.3",
     "qrcode": "^1.5.4",
     "react": "^18.3.1",
@@ -38,7 +40,9 @@
     "zod": "^3.23.8"
   },
   "devDependencies": {
+    "@types/bcryptjs": "^2.4.6",
     "@types/node": "^22.7.5",
+    "@types/pg": "^8.20.0",
     "@types/react": "^18.3.11",
     "@types/react-dom": "^18.3.0",
     "@vitest/coverage-v8": "^4.1.5",

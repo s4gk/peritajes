@@ -33,6 +33,9 @@ next-env.d.ts
 # generated assets (heavy, regenerable)
 /public/generated/
 
+# local sqlite database (created at runtime; contains user/session/company data)
+/data/
+
 # editor / OS
 .vscode/
 .idea/

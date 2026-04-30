@@ -44,6 +44,7 @@ export function pristineInspection(): InspectionData {
     roadTest: okSection("roadTest"),
     accessories: [],
     confirmedSteps: [],
+    status: "draft",
     conclusion: { generalCondition: "mech_optimal", observations: "", recommendation: "" },
   };
 }

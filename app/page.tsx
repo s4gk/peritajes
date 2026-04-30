@@ -1,11 +1,12 @@
-import { InspectionList } from "@/components/wizard/inspection-list";
+import { redirect } from "next/navigation";
 
-export default function Page() {
-  return (
-    <div className="min-h-screen bg-muted/30 py-6">
-      <div className="container max-w-6xl">
-        <InspectionList />
-      </div>
-    </div>
-  );
+import { countUsers, getCurrentUser } from "@/lib/server/auth";
+
+export const dynamic = "force-dynamic";
+
+export default async function RootPage() {
+  if ((await countUsers()) === 0) redirect("/setup");
+  const user = await getCurrentUser();
+  if (!user) redirect("/login");
+  redirect("/dashboard");
 }

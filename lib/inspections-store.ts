@@ -1,66 +1,38 @@
 "use client";
 
 import { emptyInspection } from "./default-data";
-import {
-  idbClear,
-  idbDelete,
-  idbGetAll,
-  idbPut,
-  isIdbAvailable,
-} from "./idb";
-import type { InspectionData, StoredInspection } from "./types";
+import type { InspectionData, StoredInspection, VehicleInfo } from "./types";
+import type { VerifikSnapshot } from "./verifik/types";
 import { makeId } from "./utils";
+
+export type InspectionSeed = {
+  vehicle?: Partial<VehicleInfo>;
+  verifik?: VerifikSnapshot;
+};
 
 /**
  * Storage strategy
  * ----------------
- * Primary: IndexedDB (~unlimited quota, survives image blobs).
- * The store is loaded once into an in-memory Map so all reads stay synchronous
- * and the wizard/list UI doesn't need to thread promises through every hook.
+ * Server is the source of truth (Postgres via /api/inspections). The client
+ * keeps an in-memory cache so list/get reads stay synchronous — the wizard
+ * autosave fires through `saveInspectionData()` which debounces a PUT.
  *
- * Writes mutate the Map immediately and fire-and-forget to IDB in the background.
- * If IDB is unavailable (e.g. SSR or a locked private-mode browser) we fall back
- * to a single localStorage key with the same shape — the legacy v2 storage.
+ * Optimistic create: the client generates the ID locally and the server
+ * accepts it (see /api/inspections POST). That lets the wizard navigate
+ * to /inspection/{id} without awaiting the round-trip.
+ *
+ * If the network fails mid-edit, the latest data still lives in the cache;
+ * the next successful PUT publishes it. We don't queue offline writes —
+ * see project_admin_panel.md if you need to bring offline-first back.
  */
-
-const LEGACY_KEY_V1 = "perito:inspection:v1";
-const LEGACY_KEY_V2 = "perito:inspections:v2";
 
 const memory = new Map<string, StoredInspection>();
 let initialized = false;
 let initPromise: Promise<void> | null = null;
-let useIdb = false;
 
-function readLegacyV2Array(): StoredInspection[] {
-  if (typeof window === "undefined") return [];
-  try {
-    const raw = localStorage.getItem(LEGACY_KEY_V2);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? (parsed as StoredInspection[]) : [];
-  } catch {
-    return [];
-  }
-}
-
-function writeLegacyV2Array(inspections: StoredInspection[]) {
-  try {
-    localStorage.setItem(LEGACY_KEY_V2, JSON.stringify(inspections));
-  } catch {
-    // quota — silent
-  }
-}
-
-function readLegacyV1(): InspectionData | null {
-  if (typeof window === "undefined") return null;
-  try {
-    const raw = localStorage.getItem(LEGACY_KEY_V1);
-    if (!raw) return null;
-    return JSON.parse(raw) as InspectionData;
-  } catch {
-    return null;
-  }
-}
+const SAVE_DEBOUNCE_MS = 600;
+const pendingTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const inflightSaves = new Set<string>();
 
 function mergeDefaults(inspection: StoredInspection): StoredInspection {
   const base = emptyInspection();
@@ -70,8 +42,6 @@ function mergeDefaults(inspection: StoredInspection): StoredInspection {
     data: {
       ...base,
       ...d,
-      // Ensure every top-level record exists with the right shape, even if the
-      // persisted row is from an older schema or has undefined keys.
       vehicle: { ...base.vehicle, ...(d.vehicle ?? {}) },
       bodywork: { ...base.bodywork, ...(d.bodywork ?? {}) },
       chassis: { ...base.chassis, ...(d.chassis ?? {}) },
@@ -84,35 +54,32 @@ function mergeDefaults(inspection: StoredInspection): StoredInspection {
       tires: { ...base.tires, ...(d.tires ?? {}) },
       accessories: Array.isArray(d.accessories) ? d.accessories : [],
       confirmedSteps: Array.isArray(d.confirmedSteps) ? d.confirmedSteps : [],
+      status: d.status === "completed" ? "completed" : "draft",
+      completedAt: d.completedAt,
       conclusion: { ...base.conclusion, ...(d.conclusion ?? {}) },
     },
   };
 }
 
-function persistAsync(inspection: StoredInspection) {
-  if (useIdb) {
-    idbPut(inspection).catch(() => {
-      // On IDB failure, fall back to localStorage mirror
-      writeLegacyV2Array(Array.from(memory.values()));
-    });
-  } else {
-    writeLegacyV2Array(Array.from(memory.values()));
+async function fetchJson(input: RequestInfo, init?: RequestInit) {
+  const res = await fetch(input, {
+    credentials: "same-origin",
+    ...init,
+    headers: {
+      "content-type": "application/json",
+      ...(init?.headers ?? {}),
+    },
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`${res.status} ${res.statusText}${text ? `: ${text}` : ""}`);
   }
-}
-
-function persistDeleteAsync(id: string) {
-  if (useIdb) {
-    idbDelete(id).catch(() => {
-      writeLegacyV2Array(Array.from(memory.values()));
-    });
-  } else {
-    writeLegacyV2Array(Array.from(memory.values()));
-  }
+  return res.json();
 }
 
 /**
- * One-time initialization. Idempotent and safe to await from multiple entry
- * points (list + provider) concurrently.
+ * One-time initialization. Hydrates the in-memory cache from the server.
+ * Idempotent and safe to await from multiple entry points concurrently.
  */
 export function initStore(): Promise<void> {
   if (initialized) return Promise.resolve();
@@ -123,74 +90,17 @@ export function initStore(): Promise<void> {
       initialized = true;
       return;
     }
-
-    useIdb = isIdbAvailable();
-
-    if (useIdb) {
-      // Load existing from IDB
-      try {
-        const rows = await idbGetAll<StoredInspection>();
-        for (const row of rows) {
-          memory.set(row.id, mergeDefaults(row));
-        }
-      } catch {
-        useIdb = false;
-      }
-    }
-
-    // Legacy v2 → primary store migration
-    const legacyV2 = readLegacyV2Array();
-    if (legacyV2.length > 0) {
-      for (const row of legacyV2) {
-        if (!memory.has(row.id)) {
-          const merged = mergeDefaults(row);
-          memory.set(row.id, merged);
-          if (useIdb) {
-            try {
-              await idbPut(merged);
-            } catch {
-              // ignore — will re-persist on next write
-            }
-          }
-        }
-      }
-      if (useIdb) {
-        // Successfully imported — drop the localStorage copy to free quota
-        try {
-          localStorage.removeItem(LEGACY_KEY_V2);
-        } catch {
-          // ignore
-        }
-      }
-    }
-
-    // Legacy v1 (single-inspection) → one entry
-    const legacyV1 = readLegacyV1();
-    if (legacyV1 && memory.size === 0) {
-      const now = new Date().toISOString();
-      const entry: StoredInspection = {
-        id: makeId(),
-        createdAt: now,
-        updatedAt: now,
-        data: { ...emptyInspection(), ...legacyV1 },
-      };
-      memory.set(entry.id, entry);
-      if (useIdb) {
-        try {
-          await idbPut(entry);
-        } catch {
-          // ignore
-        }
-      } else {
-        writeLegacyV2Array(Array.from(memory.values()));
-      }
-    }
     try {
-      localStorage.removeItem(LEGACY_KEY_V1);
+      const json = (await fetchJson("/api/inspections")) as {
+        inspections: StoredInspection[];
+      };
+      for (const row of json.inspections ?? []) {
+        memory.set(row.id, mergeDefaults(row));
+      }
     } catch {
-      // ignore
+      // Auth failure or network — leave cache empty. The page may redirect
+      // to /login or show a banner; either way we don't crash.
     }
-
     initialized = true;
   })();
 
@@ -211,34 +121,111 @@ export function getInspection(id: string): StoredInspection | null {
   return memory.get(id) ?? null;
 }
 
-export function createInspection(): StoredInspection {
+function postCreate(inspection: StoredInspection) {
+  fetchJson("/api/inspections", {
+    method: "POST",
+    body: JSON.stringify({ id: inspection.id, data: inspection.data }),
+  })
+    .then((json: { inspection: StoredInspection }) => {
+      // Reconcile timestamps with what the server stored.
+      const server = mergeDefaults(json.inspection);
+      const current = memory.get(server.id);
+      memory.set(server.id, {
+        ...server,
+        data: current ? current.data : server.data,
+      });
+    })
+    .catch(() => {
+      // The optimistic entry is still in cache; user can retry by editing.
+    });
+}
+
+export function createInspection(seed?: InspectionSeed): StoredInspection {
   const now = new Date().toISOString();
+  const base = emptyInspection();
+  const data: InspectionData = seed
+    ? {
+        ...base,
+        vehicle: { ...base.vehicle, ...(seed.vehicle ?? {}) },
+        verifik: seed.verifik ?? base.verifik,
+      }
+    : base;
   const insp: StoredInspection = {
     id: makeId(),
     createdAt: now,
     updatedAt: now,
-    data: emptyInspection(),
+    data,
   };
   memory.set(insp.id, insp);
-  persistAsync(insp);
+  postCreate(insp);
   return insp;
+}
+
+function flushSave(id: string) {
+  const existing = memory.get(id);
+  if (!existing) return;
+  if (inflightSaves.has(id)) {
+    // Another PUT is in flight — schedule a follow-up after it completes.
+    pendingTimers.set(
+      id,
+      setTimeout(() => flushSave(id), SAVE_DEBOUNCE_MS),
+    );
+    return;
+  }
+  inflightSaves.add(id);
+  fetchJson(`/api/inspections/${id}`, {
+    method: "PUT",
+    body: JSON.stringify({ data: existing.data }),
+  })
+    .then((json: { inspection: StoredInspection }) => {
+      const server = mergeDefaults(json.inspection);
+      const current = memory.get(id);
+      // Preserve the latest in-memory data (the user may have typed more
+      // while the request was in flight) — only adopt server timestamps.
+      memory.set(id, {
+        ...server,
+        data: current ? current.data : server.data,
+      });
+    })
+    .catch(() => {
+      // Will be retried on the next edit.
+    })
+    .finally(() => {
+      inflightSaves.delete(id);
+    });
 }
 
 export function saveInspectionData(id: string, data: InspectionData) {
   const existing = memory.get(id);
-  if (!existing) return;
   const updated: StoredInspection = {
-    ...existing,
-    data,
+    id,
+    createdAt: existing?.createdAt ?? new Date().toISOString(),
     updatedAt: new Date().toISOString(),
+    data,
   };
   memory.set(id, updated);
-  persistAsync(updated);
+
+  const t = pendingTimers.get(id);
+  if (t) clearTimeout(t);
+  pendingTimers.set(
+    id,
+    setTimeout(() => {
+      pendingTimers.delete(id);
+      flushSave(id);
+    }, SAVE_DEBOUNCE_MS),
+  );
 }
 
 export function deleteInspection(id: string) {
   memory.delete(id);
-  persistDeleteAsync(id);
+  const t = pendingTimers.get(id);
+  if (t) {
+    clearTimeout(t);
+    pendingTimers.delete(id);
+  }
+  fetchJson(`/api/inspections/${id}`, { method: "DELETE" }).catch(() => {
+    // Silent — user already sees it gone from the list.
+  });
 }
 
 export function duplicateInspection(id: string): StoredInspection | null {
@@ -252,10 +239,12 @@ export function duplicateInspection(id: string): StoredInspection | null {
     data: {
       ...original.data,
       vehicle: { ...original.data.vehicle, plate: "" },
+      status: "draft",
+      completedAt: undefined,
     },
   };
   memory.set(copy.id, copy);
-  persistAsync(copy);
+  postCreate(copy);
   return copy;
 }
 
@@ -278,32 +267,23 @@ export function listKnownVehicles(): StoredInspection["data"]["vehicle"][] {
 }
 
 /**
- * Reset the full store. Used mostly by tests and the theoretical "borrar todo".
- * Not wired to any UI for now.
+ * Reset the full store (cache only — does not touch the server).
+ * Used by tests; not wired to any UI.
  */
 export async function resetStore(): Promise<void> {
   memory.clear();
-  if (useIdb) {
-    try {
-      await idbClear();
-    } catch {
-      // ignore
-    }
-  }
-  try {
-    localStorage.removeItem(LEGACY_KEY_V2);
-    localStorage.removeItem(LEGACY_KEY_V1);
-  } catch {
-    // ignore
-  }
+  initialized = false;
+  initPromise = null;
+  for (const t of pendingTimers.values()) clearTimeout(t);
+  pendingTimers.clear();
+  inflightSaves.clear();
 }
 
 /**
- * Legacy export retained so existing imports keep compiling. Use initStore()
- * instead for new code — it's what actually runs the migration.
+ * Legacy export retained so existing imports keep compiling.
  */
 export function migrateLegacyIfNeeded(): void {
-  // No-op: initStore() handles legacy migration as part of hydration.
+  // No-op: hydration runs in initStore().
 }
 
 /* -----------------------------------------------------------
@@ -338,60 +318,61 @@ export type ImportResult = {
 
 export type ImportMode = "merge" | "replace";
 
-/**
- * Imports a backup JSON. By default merges (newer updatedAt wins per id).
- * `replace` mode wipes the store first.
- */
 export async function importInspections(
   raw: unknown,
-  mode: ImportMode = "merge",
+  _mode: ImportMode = "merge",
 ): Promise<ImportResult> {
-  const result: ImportResult = { added: 0, updated: 0, skipped: 0, errors: [] };
-
   let payload: InspectionsBackup;
   try {
     payload =
-      typeof raw === "string" ? (JSON.parse(raw) as InspectionsBackup) : (raw as InspectionsBackup);
+      typeof raw === "string"
+        ? (JSON.parse(raw) as InspectionsBackup)
+        : (raw as InspectionsBackup);
   } catch (e) {
-    result.errors.push(`JSON inválido: ${(e as Error).message}`);
-    return result;
+    return {
+      added: 0,
+      updated: 0,
+      skipped: 0,
+      errors: [`JSON inválido: ${(e as Error).message}`],
+    };
   }
 
   if (!payload || typeof payload !== "object" || !Array.isArray(payload.inspections)) {
-    result.errors.push("Archivo no parece ser un backup de Perito.");
-    return result;
+    return {
+      added: 0,
+      updated: 0,
+      skipped: 0,
+      errors: ["Archivo no parece ser un backup de Perito."],
+    };
   }
   if (payload.version !== BACKUP_VERSION) {
-    result.errors.push(`Versión de backup no soportada (${payload.version}).`);
+    return {
+      added: 0,
+      updated: 0,
+      skipped: 0,
+      errors: [`Versión de backup no soportada (${payload.version}).`],
+    };
+  }
+
+  try {
+    const result = (await fetchJson("/api/inspections/import", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    })) as ImportResult;
+
+    // Refresh the cache so the UI shows imported items.
+    initialized = false;
+    memory.clear();
+    initPromise = null;
+    await initStore();
+
     return result;
+  } catch (e) {
+    return {
+      added: 0,
+      updated: 0,
+      skipped: 0,
+      errors: [e instanceof Error ? e.message : "Error de red"],
+    };
   }
-
-  if (mode === "replace") {
-    await resetStore();
-  }
-
-  for (const row of payload.inspections) {
-    if (!row || typeof row.id !== "string" || !row.data) {
-      result.skipped += 1;
-      continue;
-    }
-    const merged = mergeDefaults(row);
-    const existing = memory.get(merged.id);
-    if (existing) {
-      // Newer updatedAt wins
-      if ((merged.updatedAt ?? "") > (existing.updatedAt ?? "")) {
-        memory.set(merged.id, merged);
-        persistAsync(merged);
-        result.updated += 1;
-      } else {
-        result.skipped += 1;
-      }
-    } else {
-      memory.set(merged.id, merged);
-      persistAsync(merged);
-      result.added += 1;
-    }
-  }
-
-  return result;
 }

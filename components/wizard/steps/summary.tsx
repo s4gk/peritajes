@@ -7,6 +7,7 @@ import {
   Download,
   FileText,
   Info,
+  Lock,
 } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
@@ -32,6 +33,7 @@ import { ClientSignatureCapture } from "@/components/shared/client-signature-cap
 import { SignaturePad } from "@/components/shared/signature-pad";
 import { VoiceDictationButton } from "@/components/shared/voice-dictation-button";
 import { useToast } from "@/components/ui/toast";
+import { downloadInspectionPdf } from "@/lib/pdf-client";
 import { analyze, riskTone } from "@/lib/rules-engine";
 
 import { useInspection } from "../inspection-context";
@@ -60,29 +62,14 @@ export function SummaryStep() {
     setData((prev) => ({ ...prev, conclusion: { ...prev.conclusion, ...patch } }));
   }
 
-  async function generatePdf() {
+  async function generatePdf(mode: "executive" | "detailed") {
     setGenerating(true);
     try {
-      const res = await fetch("/api/pdf", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ data, report }),
+      await downloadInspectionPdf(data, mode);
+      toast.show({
+        title: `PDF ${mode === "executive" ? "ejecutivo" : "detallado"} generado`,
+        variant: "success",
       });
-      if (!res.ok) {
-        const text = await res.text();
-        throw new Error(text || "Error al generar PDF");
-      }
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      const plate = (data.vehicle.plate || "inspeccion").replace(/[^A-Z0-9]/gi, "");
-      a.download = `peritaje-${plate}.pdf`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
-      toast.show({ title: "PDF generado", variant: "success" });
     } catch (err) {
       const message = err instanceof Error ? err.message : "Error desconocido";
       toast.show({
@@ -93,6 +80,41 @@ export function SummaryStep() {
     } finally {
       setGenerating(false);
     }
+  }
+
+  function finalize() {
+    if (!data.conclusion.generalCondition) {
+      toast.show({
+        title: "Falta la condición general",
+        description: "Selecciona la condición general antes de finalizar.",
+        variant: "warning",
+      });
+      return;
+    }
+    if (!data.conclusion.inspectorSignature) {
+      toast.show({
+        title: "Falta la firma del perito",
+        description: "Captura la firma del perito antes de finalizar.",
+        variant: "warning",
+      });
+      return;
+    }
+    if (typeof window !== "undefined" && !window.confirm(
+      "¿Finalizar el peritaje? Quedará bloqueado en modo solo lectura. Podrás reabrirlo si necesitás corregir algo.",
+    )) {
+      return;
+    }
+    setData((prev) => ({
+      ...prev,
+      status: "completed",
+      completedAt: new Date().toISOString(),
+    }));
+    toast.show({
+      title: "Peritaje finalizado",
+      description: "Quedó cerrado en solo lectura. Podés descargar el PDF cuando quieras.",
+      variant: "success",
+    });
+    if (typeof window !== "undefined") window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
   return (
@@ -313,7 +335,24 @@ export function SummaryStep() {
       </Card>
 
       <div className="flex flex-col items-stretch gap-3 sm:flex-row sm:items-center sm:justify-end">
-        <Button onClick={generatePdf} disabled={generating} size="lg">
+        <Button
+          type="button"
+          onClick={() => generatePdf("detailed")}
+          disabled={generating}
+          size="lg"
+          variant="ghost"
+          className="text-muted-foreground"
+        >
+          <FileText className="mr-2 h-4 w-4" />
+          PDF detallado
+        </Button>
+        <Button
+          type="button"
+          onClick={() => generatePdf("executive")}
+          disabled={generating}
+          size="lg"
+          variant="outline"
+        >
           {generating ? (
             <>
               <FileText className="mr-2 h-4 w-4 animate-pulse" />
@@ -322,10 +361,16 @@ export function SummaryStep() {
           ) : (
             <>
               <Download className="mr-2 h-4 w-4" />
-              Generar informe PDF
+              PDF ejecutivo
             </>
           )}
         </Button>
+        {data.status !== "completed" && (
+          <Button onClick={finalize} size="lg" variant="success">
+            <Lock className="mr-2 h-4 w-4" />
+            Finalizar peritaje
+          </Button>
+        )}
       </div>
     </div>
   );

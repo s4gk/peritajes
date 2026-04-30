@@ -5,8 +5,11 @@ import { useRouter } from "next/navigation";
 import {
   ArrowLeft,
   ArrowRight,
+  CheckCircle2,
   ChevronLeft,
+  Download,
   Keyboard,
+  Unlock,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -32,6 +35,8 @@ import {
   type StepId,
 } from "@/lib/constants";
 import { findOption, requiresPhoto } from "@/lib/findings-catalog";
+import { downloadInspectionPdf } from "@/lib/pdf-client";
+import { formatDate } from "@/lib/utils";
 import type { InspectionData, InspectionEntry, InspectionSectionDef } from "@/lib/types";
 
 import { InspectionProvider, useInspection } from "./inspection-context";
@@ -153,11 +158,38 @@ function isStepComplete(step: StepId, data: InspectionData): boolean {
 }
 
 function WizardInner() {
-  const { data, setData, isHydrated, notFound } = useInspection();
+  const { data, setData, isHydrated, notFound, isReadOnly } = useInspection();
   const [current, setCurrent] = React.useState<StepId>("vehicle");
   const [shortcutsOpen, setShortcutsOpen] = React.useState(false);
+  const [pdfBusy, setPdfBusy] = React.useState(false);
   const toast = useToast();
   const router = useRouter();
+
+  const handleReopen = React.useCallback(() => {
+    if (typeof window !== "undefined" && !window.confirm(
+      "¿Reabrir este peritaje? Quedará en estado borrador y podrás volver a editarlo.",
+    )) {
+      return;
+    }
+    setData((prev) => ({ ...prev, status: "draft", completedAt: undefined }));
+    toast.show({ title: "Peritaje reabierto", description: "Volvés al modo edición.", variant: "default" });
+  }, [setData, toast]);
+
+  const handleDownloadPdf = React.useCallback(async () => {
+    setPdfBusy(true);
+    try {
+      await downloadInspectionPdf(data);
+      toast.show({ title: "PDF generado", variant: "success" });
+    } catch (err) {
+      toast.show({
+        title: "No se pudo generar el PDF",
+        description: err instanceof Error ? err.message : "Error desconocido",
+        variant: "danger",
+      });
+    } finally {
+      setPdfBusy(false);
+    }
+  }, [data, toast]);
 
   const completed = React.useMemo(() => {
     const set = new Set<StepId>();
@@ -248,7 +280,7 @@ function WizardInner() {
         <p className="text-sm text-muted-foreground">
           El peritaje que intentas abrir no existe o fue eliminado.
         </p>
-        <Button onClick={() => router.push("/")}>Volver al inicio</Button>
+        <Button onClick={() => router.push("/peritajes")}>Volver a peritajes</Button>
       </div>
     );
   }
@@ -260,7 +292,7 @@ function WizardInner() {
           <Button
             variant="ghost"
             size="sm"
-            onClick={() => router.push("/")}
+            onClick={() => router.push("/peritajes")}
             className="-ml-2 mb-1 h-8 gap-1 px-2 text-xs text-muted-foreground"
           >
             <ChevronLeft className="h-3.5 w-3.5" />
@@ -302,7 +334,46 @@ function WizardInner() {
         statsByStep={statsByStep}
       />
 
-      <div>
+      {isReadOnly && (
+        <div className="flex flex-col gap-3 rounded-lg border border-success/40 bg-success/10 p-3 text-sm sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex items-start gap-2 text-success">
+            <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" />
+            <div>
+              <div className="font-semibold">Peritaje finalizado</div>
+              {data.completedAt && (
+                <div className="text-xs text-muted-foreground">
+                  Cerrado el {formatDate(data.completedAt.slice(0, 10))} · solo lectura
+                </div>
+              )}
+            </div>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={handleDownloadPdf}
+              disabled={pdfBusy}
+              className="h-9"
+            >
+              <Download className="mr-1.5 h-4 w-4" />
+              {pdfBusy ? "Generando…" : "Descargar PDF"}
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={handleReopen}
+              className="h-9"
+            >
+              <Unlock className="mr-1.5 h-4 w-4" />
+              Reabrir
+            </Button>
+          </div>
+        </div>
+      )}
+
+      <fieldset disabled={isReadOnly} className="m-0 min-w-0 border-0 p-0">
         {current === "vehicle" && <VehicleInfoStep />}
         {current === "bodywork" && (
           <SectionStep
@@ -363,7 +434,7 @@ function WizardInner() {
         )}
         {current === "accessories" && <AccessoriesStep />}
         {current === "summary" && <SummaryStep />}
-      </div>
+      </fieldset>
 
       <div
         className="fixed inset-x-0 bottom-0 z-30 flex items-center justify-between gap-2 border-t bg-background/95 px-3 py-3 backdrop-blur sm:static sm:rounded-lg sm:border sm:px-4"

@@ -4,8 +4,11 @@ import * as React from "react";
 import { useRouter } from "next/navigation";
 import {
   Car,
+  CheckCircle2,
   Copy,
+  Download,
   FileText,
+  Loader2,
   Plus,
   Trash2,
 } from "lucide-react";
@@ -20,15 +23,17 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import {
-  createInspection,
   deleteInspection,
   duplicateInspection,
   initStore,
   listInspections,
 } from "@/lib/inspections-store";
+import { downloadInspectionPdf } from "@/lib/pdf-client";
 import { analyze, riskTone } from "@/lib/rules-engine";
 import type { StoredInspection } from "@/lib/types";
 import { formatDate } from "@/lib/utils";
+
+import { useToast } from "@/components/ui/toast";
 
 import { BackupControls } from "./backup-controls";
 import { ThemeToggle } from "./theme-toggle";
@@ -57,8 +62,7 @@ function InspectionsInner() {
   }, [refresh]);
 
   function handleNew() {
-    const created = createInspection();
-    router.push(`/inspection/${created.id}`);
+    router.push("/intake");
   }
 
   function handleDuplicate(id: string) {
@@ -161,6 +165,26 @@ function InspectionCard({
   const v = item.data.vehicle;
   const tone = riskTone(report.level);
   const hasPlate = !!v.plate;
+  const isCompleted = item.data.status === "completed";
+  const toast = useToast();
+  const [pdfBusy, setPdfBusy] = React.useState(false);
+
+  async function handleDownloadPdf(e: React.MouseEvent) {
+    e.stopPropagation();
+    setPdfBusy(true);
+    try {
+      await downloadInspectionPdf(item.data);
+      toast.show({ title: "PDF generado", variant: "success" });
+    } catch (err) {
+      toast.show({
+        title: "No se pudo generar el PDF",
+        description: err instanceof Error ? err.message : "Error desconocido",
+        variant: "danger",
+      });
+    } finally {
+      setPdfBusy(false);
+    }
+  }
 
   return (
     <Card
@@ -179,9 +203,20 @@ function InspectionCard({
                 : "Datos incompletos"}
             </CardDescription>
           </div>
-          <Badge variant={tone} className="shrink-0 text-[10px]">
-            {report.level === "low" ? "Bajo" : report.level === "medium" ? "Medio" : "Alto"}
-          </Badge>
+          <div className="flex shrink-0 flex-col items-end gap-1">
+            <Badge variant={tone} className="text-[10px]">
+              {report.level === "low" ? "Bajo" : report.level === "medium" ? "Medio" : "Alto"}
+            </Badge>
+            {isCompleted ? (
+              <span className="inline-flex items-center gap-1 rounded-full border border-success/40 bg-success/10 px-2 py-0.5 text-[10px] font-medium text-success">
+                <CheckCircle2 className="h-3 w-3" /> Finalizado
+              </span>
+            ) : (
+              <span className="inline-flex items-center gap-1 rounded-full border border-muted-foreground/30 bg-muted/40 px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
+                Borrador
+              </span>
+            )}
+          </div>
         </div>
       </CardHeader>
       <CardContent className="space-y-3">
@@ -226,6 +261,22 @@ function InspectionCard({
             <FileText className="h-4 w-4" /> Abrir
           </Button>
           <div className="flex items-center gap-1">
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="h-10 w-10"
+              onClick={handleDownloadPdf}
+              disabled={pdfBusy}
+              aria-label="Descargar PDF"
+              title="Descargar PDF"
+            >
+              {pdfBusy ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Download className="h-4 w-4" />
+              )}
+            </Button>
             <Button
               type="button"
               variant="ghost"

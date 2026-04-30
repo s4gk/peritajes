@@ -1,0 +1,117 @@
+import type { FasecoldaResponse, RuntResponse } from "@/lib/verifik/types";
+
+/**
+ * Real responses captured from api.verifik.co on 2026-04-28 (with placeholders).
+ * Used as fixtures so adapter tests catch real-world quirks (string-typed
+ * numbers, the `marke`/`cilidraje` typos, DD/MM/YYYY dates, etc.).
+ */
+
+export const FASECOLDA_FIXTURE: FasecoldaResponse = {
+  data: {
+    absShow: "NO",
+    airbags: "0",
+    airconditioningShow: "SI",
+    axles: "2",
+    bcpp: "64200",
+    brakes: "DISCO/TAMBOR",
+    capacityLoad: "0",
+    capacityPassengers: "5",
+    category: "LIVIANO PASAJEROS",
+    class: "AUTOMOVIL",
+    cylinderCapacity: "1598",
+    doors: "5",
+    electricChairs: "0",
+    electricGlasses: "0",
+    electricMirrors: "0",
+    explorersShow: "NO",
+    foodSystem: "NO APLICA",
+    fuel: "GASOLINA",
+    homoloCode: "08001151",
+    importedShow: "NO",
+    line1: "SANDERO [FL]",
+    line2: "AUTHENTIQUE",
+    line3: "MT 1600CC 8V AA",
+    long: "4057",
+    marke: "RENAULT",
+    plate: "ABC123",
+    power: "90",
+    rearSuspension: "NO APLICA",
+    reverseCameraShow: "NO",
+    sensorsShow: "NO",
+    service: "PARTICULAR",
+    sunroofShow: "NO",
+    tachometer: "NO APLICA",
+    traction: "DELANTERA",
+    transmission: "4X2",
+    typeAddress: "HIDRÁULICA",
+    typeAirConditioning: "MANUAL",
+    typeBox: "MECANICA",
+    typeHeadlights: "HALOGENO",
+    typology: "HATCHBACK",
+    upholsteryLeatherShow: "NO",
+    valueModel: [
+      { modelo: "2016", valor: 34500, estado: "USADO", modeloId: 47, idEstado: 1 },
+      { modelo: "2015", valor: 32800, estado: "USADO", modeloId: 46, idEstado: 1 },
+    ],
+    weight: "1108",
+  },
+  signature: { message: "Certified by Verifik.co", dateTime: "October 12, 2023 7:38 PM" },
+  id: "mhlt7",
+};
+
+export const RUNT_FIXTURE: RuntResponse = {
+  data: {
+    informacionGeneral: {
+      noLicenciaTransito: "10021312347",
+      estadoDelVehiculo: "ACTIVO",
+      tipoServicio: "Particular",
+      claseVehiculo: "CAMIONETA",
+      marca: "MAZDA",
+      linea: "CX-30",
+      modelo: "2021",
+      color: "MACHINE GRAY",
+      noMotor: "PY402912330",
+      noChasis: "3MVDM2WLAML234946",
+      noVin: "3MVDM2WLAML234946",
+      cilidraje: "2488",
+      tipoCarroceria: "WAGON",
+      fechaMatricula: "17/10/2020",
+      tieneGravamenes: "NO",
+      organismoTransito: "SECRETARIA DISTRITAL DE MOVILIDAD DE BOGOTA",
+      prendas: "NO",
+      clasificacion: "AUTOMOVIL",
+      tipoCombustible: "GASOLINA",
+      noPlaca: "ABC123",
+      puertas: "5",
+    },
+    datosTecnicos: {
+      pesoBrutoVehicular: "1939",
+      noEjes: "2",
+      pasajerosSentados: "5",
+    },
+    soat: [
+      {
+        noPoliza: "355100023467200",
+        fechaExpedicion: "03/10/2023",
+        fechaVigencia: "17/10/2023",
+        fechaVencimiento: "16/10/2024",
+        entidadExpideSoat: "SEGUROS COMERCIALES BOLIVAR S.A",
+        estado: "VIGENTE",
+        tipoTarifa: "221",
+      },
+    ],
+    polizasResponsabilidadCivil: [],
+    tecnoMecanica: [{ vigente: "NO APLICA" }],
+    solicitudes: [
+      {
+        noSolicitud: "124539870",
+        fechaSolicitud: "17/10/2020",
+        estado: "AUTORIZADA",
+        tramitesRealizados: "Tramite matricula inicial",
+        entidad: "SECRETARIA DISTRITAL DE MOVILIDAD DE BOGOTA",
+      },
+    ],
+  },
+  signature: { message: "Certified by Verifik.co", dateTime: "March 14, 2024 2:23 PM" },
+  id: "DWTV2",
+};

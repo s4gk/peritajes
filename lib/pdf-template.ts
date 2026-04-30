@@ -1,4 +1,4 @@
-import type { PanelCoord } from "./bodywork-coords";
+import { buildDocumentNumber, getCompanyBranding, type CompanyBranding } from "./company";
 import {
   BODYWORK_SECTION,
   CHASSIS_SECTION,
@@ -16,13 +16,6 @@ import type {
   InspectionEntry,
   InspectionSectionDef,
 } from "./types";
-
-export type BodyworkVisual = {
-  /** Data URL or path to the rendered vehicle image. */
-  imageSrc: string;
-  /** Panel id → coord. Missing or null entries get no callout. */
-  coords: Record<string, PanelCoord | null>;
-};
 
 function escapeHtml(str: string): string {
   return str
@@ -158,6 +151,98 @@ function renderSectionTableCompact(
   `;
 }
 
+/**
+ * Executive section render: only items with hallazgos (warning/danger), each
+ * with their photos inline. OK items are summarized in a single muted line so
+ * the perito's audit trail stays visible without bloating the page.
+ */
+function renderSectionExecutive(
+  title: string,
+  section: InspectionSectionDef,
+  data: Record<string, InspectionEntry>,
+): string {
+  const findings: {
+    label: string;
+    groupLabel: string;
+    findingLabel: string;
+    tone: "warning" | "danger";
+    notes: string;
+    images: { dataUrl: string }[];
+  }[] = [];
+  const okItems: string[] = [];
+
+  for (const group of section.groups) {
+    for (const item of group.items) {
+      const entry = data?.[item.id];
+      const opt = findOption(entry?.status);
+      if (!opt) continue;
+      if (opt.tone === "warning" || opt.tone === "danger") {
+        findings.push({
+          label: item.label,
+          groupLabel: group.label,
+          findingLabel: opt.label,
+          tone: opt.tone,
+          notes: entry?.notes ?? "",
+          images: entry?.images ?? [],
+        });
+      } else {
+        okItems.push(item.label);
+      }
+    }
+  }
+
+  if (findings.length === 0 && okItems.length === 0) {
+    return `
+      <section class="exec-section">
+        <h2>${escapeHtml(title)}</h2>
+        <p class="muted">Sin datos registrados.</p>
+      </section>
+    `;
+  }
+
+  const findingBlocks = findings
+    .map((f) => {
+      const photos = f.images.length
+        ? `<div class="exec-finding-photos">${f.images
+            .map(
+              (img) =>
+                `<img src="${img.dataUrl}" alt="${escapeHtml(f.label)}" />`,
+            )
+            .join("")}</div>`
+        : "";
+      const notes = f.notes
+        ? `<div class="exec-finding-notes">${escapeHtml(f.notes)}</div>`
+        : "";
+      return `
+        <div class="exec-finding ${f.tone}">
+          <div class="exec-finding-head">
+            <strong>${escapeHtml(f.label)}</strong>
+            <span class="muted" style="font-size:8.5pt;">${escapeHtml(f.groupLabel)}</span>
+            <span class="pill pill-${f.tone}">${escapeHtml(f.findingLabel)}</span>
+          </div>
+          ${notes}
+          ${photos}
+        </div>`;
+    })
+    .join("");
+
+  let okBlock = "";
+  if (okItems.length > 0) {
+    okBlock = `
+      <div class="exec-ok-summary">
+        ✓ ${okItems.length} ${okItems.length === 1 ? "ítem" : "ítems"} en condición original
+      </div>`;
+  }
+
+  return `
+    <section class="exec-section">
+      <h2>${escapeHtml(title)}</h2>
+      ${findingBlocks}
+      ${okBlock}
+    </section>
+  `;
+}
+
 function renderEvidence(
   title: string,
   section: InspectionSectionDef,
@@ -259,125 +344,17 @@ function riskTone(level: "low" | "medium" | "high"): string {
   return level === "low" ? "success" : level === "medium" ? "warning" : "danger";
 }
 
-type BodyworkCallout = {
-  index: number;
-  itemId: string;
-  itemLabel: string;
-  groupLabel: string;
-  findingLabel: string;
-  tone: "neutral" | "success" | "warning" | "danger";
-  notes: string;
-  coord: PanelCoord | null;
-};
-
-function collectBodyworkFindings(
-  data: Record<string, InspectionEntry>,
-  coords: Record<string, PanelCoord | null>,
-): BodyworkCallout[] {
-  const out: BodyworkCallout[] = [];
-  let idx = 0;
-  for (const group of BODYWORK_SECTION.groups) {
-    for (const item of group.items) {
-      const entry = data?.[item.id];
-      const opt = findOption(entry?.status);
-      if (!opt) continue;
-      if (opt.tone !== "warning" && opt.tone !== "danger") continue;
-      idx += 1;
-      out.push({
-        index: idx,
-        itemId: item.id,
-        itemLabel: item.label,
-        groupLabel: group.label,
-        findingLabel: opt.label,
-        tone: opt.tone,
-        notes: entry?.notes ?? "",
-        coord: coords[item.id] ?? null,
-      });
-    }
-  }
-  return out;
-}
-
-function renderBodyworkVisual(
-  data: Record<string, InspectionEntry>,
-  visual: BodyworkVisual,
-): string {
-  const callouts = collectBodyworkFindings(data, visual.coords);
-  const visibleCallouts = callouts.filter((c) => c.coord);
-  const offImageCallouts = callouts.filter((c) => !c.coord);
-
-  if (callouts.length === 0) {
-    return `
-      <div class="bodywork-visual">
-        <figure class="bodywork-image">
-          <img src="${escapeHtml(visual.imageSrc)}" alt="Vehículo" />
-        </figure>
-        <p class="muted" style="margin-top:6pt;">
-          Sin hallazgos en carrocería — todos los paneles inspeccionados quedaron en condición original o equivalente.
-        </p>
-      </div>
-    `;
-  }
-
-  const markers = visibleCallouts
-    .map((c) => {
-      const toneClass = c.tone === "danger" ? "danger" : "warning";
-      return `
-        <span class="callout callout-${toneClass}" style="left:${(c.coord!.x * 100).toFixed(2)}%; top:${(c.coord!.y * 100).toFixed(2)}%;">
-          ${c.index}
-        </span>`;
-    })
-    .join("");
-
-  const tableRows = callouts
-    .map((c) => {
-      const toneClass = c.tone === "danger" ? "danger" : "warning";
-      return `
-        <tr>
-          <td class="callout-cell"><span class="pill pill-${toneClass} num">${c.index}</span></td>
-          <td><strong>${escapeHtml(c.itemLabel)}</strong><div class="muted" style="font-size:8.5pt;">${escapeHtml(c.groupLabel)}</div></td>
-          <td><span class="pill pill-${toneClass}">${escapeHtml(c.findingLabel)}</span></td>
-          <td class="notes">${c.notes ? escapeHtml(c.notes) : ""}</td>
-        </tr>`;
-    })
-    .join("");
-
-  const offNote =
-    offImageCallouts.length > 0
-      ? `<p class="muted" style="margin-top:4pt; font-size:8.5pt;">
-          ${offImageCallouts.length} hallazgo${offImageCallouts.length === 1 ? "" : "s"} sin posición visible en esta vista (ver tabla).
-        </p>`
-      : "";
-
-  return `
-    <div class="bodywork-visual">
-      <figure class="bodywork-image">
-        <img src="${escapeHtml(visual.imageSrc)}" alt="Vehículo" />
-        ${markers}
-      </figure>
-      ${offNote}
-      <table class="section-table compact" style="margin-top:8pt;">
-        <thead>
-          <tr>
-            <th style="width:36pt">#</th>
-            <th>Panel</th>
-            <th style="width:30%">Hallazgo</th>
-            <th style="width:30%">Notas</th>
-          </tr>
-        </thead>
-        <tbody>${tableRows}</tbody>
-      </table>
-    </div>
-  `;
-}
+export type PdfMode = "executive" | "detailed";
 
 export function renderReportHtml(
   data: InspectionData,
   report: RiskReport,
-  options?: { bodyworkVisual?: BodyworkVisual | null },
+  options?: { mode?: PdfMode; branding?: CompanyBranding },
 ): string {
-  const bodyworkVisual = options?.bodyworkVisual ?? null;
+  const mode: PdfMode = options?.mode ?? "executive";
   const v = data.vehicle;
+  const brand = options?.branding ?? getCompanyBranding();
+  const docNumber = buildDocumentNumber(v.plate, v.date);
   const sections: { title: string; def: InspectionSectionDef; data: Record<string, InspectionEntry> }[] = [
     { title: "Carrocería", def: BODYWORK_SECTION, data: data.bodywork },
     { title: "Chasis y estructura", def: CHASSIS_SECTION, data: data.chassis },
@@ -424,15 +401,78 @@ export function renderReportHtml(
   p { margin: 0 0 6pt 0; }
   .muted { color: #475569; font-size: 9.5pt; }
 
-  .cover { page-break-after: always; display: flex; flex-direction: column; justify-content: space-between; min-height: 245mm; padding-top: 12mm; }
-  .cover .brand { font-size: 10pt; letter-spacing: 3px; text-transform: uppercase; color: #64748b; }
+  .cover { page-break-after: always; display: flex; flex-direction: column; justify-content: space-between; min-height: 245mm; padding-top: 0; }
+  .cover .brand { font-size: 10pt; letter-spacing: 3px; text-transform: uppercase; color: #64748b; margin-top: 12mm; }
   .cover .title { font-size: 30pt; font-weight: 700; letter-spacing: -0.5px; margin-top: 8pt; }
   .cover .subtitle { color: #475569; font-size: 12pt; margin-top: 4pt; }
   .cover .ribbon { display: inline-block; padding: 6pt 10pt; border-radius: 6pt; font-weight: 600; margin-top: 10mm; }
-  .cover .meta { margin-top: 16mm; display: grid; grid-template-columns: 1fr 1fr; gap: 6mm 14mm; }
-  .cover .meta .label { font-size: 9pt; color: #64748b; text-transform: uppercase; letter-spacing: 0.8px; }
-  .cover .meta .value { font-size: 13pt; font-weight: 600; margin-top: 1mm; }
+  .vehicle-specs {
+    margin-top: 12mm;
+    border-top: 1px solid #e2e8f0;
+    border-bottom: 1px solid #e2e8f0;
+    padding: 5mm 0;
+  }
+  .vehicle-specs .spec-row {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 6mm;
+    padding: 2.5mm 0;
+  }
+  .vehicle-specs .spec-row.full {
+    grid-template-columns: 1fr;
+  }
+  .vehicle-specs .spec-cell {
+    display: flex;
+    flex-direction: column;
+    gap: 1pt;
+  }
+  .vehicle-specs .label {
+    font-size: 7.5pt;
+    color: #94a3b8;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    font-weight: 500;
+  }
+  .vehicle-specs .value {
+    font-size: 10.5pt;
+    font-weight: 500;
+    color: #0f172a;
+  }
+  .vehicle-specs .value.mono {
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 9.5pt;
+    letter-spacing: 0.2px;
+  }
   .cover .footer { border-top: 1px solid #e2e8f0; padding-top: 6mm; color: #64748b; font-size: 9pt; display: flex; justify-content: space-between; }
+
+  /* Branded header on the cover page */
+  .brand-header {
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    align-items: center;
+    gap: 10pt;
+    padding: 8pt 0;
+    border-bottom: 2pt solid #0f172a;
+    page-break-inside: avoid;
+  }
+  .brand-header .logo img { display: block; width: 48pt; height: 48pt; }
+  .brand-header .company-name { font-size: 16pt; font-weight: 800; color: #0f172a; letter-spacing: 0.3px; }
+  .brand-header .company-tagline { font-size: 9pt; color: #475569; margin-top: 1pt; }
+  .brand-header .company-meta { font-size: 8.5pt; color: #475569; margin-top: 4pt; line-height: 1.4; }
+  .brand-header .doc-badge { text-align: right; font-size: 8.5pt; color: #475569; line-height: 1.5; }
+  .brand-header .doc-badge .doc-number { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 9pt; color: #0f172a; font-weight: 700; }
+
+  /* Perito strip just below the brand header */
+  .perito-strip {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10pt;
+    padding: 6pt 0 0 0;
+    margin-bottom: 8mm;
+    font-size: 9.5pt;
+  }
+  .perito-strip .label { font-size: 8pt; color: #64748b; text-transform: uppercase; letter-spacing: 0.6px; }
+  .perito-strip .value { font-weight: 600; margin-top: 1pt; }
 
   .grid-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6pt; }
 
@@ -442,6 +482,17 @@ export function renderReportHtml(
   .stat.success { background: #ecfdf5; border-color: #bbf7d0; color: #166534; }
   .stat.warning { background: #fffbeb; border-color: #fde68a; color: #92400e; }
   .stat.danger  { background: #fef2f2; border-color: #fecaca; color: #991b1b; }
+
+  /* Compact risk hero (replaces the 8-stat grid in executive summary) */
+  .risk-hero { display: flex; flex-wrap: wrap; align-items: center; gap: 8pt; margin-top: 8pt; font-size: 11pt; }
+  .risk-hero .risk-pill { font-size: 10pt; padding: 3pt 9pt; }
+  .risk-hero .risk-stat { font-weight: 600; color: #0f172a; }
+  .risk-hero .risk-sep { color: #cbd5e1; }
+  .counter-chips { display: flex; flex-wrap: wrap; gap: 4pt; margin-top: 6pt; }
+  .counter-chip { font-size: 9pt; padding: 2pt 8pt; border-radius: 100pt; background: #f1f5f9; color: #334155; border: 1px solid transparent; }
+  .counter-chip strong { font-weight: 700; }
+  .counter-warning { background: #fffbeb; color: #92400e; border-color: #fde68a; }
+  .counter-danger  { background: #fef2f2; color: #991b1b; border-color: #fecaca; }
 
   .pill { display: inline-block; padding: 1.5pt 6pt; border-radius: 999px; font-size: 8.8pt; font-weight: 600; line-height: 1.4; }
   .pill-success { background: #dcfce7; color: #166534; }
@@ -511,36 +562,31 @@ export function renderReportHtml(
   .sig-box img { max-height: 22mm; max-width: 100%; }
   .sig-label { font-size: 9pt; color: #334155; text-align: center; padding-top: 3pt; }
 
-  /* Bodywork visual */
-  .bodywork-visual { margin-top: 6pt; }
-  .bodywork-image {
-    margin: 0;
-    position: relative;
-    border: 1px solid #e2e8f0;
-    border-radius: 6pt;
-    overflow: hidden;
-    background: #0f172a;
-    page-break-inside: avoid;
+  /* Executive section blocks */
+  .exec-section { padding: 6pt 0; page-break-inside: avoid; }
+  .exec-section h2 { margin-bottom: 4pt; }
+  .exec-finding {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 3pt;
+    background: #ffffff;
+    border-left: 2.5pt solid #d97706;
+    padding: 3pt 0 3pt 8pt;
+    margin-bottom: 3pt;
   }
-  .bodywork-image img { display: block; width: 100%; height: auto; }
-  .callout {
-    position: absolute;
-    transform: translate(-50%, -50%);
-    width: 18pt;
-    height: 18pt;
-    border-radius: 999px;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
+  .exec-finding.danger { border-left-color: #b91c1c; }
+  .exec-finding-head { display: flex; flex-wrap: wrap; align-items: center; gap: 5pt; font-size: 9.5pt; }
+  .exec-finding-head strong { font-size: 10pt; }
+  .exec-finding-notes { font-size: 9pt; color: #475569; }
+  .exec-finding-photos { display: flex; flex-wrap: wrap; gap: 4pt; margin-top: 2pt; }
+  .exec-finding-photos img { width: 70pt; height: 52pt; object-fit: cover; border-radius: 3pt; border: 1px solid #e2e8f0; }
+  .exec-ok-summary {
     font-size: 9pt;
-    font-weight: 700;
-    color: #ffffff;
-    box-shadow: 0 0 0 2px #ffffff, 0 1pt 3pt rgba(0,0,0,0.4);
-    line-height: 1;
+    color: #475569;
+    padding: 2pt 0 2pt 8pt;
+    border-left: 2.5pt solid #16a34a;
+    margin-top: 4pt;
   }
-  .callout-warning { background: #d97706; }
-  .callout-danger  { background: #b91c1c; }
-  .pill.num { min-width: 16pt; text-align: center; padding: 1pt 5pt; }
 </style>
 </head>
 <body>
@@ -548,28 +594,64 @@ export function renderReportHtml(
   <!-- COVER -->
   <section class="cover">
     <div>
+      <!-- BRANDED HEADER -->
+      <div class="brand-header">
+        <div class="logo">
+          <img src="${brand.logoDataUrl}" alt="${escapeHtml(brand.name)}" />
+        </div>
+        <div>
+          <div class="company-name">${escapeHtml(brand.name)}</div>
+          <div class="company-tagline">${escapeHtml(brand.tagline)}</div>
+          <div class="company-meta">
+            ${escapeHtml(brand.nit)} · ${escapeHtml(brand.address)}<br/>
+            ${escapeHtml(brand.email)} · ${escapeHtml(brand.phone)}${brand.website ? ` · ${escapeHtml(brand.website)}` : ""}
+          </div>
+        </div>
+        <div class="doc-badge">
+          <div class="doc-number">${escapeHtml(docNumber)}</div>
+          <div>Emitido ${fmtDate(v.date)}</div>
+        </div>
+      </div>
+
+      <!-- PERITO STRIP -->
+      <div class="perito-strip">
+        <div>
+          <div class="label">Perito responsable</div>
+          <div class="value">${esc(v.inspector)}</div>
+          ${v.inspectorId ? `<div class="muted" style="font-size:8.5pt;margin-top:1pt;">Documento / licencia: ${esc(v.inspectorId)}</div>` : ""}
+        </div>
+        <div style="text-align:right;">
+          <div class="label">Lugar de inspección</div>
+          <div class="value">${esc(v.location)}</div>
+        </div>
+      </div>
+
       <div class="brand">Informe de Peritaje Vehicular</div>
       <div class="title">${esc(v.make)} ${esc(v.model)}</div>
       <div class="subtitle">Año ${esc(v.year)} · Placa ${esc(v.plate)}</div>
       <div class="ribbon pill-${rTone}">Nivel de riesgo: ${rLevel}</div>
 
-      <div class="meta">
-        <div><div class="label">Fecha</div><div class="value">${fmtDate(v.date)}</div></div>
-        <div><div class="label">Kilometraje</div><div class="value">${esc(v.mileage)} km</div></div>
-        <div><div class="label">Color</div><div class="value">${esc(v.color)}</div></div>
-        <div><div class="label">Carrocería</div><div class="value">${esc(v.bodyType)}</div></div>
-        <div><div class="label">Combustible</div><div class="value">${escapeHtml(fuelLabel(v.fuel))}</div></div>
-        <div><div class="label">Transmisión</div><div class="value">${escapeHtml(transmissionLabel(v.transmission))}</div></div>
-        <div><div class="label">VIN</div><div class="value">${esc(v.vin)}</div></div>
-        <div><div class="label">Propietario</div><div class="value">${esc(v.owner)}</div></div>
-        <div><div class="label">Lugar</div><div class="value">${esc(v.location)}</div></div>
-        <div><div class="label">Perito</div><div class="value">${esc(v.inspector)}${v.inspectorId ? ` · ${esc(v.inspectorId)}` : ""}</div></div>
+      <div class="vehicle-specs">
+        <div class="spec-row">
+          <div class="spec-cell"><span class="label">Fecha</span><span class="value">${fmtDate(v.date)}</span></div>
+          <div class="spec-cell"><span class="label">Kilometraje</span><span class="value">${esc(v.mileage)} km</span></div>
+          <div class="spec-cell"><span class="label">Combustible</span><span class="value">${escapeHtml(fuelLabel(v.fuel))}</span></div>
+          <div class="spec-cell"><span class="label">Transmisión</span><span class="value">${escapeHtml(transmissionLabel(v.transmission))}</span></div>
+        </div>
+        <div class="spec-row">
+          <div class="spec-cell"><span class="label">Color</span><span class="value">${esc(v.color)}</span></div>
+          <div class="spec-cell"><span class="label">Carrocería</span><span class="value">${esc(v.bodyType)}</span></div>
+          <div class="spec-cell" style="grid-column: span 2;"><span class="label">VIN / Chasis</span><span class="value mono">${esc(v.vin)}</span></div>
+        </div>
+        <div class="spec-row full">
+          <div class="spec-cell"><span class="label">Propietario</span><span class="value">${esc(v.owner)}</span></div>
+        </div>
       </div>
     </div>
 
     <div class="footer">
-      <span>Informe generado automáticamente</span>
-      <span>${new Date().toLocaleString("es-CO")}</span>
+      <span>${escapeHtml(brand.name)} · ${escapeHtml(docNumber)}</span>
+      <span>Generado el ${new Date().toLocaleString("es-CO")}</span>
     </div>
   </section>
 
@@ -579,16 +661,30 @@ export function renderReportHtml(
     <p><strong>${escapeHtml(report.headline)}</strong></p>
     <p class="muted">${escapeHtml(report.conditionSummary)}</p>
 
-    <div class="grid-4" style="margin-top:8pt;">
-      <div class="stat ${counters.repainted > 0 ? "warning" : ""}"><div class="label">Repintados</div><div class="value">${counters.repainted}</div></div>
-      <div class="stat ${counters.repaired > 0 ? "warning" : ""}"><div class="label">Reparados</div><div class="value">${counters.repaired}</div></div>
-      <div class="stat ${counters.poorlyRepaired > 0 ? "danger" : ""}"><div class="label">Mal reparados</div><div class="value">${counters.poorlyRepaired}</div></div>
-      <div class="stat ${counters.structuralHits > 0 ? "danger" : ""}"><div class="label">Daño estructural</div><div class="value">${counters.structuralHits}</div></div>
-      <div class="stat ${counters.criticalLeaks > 0 ? "danger" : ""}"><div class="label">Fugas críticas</div><div class="value">${counters.criticalLeaks}</div></div>
-      <div class="stat ${counters.mechanicalBad > 0 ? "warning" : ""}"><div class="label">Mecánica falla</div><div class="value">${counters.mechanicalBad}</div></div>
-      <div class="stat ${counters.brakingIssues > 0 ? "danger" : ""}"><div class="label">Frenos</div><div class="value">${counters.brakingIssues}</div></div>
-      <div class="stat ${rTone}"><div class="label">Puntaje</div><div class="value">${report.score}</div></div>
+    <div class="risk-hero">
+      <span class="pill pill-${rTone} risk-pill">Riesgo ${rLevel.toLowerCase()}</span>
+      <span class="risk-stat">${report.findings.length} ${report.findings.length === 1 ? "hallazgo" : "hallazgos"}</span>
+      <span class="risk-sep">·</span>
+      <span class="risk-stat">Puntaje ${report.score}/100</span>
     </div>
+
+    ${(() => {
+      const chips: { label: string; value: number; tone: "warning" | "danger" }[] = [];
+      if (counters.repainted > 0) chips.push({ label: "Repintados", value: counters.repainted, tone: "warning" });
+      if (counters.repaired > 0) chips.push({ label: "Reparados", value: counters.repaired, tone: "warning" });
+      if (counters.poorlyRepaired > 0) chips.push({ label: "Mal reparados", value: counters.poorlyRepaired, tone: "danger" });
+      if (counters.structuralHits > 0) chips.push({ label: "Daño estructural", value: counters.structuralHits, tone: "danger" });
+      if (counters.criticalLeaks > 0) chips.push({ label: "Fugas críticas", value: counters.criticalLeaks, tone: "danger" });
+      if (counters.mechanicalBad > 0) chips.push({ label: "Mecánica falla", value: counters.mechanicalBad, tone: "warning" });
+      if (counters.brakingIssues > 0) chips.push({ label: "Frenos", value: counters.brakingIssues, tone: "danger" });
+      if (chips.length === 0) return "";
+      return `<div class="counter-chips">${chips
+        .map(
+          (c) =>
+            `<span class="counter-chip counter-${c.tone}">${escapeHtml(c.label)}: <strong>${c.value}</strong></span>`,
+        )
+        .join("")}</div>`;
+    })()}
   </section>
 
   <section class="avoid-break">
@@ -626,13 +722,28 @@ export function renderReportHtml(
   </section>
 
   <!-- DETAILED SECTIONS -->
+  ${
+    mode === "executive"
+      ? `
+  <section class="page-break">
+    ${sections.map((s) => renderSectionExecutive(s.title, s.def, s.data)).join("")}
+  </section>
+
+  <!-- TIRES + ACCESSORIES -->
+  <section class="avoid-break" style="margin-top:14pt;">
+    <h2>Llantas</h2>
+    ${renderTires(data)}
+  </section>
+
+  <section class="avoid-break" style="margin-top:14pt;">
+    <h2>Accesorios</h2>
+    ${renderAccessories(data)}
+  </section>
+  `
+      : `
   <section class="page-break">
     <h2>${escapeHtml(sections[0].title)}</h2>
-    ${
-      bodyworkVisual
-        ? renderBodyworkVisual(sections[0].data, bodyworkVisual)
-        : renderSectionTable(sections[0].def, sections[0].data)
-    }
+    ${renderSectionTable(sections[0].def, sections[0].data)}
   </section>
 
   <div class="two-col-grid">
@@ -665,6 +776,8 @@ export function renderReportHtml(
     <h2>Evidencia fotográfica</h2>
     ${sections.map((s) => renderEvidence(s.title, s.def, s.data)).join("") || `<p class="muted">No se registraron fotografías.</p>`}
   </section>
+  `
+  }
 
   <!-- CONCLUSION -->
   <section class="page-break">

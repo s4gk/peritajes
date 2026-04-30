@@ -1,0 +1,260 @@
+import "server-only";
+
+import crypto from "node:crypto";
+import bcrypt from "bcryptjs";
+import { cookies } from "next/headers";
+
+import { logAudit, query } from "./db";
+
+export const SESSION_COOKIE = "perito_session";
+const SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 30; // 30 days
+
+export type UserRole = "admin" | "perito";
+
+export type User = {
+  id: string;
+  username: string;
+  fullName: string;
+  email: string | null;
+  role: UserRole;
+  active: boolean;
+  createdAt: string;
+  lastLoginAt: string | null;
+};
+
+type UserRow = {
+  id: string;
+  username: string;
+  password_hash: string;
+  full_name: string;
+  email: string | null;
+  role: string;
+  active: boolean;
+  created_at: Date | string;
+  last_login_at: Date | string | null;
+};
+
+function tsToISO(v: Date | string | null): string | null {
+  if (v === null) return null;
+  return typeof v === "string" ? v : v.toISOString();
+}
+
+function rowToUser(row: UserRow): User {
+  return {
+    id: row.id,
+    username: row.username,
+    fullName: row.full_name,
+    email: row.email,
+    role: row.role === "admin" ? "admin" : "perito",
+    active: row.active,
+    createdAt: tsToISO(row.created_at) ?? "",
+    lastLoginAt: tsToISO(row.last_login_at),
+  };
+}
+
+export async function hashPassword(plain: string): Promise<string> {
+  return bcrypt.hash(plain, 10);
+}
+
+export async function verifyPassword(
+  plain: string,
+  hash: string,
+): Promise<boolean> {
+  return bcrypt.compare(plain, hash);
+}
+
+function makeId(): string {
+  return crypto.randomBytes(18).toString("base64url");
+}
+
+export async function countUsers(): Promise<number> {
+  const r = await query<{ c: string }>("SELECT COUNT(*)::text AS c FROM users");
+  return Number(r.rows[0].c);
+}
+
+export async function listUsers(): Promise<User[]> {
+  const r = await query<UserRow>(
+    "SELECT * FROM users ORDER BY created_at ASC",
+  );
+  return r.rows.map(rowToUser);
+}
+
+export async function getUserByUsername(
+  username: string,
+): Promise<UserRow | null> {
+  const r = await query<UserRow>(
+    "SELECT * FROM users WHERE username = $1",
+    [username.trim().toLowerCase()],
+  );
+  return r.rows[0] ?? null;
+}
+
+export async function getUserById(id: string): Promise<User | null> {
+  const r = await query<UserRow>("SELECT * FROM users WHERE id = $1", [id]);
+  const row = r.rows[0];
+  return row ? rowToUser(row) : null;
+}
+
+export type CreateUserInput = {
+  username: string;
+  password: string;
+  fullName: string;
+  email?: string | null;
+  role?: UserRole;
+};
+
+export async function createUser(input: CreateUserInput): Promise<User> {
+  const username = input.username.trim().toLowerCase();
+  if (!/^[a-z0-9._-]{3,32}$/.test(username)) {
+    throw new Error(
+      "El usuario debe tener 3-32 caracteres (letras, números, . _ -).",
+    );
+  }
+  if (!input.password || input.password.length < 8) {
+    throw new Error("La contraseña debe tener al menos 8 caracteres.");
+  }
+  if (!input.fullName.trim()) {
+    throw new Error("El nombre completo es requerido.");
+  }
+
+  const existing = await getUserByUsername(username);
+  if (existing) {
+    throw new Error("Ese usuario ya existe.");
+  }
+
+  const id = makeId();
+  const hash = await hashPassword(input.password);
+
+  await query(
+    `INSERT INTO users (id, username, password_hash, full_name, email, role, active)
+     VALUES ($1, $2, $3, $4, $5, $6, TRUE)`,
+    [
+      id,
+      username,
+      hash,
+      input.fullName.trim(),
+      input.email?.trim() || null,
+      input.role ?? "perito",
+    ],
+  );
+
+  const created = await getUserById(id);
+  if (!created) throw new Error("No se pudo crear el usuario.");
+  await logAudit(id, "user.created", JSON.stringify({ username, role: input.role }));
+  return created;
+}
+
+export async function setUserActive(id: string, active: boolean): Promise<void> {
+  await query("UPDATE users SET active = $1 WHERE id = $2", [active, id]);
+}
+
+export async function setUserPassword(
+  id: string,
+  password: string,
+): Promise<void> {
+  if (!password || password.length < 8) {
+    throw new Error("La contraseña debe tener al menos 8 caracteres.");
+  }
+  const hash = await hashPassword(password);
+  await query("UPDATE users SET password_hash = $1 WHERE id = $2", [hash, id]);
+  await query("DELETE FROM sessions WHERE user_id = $1", [id]);
+  await logAudit(id, "user.password_changed");
+}
+
+export async function deleteUser(id: string): Promise<void> {
+  await query("DELETE FROM users WHERE id = $1", [id]);
+  await logAudit(null, "user.deleted", id);
+}
+
+/* -----------------------------------------------------------
+ *  Sessions
+ * --------------------------------------------------------- */
+
+export async function createSession(
+  userId: string,
+  userAgent?: string,
+): Promise<string> {
+  const id = makeId();
+  const expiresAt = new Date(Date.now() + SESSION_TTL_MS).toISOString();
+  await query(
+    `INSERT INTO sessions (id, user_id, expires_at, user_agent)
+     VALUES ($1, $2, $3, $4)`,
+    [id, userId, expiresAt, userAgent ?? null],
+  );
+  await query("UPDATE users SET last_login_at = now() WHERE id = $1", [userId]);
+  return id;
+}
+
+export async function destroySession(sessionId: string): Promise<void> {
+  await query("DELETE FROM sessions WHERE id = $1", [sessionId]);
+}
+
+export async function destroyExpiredSessions(): Promise<void> {
+  await query("DELETE FROM sessions WHERE expires_at < now()");
+}
+
+export async function getSessionUser(sessionId: string): Promise<User | null> {
+  const r = await query<UserRow & { s_expires_at: Date | string }>(
+    `SELECT u.*, s.expires_at AS s_expires_at
+     FROM sessions s
+     JOIN users u ON u.id = s.user_id
+     WHERE s.id = $1 AND u.active = TRUE`,
+    [sessionId],
+  );
+  const row = r.rows[0];
+  if (!row) return null;
+  const expiresAt = typeof row.s_expires_at === "string"
+    ? Date.parse(row.s_expires_at)
+    : row.s_expires_at.getTime();
+  if (expiresAt < Date.now()) {
+    await destroySession(sessionId);
+    return null;
+  }
+  return rowToUser(row);
+}
+
+/* -----------------------------------------------------------
+ *  Cookie helpers (Next.js server context)
+ * --------------------------------------------------------- */
+
+export function setSessionCookie(sessionId: string) {
+  cookies().set(SESSION_COOKIE, sessionId, {
+    httpOnly: true,
+    sameSite: "lax",
+    secure: process.env.NODE_ENV === "production",
+    path: "/",
+    maxAge: Math.floor(SESSION_TTL_MS / 1000),
+  });
+}
+
+export function clearSessionCookie() {
+  cookies().set(SESSION_COOKIE, "", {
+    httpOnly: true,
+    sameSite: "lax",
+    secure: process.env.NODE_ENV === "production",
+    path: "/",
+    maxAge: 0,
+  });
+}
+
+export async function getCurrentUser(): Promise<User | null> {
+  const sid = cookies().get(SESSION_COOKIE)?.value;
+  if (!sid) return null;
+  return getSessionUser(sid);
+}
+
+export async function requireUser(): Promise<User> {
+  const user = await getCurrentUser();
+  if (!user) {
+    throw new Error("UNAUTHORIZED");
+  }
+  return user;
+}
+
+export async function requireAdmin(): Promise<User> {
+  const user = await requireUser();
+  if (user.role !== "admin") {
+    throw new Error("FORBIDDEN");
+  }
+  return user;
+}
