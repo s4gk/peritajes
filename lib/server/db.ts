@@ -110,6 +110,16 @@ CREATE TABLE IF NOT EXISTS inspections (
 CREATE INDEX IF NOT EXISTS idx_inspections_updated ON inspections(updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_inspections_user ON inspections(user_id);
 CREATE INDEX IF NOT EXISTS idx_inspections_plate ON inspections(plate) WHERE plate IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS verifik_cache (
+  service TEXT NOT NULL,
+  plate TEXT NOT NULL,
+  doc_key TEXT NOT NULL DEFAULT '',
+  response JSONB NOT NULL,
+  cached_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (service, plate, doc_key)
+);
+CREATE INDEX IF NOT EXISTS idx_verifik_cache_at ON verifik_cache(cached_at);
 `;
 
 async function ensureMigrated(): Promise<void> {
