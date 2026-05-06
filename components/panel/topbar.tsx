@@ -6,6 +6,7 @@ import { LogOut, Menu } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/components/ui/toast";
+import { ThemeToggle } from "@/components/wizard/theme-toggle";
 
 export type TopbarProps = {
   user: { fullName: string; role: "admin" | "perito" };
@@ -50,6 +51,7 @@ export function Topbar({ user, onMenuClick, title }: TopbarProps) {
           <h1 className="truncate text-base font-semibold sm:text-lg">{title}</h1>
         ) : null}
       </div>
+      <ThemeToggle />
       <div className="hidden items-center gap-2 text-sm sm:flex">
         <span className="text-muted-foreground">Hola,</span>
         <span className="font-medium">{user.fullName.split(" ")[0]}</span>
