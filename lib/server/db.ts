@@ -9,6 +9,7 @@ import { Pool, type QueryResult, type QueryResultRow } from "pg";
 
 const globalScope = globalThis as unknown as {
   __peritoPgPool?: Pool;
+  
   __peritoMigrationsApplied?: boolean;
   __peritoMigrationsPromise?: Promise<void>;
 };
@@ -65,6 +66,7 @@ CREATE TABLE IF NOT EXISTS users (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   last_login_at TIMESTAMPTZ
 );
+ALTER TABLE users ADD COLUMN IF NOT EXISTS license_id TEXT;
 
 CREATE TABLE IF NOT EXISTS sessions (
   id TEXT PRIMARY KEY,
@@ -120,6 +122,33 @@ CREATE TABLE IF NOT EXISTS verifik_cache (
   PRIMARY KEY (service, plate, doc_key)
 );
 CREATE INDEX IF NOT EXISTS idx_verifik_cache_at ON verifik_cache(cached_at);
+
+CREATE TABLE IF NOT EXISTS vehicle_renders (
+  cache_key TEXT PRIMARY KEY,
+  make TEXT NOT NULL,
+  model TEXT NOT NULL,
+  year TEXT NOT NULL,
+  body_type TEXT,
+  prompt TEXT NOT NULL,
+  ai_model TEXT NOT NULL,
+  image_b64 TEXT NOT NULL,
+  mime TEXT NOT NULL,
+  cached_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_vehicle_renders_at ON vehicle_renders(cached_at);
+
+CREATE TABLE IF NOT EXISTS share_tokens (
+  token TEXT PRIMARY KEY,
+  inspection_id TEXT NOT NULL REFERENCES inspections(id) ON DELETE CASCADE,
+  created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  expires_at TIMESTAMPTZ NOT NULL,
+  revoked_at TIMESTAMPTZ,
+  last_accessed_at TIMESTAMPTZ,
+  access_count INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_share_tokens_inspection ON share_tokens(inspection_id);
+CREATE INDEX IF NOT EXISTS idx_share_tokens_expires ON share_tokens(expires_at);
 `;
 
 async function ensureMigrated(): Promise<void> {
@@ -156,8 +185,15 @@ export async function logAudit(
       `INSERT INTO audit_log (user_id, action, detail) VALUES ($1, $2, $3)`,
       [userId, action, detail ?? null],
     );
-  } catch {
-    // Audit failures must not break the request.
+  } catch (err) {
+    // Las fallas de auditoría no deben romper el request principal, pero antes
+    // de este cambio se silenciaban totalmente — un atacante podía aprovechar
+    // una DB caída para actuar sin quedar registrado y nadie se enteraba.
+    // Loggeamos a stderr para que pm2/journald lo capturen.
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(
+      `[audit] failed to record action="${action}" user=${userId ?? "anon"}: ${message}`,
+    );
   }
 }
 
