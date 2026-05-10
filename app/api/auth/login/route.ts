@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { z } from "zod";
 
 import {
   createSession,
@@ -18,19 +19,34 @@ export const runtime = "nodejs";
 
 const LIMIT = { windowMs: 15 * 60 * 1000, max: 8 };
 
+// Validación estricta: usuario corto, password con tope razonable. Sin esto un
+// payload de 10MB puede atragantar bcrypt y bloquear el event loop.
+const LoginSchema = z.object({
+  username: z.string().min(1).max(64),
+  password: z.string().min(1).max(256),
+});
+
 export async function POST(req: Request) {
   rateLimitMaybeSweep();
 
-  let body: { username?: string; password?: string };
+  let raw: unknown;
   try {
-    body = await req.json();
+    raw = await req.json();
   } catch {
     return NextResponse.json({ error: "JSON inválido" }, { status: 400 });
   }
 
-  const username = (body.username ?? "").trim().toLowerCase();
-  const password = body.password ?? "";
-  if (!username || !password) {
+  const parsed = LoginSchema.safeParse(raw);
+  if (!parsed.success) {
+    return NextResponse.json(
+      { error: "Usuario y contraseña son obligatorios" },
+      { status: 400 },
+    );
+  }
+
+  const username = parsed.data.username.trim().toLowerCase();
+  const password = parsed.data.password;
+  if (!username) {
     return NextResponse.json(
       { error: "Usuario y contraseña son obligatorios" },
       { status: 400 },
