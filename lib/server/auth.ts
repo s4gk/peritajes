@@ -16,6 +16,7 @@ export type User = {
   username: string;
   fullName: string;
   email: string | null;
+  licenseId: string | null;
   role: UserRole;
   active: boolean;
   createdAt: string;
@@ -28,6 +29,7 @@ type UserRow = {
   password_hash: string;
   full_name: string;
   email: string | null;
+  license_id: string | null;
   role: string;
   active: boolean;
   created_at: Date | string;
@@ -45,6 +47,7 @@ function rowToUser(row: UserRow): User {
     username: row.username,
     fullName: row.full_name,
     email: row.email,
+    licenseId: row.license_id ?? null,
     role: row.role === "admin" ? "admin" : "perito",
     active: row.active,
     createdAt: tsToISO(row.created_at) ?? "",
@@ -161,6 +164,41 @@ export async function setUserPassword(
   await logAudit(id, "user.password_changed");
 }
 
+export type ProfileUpdate = {
+  fullName?: string;
+  email?: string | null;
+  licenseId?: string | null;
+};
+
+export async function updateUserProfile(
+  id: string,
+  patch: ProfileUpdate,
+): Promise<void> {
+  const sets: string[] = [];
+  const params: unknown[] = [];
+  let i = 1;
+
+  if (patch.fullName !== undefined) {
+    const trimmed = patch.fullName.trim();
+    if (!trimmed) throw new Error("El nombre completo es requerido.");
+    sets.push(`full_name = $${i++}`);
+    params.push(trimmed);
+  }
+  if (patch.email !== undefined) {
+    sets.push(`email = $${i++}`);
+    params.push(patch.email?.trim() || null);
+  }
+  if (patch.licenseId !== undefined) {
+    sets.push(`license_id = $${i++}`);
+    params.push(patch.licenseId?.trim() || null);
+  }
+  if (sets.length === 0) return;
+
+  params.push(id);
+  await query(`UPDATE users SET ${sets.join(", ")} WHERE id = $${i}`, params);
+  await logAudit(id, "user.profile_updated");
+}
+
 export async function deleteUser(id: string): Promise<void> {
   await query("DELETE FROM users WHERE id = $1", [id]);
   await logAudit(null, "user.deleted", id);
@@ -217,15 +255,26 @@ export async function getSessionUser(sessionId: string): Promise<User | null> {
  *  Cookie helpers (Next.js server context)
  * --------------------------------------------------------- */
 
+/**
+ * Por defecto en producción marcamos la cookie como Secure (sólo HTTPS). Si el
+ * deploy corre detrás de un proxy que termina TLS y el browser igual la ve por
+ * HTTPS, esto es lo correcto. Si por alguna razón se necesita correr en HTTP
+ * plano (lo cual NO se debería hacer en prod), poner COOKIE_INSECURE=true.
+ *
+ * En dev (NODE_ENV !== "production") seguimos en false para que el flujo HTTP
+ * local no rompa el login.
+ */
+function shouldMarkCookieSecure(): boolean {
+  if (process.env.COOKIE_INSECURE === "true") return false;
+  if (process.env.COOKIE_SECURE === "true") return true;
+  return process.env.NODE_ENV === "production";
+}
+
 export function setSessionCookie(sessionId: string) {
   cookies().set(SESSION_COOKIE, sessionId, {
     httpOnly: true,
     sameSite: "lax",
-    // Only mark Secure when explicitly enabled (e.g. behind HTTPS / a TLS proxy).
-    // The previous "secure if NODE_ENV=production" check broke logins on plain
-    // HTTP deployments — browsers silently dropped the cookie. Set
-    // COOKIE_SECURE=true in .env.local when fronting with HTTPS.
-    secure: process.env.COOKIE_SECURE === "true",
+    secure: shouldMarkCookieSecure(),
     path: "/",
     maxAge: Math.floor(SESSION_TTL_MS / 1000),
   });
@@ -235,11 +284,7 @@ export function clearSessionCookie() {
   cookies().set(SESSION_COOKIE, "", {
     httpOnly: true,
     sameSite: "lax",
-    // Only mark Secure when explicitly enabled (e.g. behind HTTPS / a TLS proxy).
-    // The previous "secure if NODE_ENV=production" check broke logins on plain
-    // HTTP deployments — browsers silently dropped the cookie. Set
-    // COOKIE_SECURE=true in .env.local when fronting with HTTPS.
-    secure: process.env.COOKIE_SECURE === "true",
+    secure: shouldMarkCookieSecure(),
     path: "/",
     maxAge: 0,
   });
