@@ -10,6 +10,8 @@
  * multi-instance, swap this for Redis/KV with the same public API.
  */
 
+import { randomBytes } from "node:crypto";
+
 const SESSION_TTL_MS = 10 * 60 * 1000; // 10 minutes
 
 export type SignSessionContext = {
@@ -46,19 +48,9 @@ function prune(now: number) {
 }
 
 function makeToken(): string {
-  // 128 bits of entropy in a URL-safe 22-char string
-  const bytes = new Uint8Array(16);
-  // Prefer Web Crypto when available (Next.js node runtime has it globally)
-  if (typeof crypto !== "undefined" && crypto.getRandomValues) {
-    crypto.getRandomValues(bytes);
-  } else {
-    for (let i = 0; i < bytes.length; i++) bytes[i] = Math.floor(Math.random() * 256);
-  }
-  return Buffer.from(bytes)
-    .toString("base64")
-    .replace(/\+/g, "-")
-    .replace(/\//g, "_")
-    .replace(/=+$/, "");
+  // 128 bits de entropía en base64url (22 chars). Usamos crypto.randomBytes
+  // de Node directamente — sin fallback a Math.random(), que sería predecible.
+  return randomBytes(16).toString("base64url");
 }
 
 export function createSession(context: SignSessionContext): SignSession {

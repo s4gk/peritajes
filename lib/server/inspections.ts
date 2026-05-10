@@ -56,6 +56,46 @@ export async function getInspectionServer(
   return r.rows[0] ? rowToStored(r.rows[0]) : null;
 }
 
+/**
+ * Devuelve la inspection solo si el usuario es dueño o admin. Cierra IDOR
+ * en `/api/inspections/[id]` y `/api/pdf` — sin esto, cualquier perito
+ * autenticado podía leer datos de otro perito con sólo conocer el ID.
+ */
+export async function getInspectionForUser(
+  id: string,
+  user: { id: string; role: string },
+): Promise<StoredInspection | null> {
+  if (user.role === "admin") return getInspectionServer(id);
+  const r = await query<InspectionRow>(
+    "SELECT * FROM inspections WHERE id = $1 AND user_id = $2",
+    [id, user.id],
+  );
+  return r.rows[0] ? rowToStored(r.rows[0]) : null;
+}
+
+export type InspectionAccess =
+  | { kind: "ok" }
+  | { kind: "not_found" }
+  | { kind: "forbidden" };
+
+/**
+ * Helper liviano para chequear si el usuario tiene acceso (dueño o admin) sin
+ * traer toda la fila. Útil en `/api/share`, `/api/pdf` etc.
+ */
+export async function checkInspectionAccess(
+  id: string,
+  user: { id: string; role: string },
+): Promise<InspectionAccess> {
+  const r = await query<{ user_id: string | null }>(
+    "SELECT user_id FROM inspections WHERE id = $1",
+    [id],
+  );
+  if (r.rowCount === 0) return { kind: "not_found" };
+  if (user.role === "admin") return { kind: "ok" };
+  if (r.rows[0].user_id === user.id) return { kind: "ok" };
+  return { kind: "forbidden" };
+}
+
 export async function createInspectionServer(
   data: InspectionData,
   userId: string | null,
@@ -117,6 +157,28 @@ export async function updateInspectionServer(
     await logAudit(userId, "inspection.completed", id);
   }
   return rowToStored(r.rows[0]);
+}
+
+/**
+ * Update con ownership check: solo dueño o admin. Cierra el IDOR de PUT
+ * en `/api/inspections/[id]`.
+ */
+export async function updateInspectionForUser(
+  id: string,
+  data: InspectionData,
+  user: { id: string; role: string },
+): Promise<{ inspection: StoredInspection | null; forbidden: boolean }> {
+  if (user.role !== "admin") {
+    const owner = await query<{ user_id: string | null }>(
+      "SELECT user_id FROM inspections WHERE id = $1",
+      [id],
+    );
+    if (owner.rowCount === 0) return { inspection: null, forbidden: false };
+    if (owner.rows[0].user_id !== user.id)
+      return { inspection: null, forbidden: true };
+  }
+  const inspection = await updateInspectionServer(id, data, user.id);
+  return { inspection, forbidden: false };
 }
 
 export async function deleteInspectionServer(
