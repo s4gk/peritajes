@@ -7,7 +7,7 @@ export const runtime = "nodejs";
 type Params = { params: { token: string } };
 
 export async function GET(_request: Request, { params }: Params) {
-  const session = getSession(params.token);
+  const session = await getSession(params.token);
   if (!session) {
     return NextResponse.json({ error: "expired" }, { status: 404 });
   }
@@ -35,7 +35,7 @@ export async function POST(request: Request, { params }: Params) {
     // ~375 KB base64 is plenty for a signature PNG
     return NextResponse.json({ error: "signature too large" }, { status: 413 });
   }
-  const session = submitSignature(params.token, signature);
+  const session = await submitSignature(params.token, signature);
   if (!session) {
     return NextResponse.json({ error: "expired" }, { status: 404 });
   }
