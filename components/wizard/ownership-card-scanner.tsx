@@ -10,7 +10,6 @@ import {
   Loader2,
   RefreshCcw,
   ScanLine,
-  X,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -21,18 +20,28 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { useToast } from "@/components/ui/toast";
+import {
+  recognizeOwnershipCard,
+  warmUpOcr,
+} from "@/lib/client/ocr-ownership-card";
 import { cn } from "@/lib/utils";
 
 /**
  * Botón "Escanear tarjeta de propiedad" + flow de captura.
- * - En vez del native `capture="environment"` (que en algunos Android abría
- *   la cámara en negro o no devolvía la imagen), usamos `getUserMedia` para
- *   mostrar una preview en vivo dentro del dialog y capturamos un frame con
- *   canvas. Mucho más controlable y consistente entre dispositivos.
- * - Fallback siempre disponible: "Subir desde galería" con file input puro
- *   (sin capture), por si la cámara está negada o el dispositivo no la
- *   soporta vía getUserMedia.
+ * Dos vías de input:
+ *  - "Tomar foto" → `<input type="file" capture="environment">` lanza la
+ *    cámara nativa del sistema (mucho más confiable que getUserMedia en móvil).
+ *  - "Desde galería" → `<input type="file">` (sin capture) → picker normal.
+ * Ambas terminan en `handleFile(file)` → `processBlob` → OCR.
  */
 
 export type ExtractedFields = {
@@ -53,6 +62,8 @@ export type ExtractedFields = {
   serviceType?: string;
   cylinderCapacity?: string;
   owner?: string;
+  ownerDocument?: string;
+  propertyCardStatus?: "Original" | "Duplicado";
 };
 
 type Props = {
@@ -67,6 +78,15 @@ type Props = {
   buttonLabel?: string;
   /** Texto compacto para móvil. */
   buttonLabelShort?: string;
+  /** Cara que ESPERA capturar este scanner. Si el OCR detecta la cara
+   *  contraria, mostramos un banner ofreciendo guardar la foto en la cara
+   *  correcta (vía `onWrongSide`). Solo aplica cuando runOcr=true. */
+  expectedSide?: "front" | "back";
+  /** Callback opcional que se dispara cuando el perito decide aceptar la
+   *  sugerencia "esta foto es del otro lado". Recibe el dataURL de la foto
+   *  para guardarla en el slot correcto. Si no se provee, el banner solo
+   *  muestra la advertencia sin botón de acción. */
+  onWrongSide?: (imageDataUrl: string) => void;
 };
 
 const FIELD_LABELS: Record<keyof ExtractedFields, string> = {
@@ -87,19 +107,21 @@ const FIELD_LABELS: Record<keyof ExtractedFields, string> = {
   serviceType: "Servicio",
   cylinderCapacity: "Cilindraje (cc)",
   owner: "Propietario",
+  ownerDocument: "Doc. propietario",
+  propertyCardStatus: "Tipo tarjeta",
 };
 
 const FUEL_LABELS: Record<NonNullable<ExtractedFields["fuel"]>, string> = {
-  gasoline: "Gasolina",
-  diesel: "Diésel",
-  hybrid: "Híbrido",
-  electric: "Eléctrico",
+  gasoline: "GASOLINA",
+  diesel: "DIÉSEL",
+  hybrid: "HÍBRIDO",
+  electric: "ELÉCTRICO",
   gas: "GNV",
 };
 
 const TX_LABELS: Record<NonNullable<ExtractedFields["transmission"]>, string> = {
-  manual: "Manual",
-  automatic: "Automática",
+  manual: "MANUAL",
+  automatic: "AUTOMÁTICA",
   cvt: "CVT",
   dct: "DCT",
 };
@@ -111,6 +133,47 @@ function displayValue(key: keyof ExtractedFields, value: unknown): string {
     return TX_LABELS[value as keyof typeof TX_LABELS] ?? String(value);
   return String(value);
 }
+
+// Campos donde forzamos mayúsculas Y quitamos espacios al editar — códigos
+// alfanuméricos donde el OCR suele equivocar 1 char (8↔B, 0↔O, 5↔S, etc).
+const UPPER_ALPHANUM_FIELDS = new Set<keyof ExtractedFields>([
+  "plate",
+  "vin",
+  "chassisNumber",
+  "engineNumber",
+]);
+
+// Campos de texto libre que renderizamos en mayúsculas (sin quitar espacios)
+// para que coincidan con cómo está impresa la tarjeta y con los selects del
+// formulario, que ahora también están en mayúsculas.
+const UPPER_TEXT_FIELDS = new Set<keyof ExtractedFields>([
+  "make",
+  "model",
+  "color",
+  "bodyType",
+  "vehicleClass",
+  "nationality",
+  "serviceType",
+  "owner",
+  "propertyCardStatus",
+]);
+
+// Campos puramente numéricos. inputMode="numeric" abre teclado numérico en
+// móvil y filtramos no-dígitos en el onChange.
+const NUMERIC_FIELDS = new Set<keyof ExtractedFields>([
+  "licenseNumber",
+  "year",
+  "cylinderCapacity",
+]);
+
+// Hint visible debajo del input para campos con formato esperado conocido. Le
+// ayuda al perito a detectar errores de OCR (p.ej. VIN debería tener 17 chars).
+const FIELD_HINTS: Partial<Record<keyof ExtractedFields, string>> = {
+  vin: "17 caracteres, sin I/O/Q",
+  chassisNumber: "Suele coincidir con el VIN",
+  year: "4 dígitos",
+  plate: "Formato ABC123 o ABC12D",
+};
 
 /**
  * Carga una fuente (Blob/HTMLVideoElement) en un canvas redimensionado al
@@ -146,10 +209,70 @@ async function blobToBitmap(
   });
 }
 
+/**
+ * Aplica una corrección de fondo adaptativa in-place a un buffer grayscale:
+ * para cada pixel, le resta el promedio de luminancia de un entorno cuadrado y
+ * recentra en 128. El radio se escala con el tamaño de la imagen (~3% del lado
+ * menor) para que el blur capture el "fondo" sin tragarse los glyphs.
+ *
+ * Usa integral image (summed-area table) para que el cálculo sea O(N) sin
+ * importar el radio. En una imagen 1500×1000 el costo total es <50ms.
+ */
+function applyAdaptiveBackground(
+  lumas: Uint8ClampedArray,
+  width: number,
+  height: number,
+): void {
+  if (width < 8 || height < 8) return;
+  // Integral image: integral[(y)*(W+1) + (x)] = suma de lumas[0..y-1][0..x-1].
+  // Le agregamos 1 columna/fila de ceros al inicio para evitar el if de borde.
+  const stride = width + 1;
+  const integral = new Uint32Array(stride * (height + 1));
+  for (let y = 0; y < height; y++) {
+    let rowSum = 0;
+    const rowOut = (y + 1) * stride;
+    const rowOutPrev = y * stride;
+    const rowIn = y * width;
+    for (let x = 0; x < width; x++) {
+      rowSum += lumas[rowIn + x];
+      integral[rowOut + (x + 1)] = integral[rowOutPrev + (x + 1)] + rowSum;
+    }
+  }
+  // Radio: ~3% del lado menor, mínimo 8, máximo 60. Demasiado chico → el
+  // background "sigue" los glyphs y se pierde detalle. Demasiado grande → no
+  // corrige iluminación local. 3% es un punto medio probado para tarjetas.
+  const radius = Math.min(60, Math.max(8, Math.round(Math.min(width, height) * 0.03)));
+  for (let y = 0; y < height; y++) {
+    const y0 = Math.max(0, y - radius);
+    const y1 = Math.min(height, y + radius + 1);
+    const rowOut = y * width;
+    const idxY0 = y0 * stride;
+    const idxY1 = y1 * stride;
+    for (let x = 0; x < width; x++) {
+      const x0 = Math.max(0, x - radius);
+      const x1 = Math.min(width, x + radius + 1);
+      const area = (x1 - x0) * (y1 - y0);
+      const sum =
+        integral[idxY1 + x1] -
+        integral[idxY0 + x1] -
+        integral[idxY1 + x0] +
+        integral[idxY0 + x0];
+      const mean = sum / area;
+      // Recentrado: cualquier desviación del fondo local se preserva.
+      const v = lumas[rowOut + x] - mean + 128;
+      lumas[rowOut + x] = v < 0 ? 0 : v > 255 ? 255 : v;
+    }
+  }
+}
+
 async function resizeBlob(
   blob: Blob,
   maxDim = 2000,
-): Promise<{ base64: string; mimeType: string; previewUrl: string }> {
+  ocrMaxDim = 1500,
+): Promise<{
+  previewUrl: string;
+  ocrBlob: Blob;
+}> {
   const source = await blobToBitmap(blob);
   const srcW =
     source instanceof HTMLImageElement
@@ -172,6 +295,26 @@ async function resizeBlob(
   ctx.imageSmoothingEnabled = true;
   ctx.imageSmoothingQuality = "high";
   ctx.drawImage(source, 0, 0, w, h);
+  const compressed = canvas.toDataURL("image/jpeg", 0.92);
+  const match = compressed.match(/^data:(image\/[a-z]+);base64,(.+)$/);
+  if (!match) throw new Error("No se pudo codificar la imagen.");
+
+  // Versión optimizada para Tesseract: más chica (procesa más rápido),
+  // grayscale + contrast stretch para que el OCR no se ahogue interpretando
+  // píxeles con poco contraste. Esta NO se guarda ni se muestra — sólo
+  // viaja al endpoint /api/ocr/ownership-card.
+  const ocrRatio = Math.min(1, ocrMaxDim / Math.max(srcW, srcH));
+  const ow = Math.max(1, Math.round(srcW * ocrRatio));
+  const oh = Math.max(1, Math.round(srcH * ocrRatio));
+  const ocrCanvas = document.createElement("canvas");
+  ocrCanvas.width = ow;
+  ocrCanvas.height = oh;
+  const octx = ocrCanvas.getContext("2d");
+  if (!octx) throw new Error("No se pudo crear el canvas OCR.");
+  octx.imageSmoothingEnabled = true;
+  octx.imageSmoothingQuality = "high";
+  octx.drawImage(source, 0, 0, ow, oh);
+
   // Liberar el bitmap si aplica (createImageBitmap path)
   if ("close" in source && typeof source.close === "function") {
     try {
@@ -180,27 +323,109 @@ async function resizeBlob(
       /* noop */
     }
   }
-  const compressed = canvas.toDataURL("image/jpeg", 0.92);
-  const match = compressed.match(/^data:(image\/[a-z]+);base64,(.+)$/);
-  if (!match) throw new Error("No se pudo codificar la imagen.");
-  return { mimeType: match[1], base64: match[2], previewUrl: compressed };
-}
 
-type CameraState =
-  | { phase: "idle" }
-  | { phase: "starting" }
-  | { phase: "live" }
-  | { phase: "error"; message: string };
+  const img = octx.getImageData(0, 0, ow, oh);
+  const data = img.data;
+  const total = data.length >> 2;
+  const lumas = new Uint8ClampedArray(total);
+  for (let i = 0, j = 0; i < data.length; i += 4, j++) {
+    lumas[j] = Math.round(0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2]);
+  }
+
+  // Normalización adaptativa de iluminación: una tarjeta fotografiada con luz
+  // despareja (sombra en una esquina, brillo en otra) genera glyphs oscuros
+  // sobre fondo oscuro en una zona y casi blancos en otra. El stretch global
+  // por percentiles que sigue NO arregla eso — al contrario, agrava la zona
+  // mal iluminada porque comprime todo al mismo rango.
+  //
+  // Solución: restamos a cada pixel el promedio local de su entorno (background
+  // estimado vía blur grande) y recentramos en 128. El detalle fino (bordes de
+  // letras) sobrevive porque difiere mucho del promedio local; los gradientes
+  // de iluminación se planchan porque el background los sigue. Implementado
+  // con integral image — O(N), <50ms en 1500×1000.
+  applyAdaptiveBackground(lumas, ow, oh);
+
+  // Stretch lineal de contraste usando percentiles 2/98 — descarta sombras y
+  // brillos extremos y reasigna el resto al rango [0,255]. Después del paso
+  // adaptativo de arriba, el stretch trabaja sobre una imagen ya nivelada y
+  // expande el rango dinámico real de los glyphs.
+  const hist = new Array(256).fill(0);
+  for (let i = 0; i < total; i++) hist[lumas[i]]++;
+  const cutLo = Math.floor(total * 0.02);
+  const cutHi = Math.floor(total * 0.98);
+  let lo = 0;
+  let hi = 255;
+  let acc = 0;
+  for (let i = 0; i < 256; i++) {
+    acc += hist[i];
+    if (acc >= cutLo) {
+      lo = i;
+      break;
+    }
+  }
+  acc = 0;
+  for (let i = 0; i < 256; i++) {
+    acc += hist[i];
+    if (acc >= cutHi) {
+      hi = i;
+      break;
+    }
+  }
+  const range = Math.max(1, hi - lo);
+  for (let i = 0, j = 0; i < data.length; i += 4, j++) {
+    const v = Math.max(0, Math.min(255, Math.round(((lumas[j] - lo) * 255) / range)));
+    data[i] = v;
+    data[i + 1] = v;
+    data[i + 2] = v;
+  }
+  octx.putImageData(img, 0, 0);
+
+  // Padding blanco alrededor de la imagen procesada antes de mandarla al OCR.
+  // Tesseract pierde precisión con glyphs pegados al borde — típico cuando el
+  // perito enmarca la tarjeta muy ajustada y los últimos dígitos del número
+  // de licencia o el último carácter del VIN quedan rozando el margen. Una
+  // banda blanca de ~5% del lado menor (mínimo 40px) le da al motor el
+  // "respiro" que necesita para detectar todos los chars. El padding NO afecta
+  // el preview que ve el perito ni la evidencia guardada — solo la imagen que
+  // viaja al recognizer.
+  const pad = Math.max(40, Math.round(Math.min(ow, oh) * 0.05));
+  const paddedCanvas = document.createElement("canvas");
+  paddedCanvas.width = ow + pad * 2;
+  paddedCanvas.height = oh + pad * 2;
+  const pctx = paddedCanvas.getContext("2d");
+  if (!pctx) throw new Error("No se pudo crear el canvas con padding OCR.");
+  pctx.fillStyle = "#ffffff";
+  pctx.fillRect(0, 0, paddedCanvas.width, paddedCanvas.height);
+  pctx.drawImage(ocrCanvas, pad, pad);
+
+  const ocrBlob = await new Promise<Blob>((resolve, reject) =>
+    paddedCanvas.toBlob(
+      (b) => (b ? resolve(b) : reject(new Error("No se pudo codificar la imagen para OCR."))),
+      "image/jpeg",
+      0.9,
+    ),
+  );
+
+  // Match se mantiene por compatibilidad — el data URL todavía se usa para
+  // el preview en el dialog (ya armado arriba como `compressed`).
+  void match;
+
+  return {
+    previewUrl: compressed,
+    ocrBlob,
+  };
+}
 
 export function OwnershipCardScanner({
   onApply,
   runOcr = true,
   buttonLabel = "Escanear tarjeta de propiedad",
   buttonLabelShort = "Escanear tarjeta",
+  expectedSide,
+  onWrongSide,
 }: Props) {
   const fileInputRef = React.useRef<HTMLInputElement>(null);
-  const videoRef = React.useRef<HTMLVideoElement>(null);
-  const streamRef = React.useRef<MediaStream | null>(null);
+  const cameraInputRef = React.useRef<HTMLInputElement>(null);
   // Marca el componente como vivo. Sin esto, una llamada al OCR que termina
   // después de que el perito navegó a otro paso disparaba setState sobre un
   // árbol desmontado (warning de React + posible inconsistencia de UI).
@@ -212,9 +437,18 @@ export function OwnershipCardScanner({
   const [open, setOpen] = React.useState(false);
   const [previewUrl, setPreviewUrl] = React.useState<string | null>(null);
   const [busy, setBusy] = React.useState(false);
+  const [progress, setProgress] = React.useState<{ status: string; pct: number } | null>(null);
   const [fields, setFields] = React.useState<ExtractedFields | null>(null);
+  // Keys que se muestran como editables — se fija cuando llega el resultado del
+  // OCR y NO cambia aunque el perito vacíe un input. Sin esto, escribir y
+  // borrar un campo lo hacía desaparecer de la lista (no podía recuperarlo).
+  const [shownKeys, setShownKeys] = React.useState<(keyof ExtractedFields)[]>([]);
   const [excluded, setExcluded] = React.useState<Set<keyof ExtractedFields>>(new Set());
-  const [cameraState, setCameraState] = React.useState<CameraState>({ phase: "idle" });
+  // Cara detectada por el OCR — frente, reverso o desconocido. Lo usamos para
+  // mostrar un banner de advertencia si no coincide con `expectedSide`.
+  const [detectedSide, setDetectedSide] = React.useState<
+    "front" | "back" | "unknown" | null
+  >(null);
   // Error inline dentro del dialog. Lo mostramos en una card con copy-to-clipboard
   // así el perito puede leerlo (los toasts se descartan demasiado rápido).
   const [errorDetail, setErrorDetail] = React.useState<{
@@ -222,88 +456,14 @@ export function OwnershipCardScanner({
     detail: string;
     status?: number;
   } | null>(null);
-  // Modo "vivo": preview de cámara con getUserMedia. Solo lo intentamos cuando
-  // efectivamente está disponible (HTTPS + soporte). Si no, mostramos directo
-  // la UI de subir foto, que es la que funciona en cualquier dispositivo.
-  const [liveMode, setLiveMode] = React.useState(false);
-
-  const liveCameraAvailable =
-    typeof window !== "undefined" &&
-    !!navigator.mediaDevices?.getUserMedia &&
-    window.isSecureContext;
-
-  function stopStream() {
-    const stream = streamRef.current;
-    if (stream) {
-      for (const track of stream.getTracks()) track.stop();
-      streamRef.current = null;
-    }
-    if (videoRef.current) videoRef.current.srcObject = null;
-  }
-
-  const startCamera = React.useCallback(async () => {
-    if (typeof window === "undefined") return;
-    if (!navigator.mediaDevices?.getUserMedia) {
-      const isSecure = window.isSecureContext;
-      setCameraState({
-        phase: "error",
-        message: isSecure
-          ? "Este navegador no expone la cámara. Usá 'Tomar foto' o 'Subir desde galería'."
-          : "La cámara en vivo solo funciona sobre HTTPS. Usá 'Tomar foto' (abre la cámara del sistema) o 'Subir desde galería'.",
-      });
-      return;
-    }
-    setCameraState({ phase: "starting" });
-    stopStream();
-    try {
-      // Pedimos cámara trasera; si no hay, el browser cae a la disponible.
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          facingMode: { ideal: "environment" },
-          width: { ideal: 1920 },
-          height: { ideal: 1080 },
-        },
-        audio: false,
-      });
-      streamRef.current = stream;
-      const video = videoRef.current;
-      if (video) {
-        video.srcObject = stream;
-        // iOS necesita playsInline + muted antes de play()
-        video.muted = true;
-        video.playsInline = true;
-        try {
-          await video.play();
-        } catch {
-          // Algunos browsers requieren un gesto del usuario. La preview ya
-          // está conectada — el usuario puede presionar capturar igual.
-        }
-      }
-      setCameraState({ phase: "live" });
-    } catch (err) {
-      const name = (err as DOMException)?.name;
-      let message = "No se pudo abrir la cámara.";
-      if (name === "NotAllowedError" || name === "SecurityError") {
-        message =
-          "Permiso de cámara denegado. Activalo en la configuración del navegador o usá 'Subir desde galería'.";
-      } else if (name === "NotFoundError" || name === "OverconstrainedError") {
-        message = "No se encontró una cámara compatible. Usá 'Subir desde galería'.";
-      } else if (name === "NotReadableError") {
-        message =
-          "La cámara está siendo usada por otra app. Cerrá las otras apps que usen cámara y reintentá.";
-      }
-      setCameraState({ phase: "error", message });
-    }
-  }, []);
 
   function reset() {
-    stopStream();
     setPreviewUrl(null);
     setFields(null);
     setExcluded(new Set());
+    setShownKeys([]);
+    setDetectedSide(null);
     setBusy(false);
-    setCameraState({ phase: "idle" });
-    setLiveMode(false);
     setErrorDetail(null);
   }
 
@@ -318,61 +478,14 @@ export function OwnershipCardScanner({
     return () => {
       mountedRef.current = false;
       abortRef.current?.abort();
-      stopStream();
     };
   }, []);
 
-  // Si el usuario activa modo vivo y aún no hemos arrancado la cámara, lo hacemos.
-  React.useEffect(() => {
-    if (!open) return;
-    if (!liveMode) return;
-    if (previewUrl) return;
-    if (cameraState.phase !== "idle") return;
-    void startCamera();
-  }, [open, liveMode, previewUrl, cameraState.phase, startCamera]);
-
   function openScanner() {
     setOpen(true);
-  }
-
-  async function captureFromVideo() {
-    const video = videoRef.current;
-    if (!video || video.readyState < 2) {
-      toast.show({
-        title: "La cámara aún no está lista",
-        description: "Esperá un segundo y volvé a intentar.",
-        variant: "warning",
-      });
-      return;
-    }
-    const w = video.videoWidth;
-    const h = video.videoHeight;
-    if (w === 0 || h === 0) {
-      toast.show({
-        title: "No se pudo leer la cámara",
-        description: "Probá cerrar y reabrir el escaneo.",
-        variant: "warning",
-      });
-      return;
-    }
-    const canvas = document.createElement("canvas");
-    canvas.width = w;
-    canvas.height = h;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    ctx.drawImage(video, 0, 0, w, h);
-    const blob: Blob | null = await new Promise((resolve) =>
-      canvas.toBlob((b) => resolve(b), "image/jpeg", 0.92),
-    );
-    if (!blob) {
-      toast.show({
-        title: "No se pudo capturar la imagen",
-        variant: "danger",
-      });
-      return;
-    }
-    stopStream();
-    await processBlob(blob);
+    // Pre-cargá Tesseract en background mientras el perito elige la foto: así
+    // cuando dispare el recognize, el wasm y el lang pack ya están listos.
+    if (runOcr) warmUpOcr();
   }
 
   async function handleFile(file: File) {
@@ -380,7 +493,7 @@ export function OwnershipCardScanner({
   }
 
   async function processBlob(input: Blob) {
-    // Cancelamos un fetch previo si el usuario reintentó rápido.
+    // Cancelamos un OCR previo si el usuario reintentó rápido.
     abortRef.current?.abort();
     const controller = new AbortController();
     abortRef.current = controller;
@@ -388,58 +501,55 @@ export function OwnershipCardScanner({
     setBusy(true);
     setFields(null);
     setExcluded(new Set());
+    setShownKeys([]);
+    setDetectedSide(null);
     setErrorDetail(null);
+    setProgress({ status: "Preparando imagen…", pct: 0 });
     try {
-      const { base64, mimeType, previewUrl } = await resizeBlob(input);
+      const { previewUrl, ocrBlob } = await resizeBlob(input);
       if (!mountedRef.current || controller.signal.aborted) return;
       setPreviewUrl(previewUrl);
       if (!runOcr) {
-        // Modo "solo captura" (reverso): no llamamos al endpoint, dejamos los
+        // Modo "solo captura" (reverso): no corremos OCR, dejamos los
         // campos vacíos y mostramos preview lista para Aplicar.
         setFields({});
         return;
       }
-      const res = await fetch("/api/ocr/ownership-card", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ imageDataUrl: `data:${mimeType};base64,${base64}` }),
-        signal: controller.signal,
-      });
-      if (!mountedRef.current || controller.signal.aborted) return;
-      if (!res.ok) {
-        const raw = await res.text().catch(() => "");
-        if (!mountedRef.current || controller.signal.aborted) return;
-        let parsed: { error?: string; detail?: string } | null = null;
-        try {
-          parsed = raw ? (JSON.parse(raw) as { error?: string; detail?: string }) : null;
-        } catch {
-          parsed = null;
-        }
-        const title =
-          res.status === 401
-            ? "Sesión expirada"
-            : res.status === 429
-              ? "Demasiados escaneos"
-              : res.status === 413
-                ? "Imagen muy pesada"
-                : res.status === 400
-                  ? "Imagen inválida"
-                  : "No se pudo leer la tarjeta";
-        const detailText =
-          parsed?.detail ??
-          parsed?.error ??
-          (raw ? raw.slice(0, 500) : `HTTP ${res.status} ${res.statusText}`);
-        setErrorDetail({
-          title,
-          detail: `${detailText}\n\n(HTTP ${res.status})`,
-          status: res.status,
+      setProgress({ status: "Leyendo la tarjeta…", pct: 0.05 });
+      const {
+        fields: detected,
+        side: detectedSideResult,
+      } = await recognizeOwnershipCard(ocrBlob, {
+          signal: controller.signal,
+          onProgress: ({ status, progress }) => {
+            if (!mountedRef.current || controller.signal.aborted) return;
+            setProgress({
+              status:
+                status === "recognizing text"
+                  ? "Leyendo la tarjeta…"
+                  : status === "loading language traineddata"
+                    ? "Descargando reconocedor (sólo la primera vez)…"
+                    : status === "initializing api"
+                      ? "Inicializando OCR…"
+                      : "Procesando…",
+              pct: Math.max(0.05, Math.min(0.99, progress)),
+            });
+          },
         });
-        return;
-      }
-      const data = (await res.json()) as { fields: ExtractedFields };
       if (!mountedRef.current || controller.signal.aborted) return;
-      setFields(data.fields);
-      const count = Object.keys(data.fields).length;
+      setFields(detected);
+      setDetectedSide(detectedSideResult);
+      const initialKeys = (Object.keys(detected) as (keyof ExtractedFields)[]).filter(
+        (k) => {
+          // El parser nuevo (VehicleFormFields) es un subset estructural de
+          // ExtractedFields, así que algunos keys del Set no existen en runtime
+          // — el `!= null` los descarta naturalmente.
+          const v = (detected as Record<string, unknown>)[k];
+          return v != null && v !== "";
+        },
+      );
+      setShownKeys(initialKeys);
+      const count = initialKeys.length;
       if (count === 0) {
         setErrorDetail({
           title: "No detecté datos en la imagen",
@@ -458,20 +568,28 @@ export function OwnershipCardScanner({
         detail: stack ? `${message}\n\n${stack}` : message,
       });
     } finally {
-      if (mountedRef.current) setBusy(false);
+      if (mountedRef.current) {
+        setBusy(false);
+        setProgress(null);
+      }
     }
+  }
+
+  function cancelProcessing() {
+    abortRef.current?.abort();
+    setBusy(false);
+    setProgress(null);
+    setPreviewUrl(null);
+    setFields(null);
   }
 
   function retake() {
     setPreviewUrl(null);
     setFields(null);
     setExcluded(new Set());
-    setCameraState({ phase: "idle" });
-    if (liveMode && liveCameraAvailable) {
-      void startCamera();
-    } else {
-      setLiveMode(false);
-    }
+    setShownKeys([]);
+    setDetectedSide(null);
+    setErrorDetail(null);
   }
 
   function toggleExclude(key: keyof ExtractedFields) {
@@ -481,6 +599,40 @@ export function OwnershipCardScanner({
       else next.add(key);
       return next;
     });
+  }
+
+  function updateField<K extends keyof ExtractedFields>(
+    key: K,
+    value: ExtractedFields[K] | undefined,
+  ) {
+    setFields((prev) => {
+      if (!prev) return prev;
+      const next = { ...prev };
+      if (value == null || value === "") {
+        // Mantenemos la key en `shownKeys` pero seteamos undefined — así el
+        // input sigue visible y vacío, y al aplicar simplemente no se manda.
+        next[key] = undefined as ExtractedFields[K];
+      } else {
+        next[key] = value;
+      }
+      return next;
+    });
+  }
+
+  function sanitizeInputValue(
+    key: keyof ExtractedFields,
+    raw: string,
+  ): string {
+    let v = raw;
+    if (UPPER_ALPHANUM_FIELDS.has(key)) {
+      v = v.toUpperCase().replace(/\s+/g, "");
+    } else if (UPPER_TEXT_FIELDS.has(key)) {
+      v = v.toUpperCase();
+    }
+    if (NUMERIC_FIELDS.has(key)) {
+      v = v.replace(/[^0-9]/g, "");
+    }
+    return v;
   }
 
   function apply() {
@@ -509,11 +661,17 @@ export function OwnershipCardScanner({
     close();
   }
 
-  const detectedKeys = fields
-    ? (Object.keys(fields) as (keyof ExtractedFields)[]).filter(
-        (k) => fields[k] != null && fields[k] !== "",
-      )
+  // Keys que se renderizan en el panel — usamos `shownKeys` (capturado cuando
+  // llegó el resultado del OCR) para que vaciar un input no haga desaparecer
+  // la fila. Para detectar "no se extrajo nada" usamos los valores actuales.
+  const renderKeys = shownKeys;
+  const nonEmptyKeys = fields
+    ? renderKeys.filter((k) => {
+        const v = fields[k];
+        return v != null && v !== "" && !excluded.has(k);
+      })
     : [];
+  const hasDetections = renderKeys.length > 0;
 
   const showCamera = !previewUrl && !fields && !busy;
 
@@ -528,8 +686,26 @@ export function OwnershipCardScanner({
           const file = e.target.files?.[0];
           e.target.value = "";
           if (file) {
-            stopStream();
             setOpen(true);
+            if (runOcr) warmUpOcr();
+            void handleFile(file);
+          }
+        }}
+      />
+      {/* Segundo input con capture=environment — en móvil dispara la cámara
+          trasera del sistema en vez de abrir el picker de galería. */}
+      <input
+        ref={cameraInputRef}
+        type="file"
+        accept="image/*"
+        capture="environment"
+        className="sr-only"
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          e.target.value = "";
+          if (file) {
+            setOpen(true);
+            if (runOcr) warmUpOcr();
             void handleFile(file);
           }
         }}
@@ -547,124 +723,56 @@ export function OwnershipCardScanner({
       </Button>
 
       <Dialog open={open} onOpenChange={(v) => (v ? setOpen(true) : close())}>
-        <DialogContent className="max-w-lg">
-          <DialogHeader>
+        {/* Layout flex con header/footer pegados y middle scrolleable. Sin
+            esto, cuando el OCR detecta 10+ campos editables el contenido se
+            desbordaba debajo del viewport y no se llegaba a los botones de
+            "Aplicar"/"Cancelar". Con max-h:92dvh el dialog respeta el alto
+            visible (incluye safe-area en móvil), y solo el área central
+            scrollea. */}
+        <DialogContent className="flex max-h-[92dvh] max-w-lg flex-col gap-3 p-4 sm:p-6">
+          <DialogHeader className="shrink-0">
             <DialogTitle className="flex items-center gap-2">
               <Camera className="h-5 w-5 text-primary" />
               {previewUrl || fields || busy ? "Tarjeta escaneada" : "Escanear tarjeta"}
             </DialogTitle>
             <DialogDescription>
               {showCamera
-                ? liveMode
-                  ? "Encuadrá la tarjeta dentro del recuadro y presioná Capturar."
-                  : "Subí una foto de la tarjeta de propiedad y la IA extrae los datos."
+                ? "Tomá una foto con la cámara o subí una desde galería — el OCR extrae los datos en tu mismo dispositivo."
                 : "Revisá los datos detectados antes de aplicarlos al formulario."}
             </DialogDescription>
           </DialogHeader>
 
-          <div className="space-y-3">
-            {showCamera && !liveMode && (
+          {/* Cuerpo scrolleable. -mx + px compensa para que la scrollbar viva
+              al borde del dialog sin recortar el contenido. pb-1 evita que el
+              focus ring del último input se corte arriba del footer. */}
+          <div className="-mx-1 flex-1 space-y-3 overflow-y-auto px-1 pb-1">
+            {showCamera && (
               <div className="space-y-3">
                 <div className="rounded-md border border-dashed bg-muted/30 p-5 text-center">
-                  <ImageIcon className="mx-auto mb-2 h-8 w-8 text-muted-foreground" />
-                  <p className="text-sm font-medium">Subí una foto de la tarjeta</p>
+                  <ScanLine className="mx-auto mb-2 h-8 w-8 text-muted-foreground" />
+                  <p className="text-sm font-medium">Escaneá la tarjeta</p>
                   <p className="mt-1 text-xs leading-snug text-muted-foreground">
-                    Tomá la foto con la app de cámara de tu celular y subila acá.
-                    Funciona mejor con buena luz, sin reflejos y la tarjeta lo más
-                    cuadrada posible.
+                    Funciona mejor con buena luz, sin reflejos y la tarjeta lo
+                    más cuadrada posible.
                   </p>
                 </div>
-                <Button
-                  type="button"
-                  onClick={() => fileInputRef.current?.click()}
-                  className="w-full"
-                  size="lg"
-                >
-                  <ImageIcon className="mr-1.5 h-4 w-4" /> Subir foto
-                </Button>
-                {liveCameraAvailable && (
-                  <button
-                    type="button"
-                    onClick={() => setLiveMode(true)}
-                    className="w-full text-center text-xs text-muted-foreground underline-offset-2 hover:underline"
-                  >
-                    o usá la cámara en vivo dentro del navegador
-                  </button>
-                )}
-              </div>
-            )}
-
-            {showCamera && liveMode && (
-              <div className="space-y-3">
-                <div className="relative aspect-[4/3] overflow-hidden rounded-md border bg-black">
-                  <video
-                    ref={videoRef}
-                    autoPlay
-                    playsInline
-                    muted
-                    className={cn(
-                      "h-full w-full object-cover transition-opacity",
-                      cameraState.phase === "live" ? "opacity-100" : "opacity-0",
-                    )}
-                  />
-                  {cameraState.phase === "starting" && (
-                    <div className="absolute inset-0 flex items-center justify-center text-sm text-white/80">
-                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                      Iniciando cámara…
-                    </div>
-                  )}
-                  {cameraState.phase === "error" && (
-                    <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 p-4 text-center text-sm text-white/90">
-                      <X className="h-6 w-6 text-warning" />
-                      <p className="leading-snug">{cameraState.message}</p>
-                      <div className="mt-1 flex flex-wrap justify-center gap-2">
-                        <Button
-                          type="button"
-                          variant="secondary"
-                          size="sm"
-                          onClick={() => void startCamera()}
-                        >
-                          <RefreshCcw className="mr-1.5 h-3.5 w-3.5" /> Reintentar
-                        </Button>
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          onClick={() => {
-                            stopStream();
-                            setLiveMode(false);
-                            setCameraState({ phase: "idle" });
-                          }}
-                        >
-                          Volver a subir foto
-                        </Button>
-                      </div>
-                    </div>
-                  )}
-                  {cameraState.phase === "live" && (
-                    <div className="pointer-events-none absolute inset-4 rounded-md border-2 border-white/70 shadow-[0_0_0_9999px_rgba(0,0,0,0.25)]" />
-                  )}
-                </div>
-                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                <div className="grid grid-cols-2 gap-2">
                   <Button
                     type="button"
-                    onClick={captureFromVideo}
-                    disabled={cameraState.phase !== "live"}
+                    onClick={() => cameraInputRef.current?.click()}
+                    size="lg"
                     className="w-full"
                   >
-                    <Camera className="mr-1.5 h-4 w-4" /> Capturar
+                    <Camera className="mr-1.5 h-4 w-4" /> Tomar foto
                   </Button>
                   <Button
                     type="button"
+                    onClick={() => fileInputRef.current?.click()}
                     variant="outline"
-                    onClick={() => {
-                      stopStream();
-                      setLiveMode(false);
-                      setCameraState({ phase: "idle" });
-                    }}
+                    size="lg"
                     className="w-full"
                   >
-                    Cancelar cámara en vivo
+                    <ImageIcon className="mr-1.5 h-4 w-4" /> Desde galería
                   </Button>
                 </div>
               </div>
@@ -679,6 +787,59 @@ export function OwnershipCardScanner({
                 />
               </div>
             )}
+
+            {/* Banner de cara equivocada: si esperábamos frente y el OCR
+                detectó reverso (o viceversa), avisamos. Si hay onWrongSide,
+                ofrecemos un botón para guardar la foto directo en el slot
+                correcto, sin obligar al perito a re-tomar la foto. */}
+            {!busy &&
+              previewUrl &&
+              expectedSide &&
+              detectedSide &&
+              detectedSide !== "unknown" &&
+              detectedSide !== expectedSide && (
+                <div className="rounded-md border border-warning/40 bg-warning/10 p-3 text-sm">
+                  <div className="mb-1 flex items-start gap-2 font-medium text-warning">
+                    <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                    <span>
+                      Esta foto parece ser el{" "}
+                      {detectedSide === "back" ? "REVERSO" : "FRENTE"} de la
+                      tarjeta
+                    </span>
+                  </div>
+                  <p className="ml-6 text-xs leading-snug text-warning/90">
+                    {expectedSide === "front"
+                      ? "Este botón es para el FRENTE (extrae los datos por OCR)."
+                      : "Este botón es para el REVERSO (solo evidencia, sin OCR)."}{" "}
+                    {onWrongSide
+                      ? "Podés guardarla en el slot correcto con un click."
+                      : "Cancelá y usá el otro botón."}
+                  </p>
+                  {onWrongSide && (
+                    <div className="mt-2 ml-6">
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="secondary"
+                        onClick={() => {
+                          onWrongSide(previewUrl);
+                          toast.show({
+                            title:
+                              detectedSide === "back"
+                                ? "Guardado como reverso"
+                                : "Guardado como frente",
+                            variant: "success",
+                          });
+                          close();
+                        }}
+                      >
+                        Guardar como{" "}
+                        {detectedSide === "back" ? "reverso" : "frente"}
+                      </Button>
+                    </div>
+                  )}
+                </div>
+              )}
 
             {errorDetail && !busy && (
               <ErrorPanel
@@ -717,9 +878,34 @@ export function OwnershipCardScanner({
             )}
 
             {busy ? (
-              <div className="flex items-center justify-center gap-2 rounded-md border bg-muted/40 p-4 text-sm text-muted-foreground">
-                <Loader2 className="h-4 w-4 animate-spin" />
-                {runOcr ? "Leyendo la tarjeta..." : "Procesando imagen..."}
+              <div className="space-y-2 rounded-md border bg-muted/40 p-4">
+                <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <Loader2 className="h-4 w-4 shrink-0 animate-spin" />
+                  <span className="flex-1 truncate">
+                    {progress?.status ??
+                      (runOcr ? "Leyendo la tarjeta..." : "Procesando imagen...")}
+                  </span>
+                  {progress ? (
+                    <span className="tabular-nums text-xs font-medium">
+                      {Math.round(progress.pct * 100)}%
+                    </span>
+                  ) : null}
+                </div>
+                {progress ? (
+                  <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
+                    <div
+                      className="h-full bg-primary transition-[width] duration-200"
+                      style={{ width: `${Math.round(progress.pct * 100)}%` }}
+                    />
+                  </div>
+                ) : null}
+                <button
+                  type="button"
+                  onClick={cancelProcessing}
+                  className="w-full text-center text-xs text-muted-foreground underline-offset-2 hover:underline"
+                >
+                  Cancelar
+                </button>
               </div>
             ) : fields && !errorDetail ? (
               !runOcr ? (
@@ -734,7 +920,7 @@ export function OwnershipCardScanner({
                     Esta imagen cuenta como evidencia (1 de las fotos requeridas).
                   </p>
                 </div>
-              ) : detectedKeys.length === 0 ? (
+              ) : !hasDetections ? (
                 // OCR corrió pero no detectó nada. En vez de bloquear, ofrecemos
                 // continuar a mano — la foto igual sirve como evidencia.
                 <div className="rounded-md border border-warning/40 bg-warning/10 p-3 text-sm text-warning">
@@ -749,38 +935,53 @@ export function OwnershipCardScanner({
                 </div>
               ) : (
                 <div className="rounded-md border bg-card">
-                  <div className="border-b px-3 py-2 text-xs uppercase tracking-wider text-muted-foreground">
-                    {detectedKeys.length} campo{detectedKeys.length === 1 ? "" : "s"} detectado
-                    {detectedKeys.length === 1 ? "" : "s"}
+                  <div className="border-b px-3 py-2 text-[11px] leading-snug text-muted-foreground">
+                    <div className="font-medium uppercase tracking-wider">
+                      {renderKeys.length} campo{renderKeys.length === 1 ? "" : "s"} detectado
+                      {renderKeys.length === 1 ? "" : "s"}
+                    </div>
+                    <div className="mt-0.5 normal-case tracking-normal">
+                      Revisá y corregí lo que el OCR haya leído mal antes de aplicar.
+                    </div>
                   </div>
                   <ul className="divide-y">
-                    {detectedKeys.map((k) => {
-                      const value = displayValue(k, fields[k]);
+                    {renderKeys.map((k) => {
                       const isExcluded = excluded.has(k);
                       return (
-                        <li key={k}>
-                          <button
-                            type="button"
-                            onClick={() => toggleExclude(k)}
-                            className={cn(
-                              "flex w-full items-center justify-between gap-3 px-3 py-2 text-left transition-colors hover:bg-muted/50",
-                              isExcluded && "opacity-50",
-                            )}
-                          >
-                            <div className="min-w-0 flex-1">
-                              <div className="text-[11px] uppercase tracking-wide text-muted-foreground">
-                                {FIELD_LABELS[k]}
-                              </div>
-                              <div className="truncate text-sm font-medium">{value}</div>
+                        <li
+                          key={k}
+                          className={cn(
+                            "px-3 py-2 transition-colors",
+                            isExcluded && "opacity-50",
+                          )}
+                        >
+                          <div className="mb-1 flex items-center justify-between gap-2">
+                            <label
+                              htmlFor={`ocr-field-${k}`}
+                              className="text-[11px] uppercase tracking-wide text-muted-foreground"
+                            >
+                              {FIELD_LABELS[k]}
+                            </label>
+                            <button
+                              type="button"
+                              onClick={() => toggleExclude(k)}
+                              className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground underline-offset-2 hover:underline"
+                            >
+                              {isExcluded ? "Incluir" : "Omitir"}
+                            </button>
+                          </div>
+                          <FieldEditor
+                            fieldKey={k}
+                            value={fields[k]}
+                            disabled={isExcluded}
+                            onChange={(v) => updateField(k, v)}
+                            sanitize={sanitizeInputValue}
+                          />
+                          {FIELD_HINTS[k] && !isExcluded && (
+                            <div className="mt-1 text-[10px] leading-snug text-muted-foreground">
+                              {FIELD_HINTS[k]}
                             </div>
-                            {!isExcluded ? (
-                              <CheckCircle2 className="h-4 w-4 shrink-0 text-success" />
-                            ) : (
-                              <span className="text-[10px] font-semibold uppercase text-muted-foreground">
-                                Omitir
-                              </span>
-                            )}
-                          </button>
+                          )}
                         </li>
                       );
                     })}
@@ -788,9 +989,13 @@ export function OwnershipCardScanner({
                 </div>
               )
             ) : null}
+
           </div>
 
-          <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+          {/* Footer fijo: no scrollea con el cuerpo. shrink-0 evita que se
+              colapse cuando el cuerpo es muy alto. border-t + pt-3 separa
+              visualmente del contenido scrolleado de arriba. */}
+          <div className="flex shrink-0 flex-col-reverse gap-2 border-t pt-3 sm:flex-row sm:justify-end">
             <Button type="button" variant="ghost" onClick={close}>
               Cancelar
             </Button>
@@ -806,7 +1011,7 @@ export function OwnershipCardScanner({
             >
               {!runOcr
                 ? "Guardar reverso"
-                : detectedKeys.length === 0
+                : nonEmptyKeys.length === 0
                   ? "Guardar foto y completar a mano"
                   : "Aplicar datos al formulario"}
             </Button>
@@ -814,6 +1019,120 @@ export function OwnershipCardScanner({
         </DialogContent>
       </Dialog>
     </>
+  );
+}
+
+function FieldEditor({
+  fieldKey,
+  value,
+  disabled,
+  onChange,
+  sanitize,
+}: {
+  fieldKey: keyof ExtractedFields;
+  value: ExtractedFields[keyof ExtractedFields];
+  disabled?: boolean;
+  onChange: (next: ExtractedFields[keyof ExtractedFields] | undefined) => void;
+  sanitize: (key: keyof ExtractedFields, raw: string) => string;
+}) {
+  if (fieldKey === "fuel") {
+    return (
+      <Select
+        value={(value as string | undefined) ?? ""}
+        onValueChange={(v) =>
+          onChange((v as NonNullable<ExtractedFields["fuel"]>) || undefined)
+        }
+        disabled={disabled}
+      >
+        <SelectTrigger className="h-9 text-sm">
+          <SelectValue placeholder="Seleccionar" />
+        </SelectTrigger>
+        <SelectContent>
+          {(Object.entries(FUEL_LABELS) as [
+            NonNullable<ExtractedFields["fuel"]>,
+            string,
+          ][]).map(([k, label]) => (
+            <SelectItem key={k} value={k}>
+              {label}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    );
+  }
+  if (fieldKey === "transmission") {
+    return (
+      <Select
+        value={(value as string | undefined) ?? ""}
+        onValueChange={(v) =>
+          onChange(
+            (v as NonNullable<ExtractedFields["transmission"]>) || undefined,
+          )
+        }
+        disabled={disabled}
+      >
+        <SelectTrigger className="h-9 text-sm">
+          <SelectValue placeholder="Seleccionar" />
+        </SelectTrigger>
+        <SelectContent>
+          {(Object.entries(TX_LABELS) as [
+            NonNullable<ExtractedFields["transmission"]>,
+            string,
+          ][]).map(([k, label]) => (
+            <SelectItem key={k} value={k}>
+              {label}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    );
+  }
+  if (fieldKey === "propertyCardStatus") {
+    return (
+      <Select
+        value={(value as string | undefined) ?? ""}
+        onValueChange={(v) =>
+          onChange(
+            (v as NonNullable<ExtractedFields["propertyCardStatus"]>) ||
+              undefined,
+          )
+        }
+        disabled={disabled}
+      >
+        <SelectTrigger className="h-9 text-sm">
+          <SelectValue placeholder="Seleccionar" />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="Original">ORIGINAL</SelectItem>
+          <SelectItem value="Duplicado">DUPLICADO</SelectItem>
+        </SelectContent>
+      </Select>
+    );
+  }
+  const stringValue = value == null ? "" : String(value);
+  const isNumeric = NUMERIC_FIELDS.has(fieldKey);
+  const isAlphanumCode = UPPER_ALPHANUM_FIELDS.has(fieldKey);
+  const isUpperText = UPPER_TEXT_FIELDS.has(fieldKey);
+  const isUpper = isAlphanumCode || isUpperText;
+  return (
+    <Input
+      id={`ocr-field-${fieldKey}`}
+      value={stringValue}
+      disabled={disabled}
+      inputMode={isNumeric ? "numeric" : undefined}
+      autoCapitalize={isUpper ? "characters" : undefined}
+      autoCorrect="off"
+      spellCheck={false}
+      className={cn(
+        "h-9 text-sm",
+        isAlphanumCode && "font-mono tracking-wide uppercase",
+        isUpperText && "uppercase",
+      )}
+      onChange={(e) => {
+        const cleaned = sanitize(fieldKey, e.target.value);
+        onChange((cleaned || undefined) as ExtractedFields[keyof ExtractedFields]);
+      }}
+    />
   );
 }
 

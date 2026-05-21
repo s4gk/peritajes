@@ -4,12 +4,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { createWorker, type Worker } from "tesseract.js";
+import { createWorker, PSM, type Worker } from "tesseract.js";
 
 import {
   type ExtractedOwnershipCard,
   parseOwnershipCardText,
-} from "./ownership-card-parser";
+} from "@/lib/ownership-card-parser";
 
 /**
  * OCR de la tarjeta de propiedad colombiana usando Tesseract (sin IA externa).
@@ -42,10 +42,23 @@ function getWorker(): Promise<Worker> {
     } catch {
       /* el dir ya existe o no podemos crearlo — tesseract caerá a su default */
     }
-    workerPromise = createWorker("spa", 1, {
-      langPath: LANG_PATH,
-      cachePath,
-    }).catch((err) => {
+    workerPromise = (async () => {
+      const w = await createWorker("spa", 1, {
+        langPath: LANG_PATH,
+        cachePath,
+      });
+      // PSM 6 = un único bloque uniforme de texto. La tarjeta RUNT no es prosa,
+      // es una grilla de etiquetas → valor; con el modo "auto" (PSM 3 default)
+      // Tesseract se mata buscando estructura de página y tarda 3-5x más.
+      // preserve_interword_spaces=1 evita que pegue "MARCATOYOTA" cuando el
+      // espacio en blanco es estrecho, que es justo lo que el parser por
+      // etiquetas necesita para encontrar los límites entre campos.
+      await w.setParameters({
+        tessedit_pageseg_mode: PSM.SINGLE_BLOCK,
+        preserve_interword_spaces: "1",
+      });
+      return w;
+    })().catch((err) => {
       // Si la inicialización falla, no cacheamos la promesa rota.
       workerPromise = null;
       throw err;
@@ -54,12 +67,33 @@ function getWorker(): Promise<Worker> {
   return workerPromise;
 }
 
+// Si Tesseract se cuelga (raro pero pasa con imágenes degeneradas), matamos
+// el worker y reseteamos el singleton para que el siguiente request arranque
+// uno limpio. Mejor 30s perdidos que un worker zombi que bloquea todo el OCR.
+const OCR_TIMEOUT_MS = 30_000;
+
 export async function extractOwnershipCard(opts: {
   base64: string;
   mimeType: string;
 }): Promise<ExtractedOwnershipCard> {
   const worker = await getWorker();
   const buffer = Buffer.from(opts.base64, "base64");
-  const { data } = await worker.recognize(buffer);
-  return parseOwnershipCardText(data.text);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const result = await Promise.race<{ data: { text: string } }>([
+      worker.recognize(buffer) as Promise<{ data: { text: string } }>,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => {
+          workerPromise = null;
+          worker.terminate().catch(() => {
+            /* el worker quedó en un estado raro — lo soltamos */
+          });
+          reject(new Error("OCR tardó demasiado. Probá con otra foto."));
+        }, OCR_TIMEOUT_MS);
+      }),
+    ]);
+    return parseOwnershipCardText(result.data.text);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
