@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Sin conexión — Peritajes del Llano</title>
+<style>
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0;height:100%}
+  body{
+    font-family: Inter, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    background: #f1f5f9;
+    color: #0f172a;
+    display:flex;align-items:center;justify-content:center;
+    padding:24px;
+  }
+  .card{
+    max-width: 440px;
+    background: #fff;
+    border: 1px solid #e2e8f0;
+    border-radius: 16px;
+    padding: 32px 28px;
+    text-align: center;
+    box-shadow: 0 1px 2px rgba(15,23,42,.04);
+  }
+  .icon{font-size:42px;line-height:1;margin-bottom:12px}
+  h1{margin:0 0 8px;font-size:22px;letter-spacing:-0.2px}
+  p{margin:0 0 6px;color:#475569;font-size:14.5px;line-height:1.5}
+  .muted{color:#94a3b8;font-size:12.5px;margin-top:14px}
+  button{
+    margin-top:20px;
+    background:#0f172a;color:#fff;border:none;
+    padding:11px 22px;border-radius:8px;
+    font-size:14px;font-weight:600;cursor:pointer;
+  }
+  button:hover{background:#1e293b}
+</style>
+</head>
+<body>
+  <div class="card">
+    <div class="icon">📡</div>
+    <h1>Sin conexión</h1>
+    <p>Esta página todavía no está cacheada. Si acabás de instalar la app, abrí primero las páginas que usás con red.</p>
+    <p>Las que ya visitaste siguen funcionando offline — los datos del peritaje se guardan local y se sincronizan cuando vuelva la red.</p>
+    <button onclick="location.reload()">Reintentar</button>
+    <div class="muted">Peritajes del Llano · peritaje vehicular</div>
+  </div>
+</body>
+</html>

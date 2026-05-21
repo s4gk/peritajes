@@ -1,0 +1,86 @@
+{
+  "id": "/?source=pwa",
+  "name": "Peritajes del Llano",
+  "short_name": "Peritajes Llano",
+  "description": "Sistema profesional de peritajes y avalúos vehiculares — inspección guiada offline-first, OCR de tarjeta de propiedad, firmas digitales y generación de PDF.",
+  "start_url": "/dashboard?source=pwa",
+  "scope": "/",
+  "display": "standalone",
+  "display_override": ["window-controls-overlay", "standalone", "minimal-ui"],
+  "orientation": "any",
+  "background_color": "#0f172a",
+  "theme_color": "#0f172a",
+  "lang": "es-CO",
+  "dir": "ltr",
+  "categories": ["business", "productivity", "utilities"],
+  "icons": [
+    {
+      "src": "/icons/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ],
+  "screenshots": [
+    {
+      "src": "/screenshots/mobile-dashboard.png",
+      "sizes": "412x892",
+      "type": "image/png",
+      "form_factor": "narrow",
+      "label": "Dashboard con resumen de peritajes recientes"
+    },
+    {
+      "src": "/screenshots/mobile-wizard.png",
+      "sizes": "412x892",
+      "type": "image/png",
+      "form_factor": "narrow",
+      "label": "Wizard de peritaje guiado por secciones"
+    },
+    {
+      "src": "/screenshots/wide-panel.png",
+      "sizes": "1280x720",
+      "type": "image/png",
+      "form_factor": "wide",
+      "label": "Panel admin con métricas y hallazgos frecuentes"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Nuevo peritaje",
+      "short_name": "Nuevo",
+      "url": "/intake",
+      "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png" }]
+    },
+    {
+      "name": "Agenda",
+      "short_name": "Agenda",
+      "url": "/agenda",
+      "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png" }]
+    },
+    {
+      "name": "Peritajes",
+      "short_name": "Listado",
+      "url": "/peritajes",
+      "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png" }]
+    }
+  ],
+  "prefer_related_applications": false
+}

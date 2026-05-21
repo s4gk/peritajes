@@ -154,6 +154,42 @@
   html {
     scroll-behavior: smooth;
   }
+
+  /* iOS Safari renderiza inputs date/time/datetime-local mucho más altos que
+   * los inputs de texto cuando hay un valor (la barra del native picker se
+   * cuela). Forzamos appearance:none + line-height para que respeten la
+   * altura definida por las clases h-10/h-11 de Tailwind. También evitamos
+   * el auto-zoom de iOS al enfocar fijando font-size mínimo de 16px en mobile
+   * pero solo dentro del input (no rompe el layout del resto). */
+  input[type="date"],
+  input[type="time"],
+  input[type="datetime-local"],
+  input[type="month"],
+  input[type="week"] {
+    -webkit-appearance: none;
+    appearance: none;
+    min-height: 0;
+    line-height: 1.25;
+  }
+  @media (max-width: 640px) {
+    input[type="date"],
+    input[type="time"],
+    input[type="datetime-local"] {
+      font-size: 16px;
+    }
+  }
+  /* iOS muestra un calendar/clock indicator que puede empujar el contenido —
+   * lo normalizamos al tamaño del campo. */
+  input[type="date"]::-webkit-date-and-time-value,
+  input[type="time"]::-webkit-date-and-time-value,
+  input[type="datetime-local"]::-webkit-date-and-time-value {
+    text-align: left;
+    min-height: 0;
+  }
+  input[type="date"]::-webkit-calendar-picker-indicator {
+    padding: 0;
+    margin-left: 4px;
+  }
 }
 
 @layer utilities {

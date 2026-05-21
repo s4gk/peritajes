@@ -1,0 +1,74 @@
+[
+  {
+    "src": "/icons/splash/iphone-15-16-pro-max-portrait.png",
+    "media": "(device-width: 440px) and (device-height: 956px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)",
+    "width": 1320,
+    "height": 2868
+  },
+  {
+    "src": "/icons/splash/iphone-14-15-pro-max-portrait.png",
+    "media": "(device-width: 430px) and (device-height: 932px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)",
+    "width": 1290,
+    "height": 2796
+  },
+  {
+    "src": "/icons/splash/iphone-14-15-16-pro-portrait.png",
+    "media": "(device-width: 393px) and (device-height: 852px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)",
+    "width": 1179,
+    "height": 2556
+  },
+  {
+    "src": "/icons/splash/iphone-13-pro-max-12-pro-max-portrait.png",
+    "media": "(device-width: 428px) and (device-height: 926px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)",
+    "width": 1284,
+    "height": 2778
+  },
+  {
+    "src": "/icons/splash/iphone-14-13-13-pro-12-12-pro-portrait.png",
+    "media": "(device-width: 390px) and (device-height: 844px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)",
+    "width": 1170,
+    "height": 2532
+  },
+  {
+    "src": "/icons/splash/iphone-13-mini-12-mini-x-xs-portrait.png",
+    "media": "(device-width: 375px) and (device-height: 812px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)",
+    "width": 1125,
+    "height": 2436
+  },
+  {
+    "src": "/icons/splash/iphone-11-xr-portrait.png",
+    "media": "(device-width: 414px) and (device-height: 896px) and (-webkit-device-pixel-ratio: 2) and (orientation: portrait)",
+    "width": 828,
+    "height": 1792
+  },
+  {
+    "src": "/icons/splash/iphone-se-8-7-portrait.png",
+    "media": "(device-width: 375px) and (device-height: 667px) and (-webkit-device-pixel-ratio: 2) and (orientation: portrait)",
+    "width": 750,
+    "height": 1334
+  },
+  {
+    "src": "/icons/splash/ipad-pro-12.9-portrait.png",
+    "media": "(device-width: 1024px) and (device-height: 1366px) and (-webkit-device-pixel-ratio: 2) and (orientation: portrait)",
+    "width": 2048,
+    "height": 2732
+  },
+  {
+    "src": "/icons/splash/ipad-pro-11-portrait.png",
+    "media": "(device-width: 834px) and (device-height: 1194px) and (-webkit-device-pixel-ratio: 2) and (orientation: portrait)",
+    "width": 1668,
+    "height": 2388
+  },
+  {
+    "src": "/icons/splash/ipad-air-portrait.png",
+    "media": "(device-width: 820px) and (device-height: 1180px) and (-webkit-device-pixel-ratio: 2) and (orientation: portrait)",
+    "width": 1640,
+    "height": 2360
+  },
+  {
+    "src": "/icons/splash/ipad-portrait.png",
+    "media": "(device-width: 768px) and (device-height: 1024px) and (-webkit-device-pixel-ratio: 2) and (orientation: portrait)",
+    "width": 1536,
+    "height": 2048
+  }
+]
