@@ -2,14 +2,17 @@
 
 import * as React from "react";
 import Link from "next/link";
+import Image from "next/image";
 import { usePathname } from "next/navigation";
 import {
   Building2,
+  Calendar,
   Car,
   ClipboardList,
   DatabaseBackup,
   LayoutDashboard,
-  ShieldCheck,
+  MessageCircle,
+  ScrollText,
   UserCircle,
   Users,
   X,
@@ -26,10 +29,13 @@ type NavItem = {
 
 const NAV: NavItem[] = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
+  { href: "/agenda", label: "Agenda", icon: Calendar },
   { href: "/peritajes", label: "Peritajes", icon: ClipboardList },
   { href: "/vehiculos", label: "Vehículos", icon: Car },
   { href: "/empresa", label: "Empresa", icon: Building2, adminOnly: true },
   { href: "/usuarios", label: "Usuarios", icon: Users, adminOnly: true },
+  { href: "/whatsapp", label: "WhatsApp", icon: MessageCircle, adminOnly: true },
+  { href: "/auditoria", label: "Auditoría", icon: ScrollText, adminOnly: true },
   { href: "/backup", label: "Backup", icon: DatabaseBackup, adminOnly: true },
   { href: "/cuenta", label: "Mi cuenta", icon: UserCircle },
 ];
@@ -58,16 +64,21 @@ export function Sidebar({ user, open, onClose }: SidebarProps) {
 
       <aside
         className={cn(
-          "fixed inset-y-0 left-0 z-50 flex w-64 flex-col border-r bg-card transition-transform lg:static lg:translate-x-0",
+          "fixed inset-y-0 left-0 z-50 flex w-64 flex-col border-r bg-card transition-transform lg:sticky lg:inset-auto lg:top-0 lg:h-screen lg:translate-x-0",
           open ? "translate-x-0" : "-translate-x-full lg:translate-x-0",
         )}
       >
         <div className="flex h-14 items-center justify-between border-b px-4">
           <Link href="/dashboard" className="flex items-center gap-2 font-semibold">
-            <div className="flex h-8 w-8 items-center justify-center rounded-md bg-primary text-primary-foreground">
-              <ShieldCheck className="h-4 w-4" />
-            </div>
-            <span>Perito</span>
+            <Image
+              src="/logo.jpg"
+              alt="Peritajes del Llano"
+              width={32}
+              height={32}
+              className="h-8 w-8 rounded-md object-cover"
+              priority
+            />
+            <span className="truncate text-sm">Peritajes del Llano</span>
           </Link>
           <button
             type="button"
