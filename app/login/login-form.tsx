@@ -1,8 +1,9 @@
 "use client";
 
 import * as React from "react";
+import Image from "next/image";
 import { useRouter } from "next/navigation";
-import { Loader2, ShieldCheck } from "lucide-react";
+import { Loader2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -49,10 +50,15 @@ export function LoginForm() {
   return (
     <Card className="w-full max-w-sm">
       <CardHeader className="space-y-2 text-center">
-        <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-primary/10 text-primary">
-          <ShieldCheck className="h-6 w-6" />
-        </div>
-        <CardTitle>Perito</CardTitle>
+        <Image
+          src="/logo.jpg"
+          alt="Peritajes del Llano"
+          width={64}
+          height={64}
+          className="mx-auto h-16 w-16 rounded-full object-cover"
+          priority
+        />
+        <CardTitle>Peritajes del Llano</CardTitle>
         <CardDescription>
           Ingresa tus credenciales para acceder al panel.
         </CardDescription>
@@ -97,6 +103,10 @@ export function LoginForm() {
               "Iniciar sesión"
             )}
           </Button>
+          <p className="text-center text-xs text-muted-foreground">
+            ¿Olvidaste tu contraseña? Pedile a tu administrador que te genere un
+            link de reset.
+          </p>
         </form>
       </CardContent>
     </Card>

@@ -2,7 +2,9 @@
 
 import * as React from "react";
 import {
+  Copy,
   KeyRound,
+  Link2,
   Loader2,
   Plus,
   Trash2,
@@ -32,6 +34,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useToast } from "@/components/ui/toast";
+import { apiFetch } from "@/lib/client/api-client";
 import { formatDate } from "@/lib/utils";
 
 type User = {
@@ -56,6 +59,31 @@ export function UsuariosClient({
   const [users, setUsers] = React.useState<User[]>(initialUsers);
   const [createOpen, setCreateOpen] = React.useState(false);
   const [pwUserId, setPwUserId] = React.useState<string | null>(null);
+  const [resetInfo, setResetInfo] = React.useState<{
+    url: string;
+    expiresAt: string;
+    fullName: string;
+  } | null>(null);
+
+  async function handleGenerateResetLink(u: User) {
+    const res = await apiFetch(`/api/users/${u.id}/reset-link`, {
+      method: "POST",
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      toast.show({
+        title: "No se pudo generar el link",
+        description: data?.error,
+        variant: "danger",
+      });
+      return;
+    }
+    setResetInfo({
+      url: data.url,
+      expiresAt: data.expiresAt,
+      fullName: u.fullName,
+    });
+  }
 
   async function refresh() {
     const res = await fetch("/api/users");
@@ -66,7 +94,7 @@ export function UsuariosClient({
   }
 
   async function toggleActive(u: User) {
-    const res = await fetch(`/api/users/${u.id}`, {
+    const res = await apiFetch(`/api/users/${u.id}`, {
       method: "PATCH",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ active: !u.active }),
@@ -90,7 +118,7 @@ export function UsuariosClient({
       )
     )
       return;
-    const res = await fetch(`/api/users/${u.id}`, { method: "DELETE" });
+    const res = await apiFetch(`/api/users/${u.id}`, { method: "DELETE" });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
       toast.show({
@@ -172,6 +200,16 @@ export function UsuariosClient({
                     <Button
                       variant="outline"
                       size="sm"
+                      onClick={() => handleGenerateResetLink(u)}
+                      disabled={!u.active}
+                      className="gap-1.5"
+                      title="Generar un link de reset para enviarle al usuario"
+                    >
+                      <Link2 className="h-3.5 w-3.5" /> Link de reset
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
                       onClick={() => toggleActive(u)}
                       disabled={isMe}
                       className="gap-1.5"
@@ -213,7 +251,70 @@ export function UsuariosClient({
         onClose={() => setPwUserId(null)}
         onChanged={refresh}
       />
+      <ResetLinkDialog info={resetInfo} onClose={() => setResetInfo(null)} />
     </div>
+  );
+}
+
+function ResetLinkDialog({
+  info,
+  onClose,
+}: {
+  info: { url: string; expiresAt: string; fullName: string } | null;
+  onClose: () => void;
+}) {
+  const toast = useToast();
+  const expiresText = info
+    ? new Date(info.expiresAt).toLocaleString("es-CO", {
+        day: "2-digit",
+        month: "short",
+        year: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+      })
+    : "";
+
+  async function copy() {
+    if (!info) return;
+    try {
+      await navigator.clipboard.writeText(info.url);
+      toast.show({ title: "Link copiado", variant: "success" });
+    } catch {
+      toast.show({
+        title: "No se pudo copiar",
+        description: info.url,
+        variant: "warning",
+      });
+    }
+  }
+
+  return (
+    <Dialog open={info !== null} onOpenChange={(open) => !open && onClose()}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Link de reset generado</DialogTitle>
+          <DialogDescription>
+            Copialo y envialo a {info?.fullName} por el canal que prefieras
+            (WhatsApp, llamada, presencial). El link es de un solo uso y vence el {expiresText}.
+            Si se genera uno nuevo, el anterior se invalida automáticamente.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-3">
+          <div className="rounded-md border bg-muted/40 p-3">
+            <div className="break-all font-mono text-xs">{info?.url}</div>
+          </div>
+          <Button onClick={copy} className="w-full gap-1.5">
+            <Copy className="h-4 w-4" />
+            Copiar link
+          </Button>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>
+            Cerrar
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -248,7 +349,7 @@ function CreateUserDialog({
     e.preventDefault();
     setBusy(true);
     try {
-      const res = await fetch("/api/users", {
+      const res = await apiFetch("/api/users", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ fullName, username, email, password, role }),
@@ -379,7 +480,7 @@ function PasswordDialog({
     if (!userId) return;
     setBusy(true);
     try {
-      const res = await fetch(`/api/users/${userId}`, {
+      const res = await apiFetch(`/api/users/${userId}`, {
         method: "PATCH",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ password }),
