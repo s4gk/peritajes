@@ -2,7 +2,12 @@
 const nextConfig = {
   reactStrictMode: true,
   experimental: {
-    serverComponentsExternalPackages: ["puppeteer", "qrcode"],
+    serverComponentsExternalPackages: [
+      "puppeteer",
+      "qrcode",
+      "@whiskeysockets/baileys",
+      "pino",
+    ],
   },
 };
 
