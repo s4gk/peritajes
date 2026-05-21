@@ -45,3 +45,13 @@ Thumbs.db
 
 # logs
 *.log
+
+certificates
+
+# whatsapp baileys auth state (credenciales del número conectado, no committear)
+/.wa-auth/
+
+# Lang pack de Tesseract — solo committeamos el .gz (8MB); el descomprimido
+# es regenerable con `gunzip -k spa.traineddata.gz`. Tesseract puede leer .gz
+# directo del langPath.
+lib/tessdata/spa.traineddata
