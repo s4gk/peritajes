@@ -1,7 +1,10 @@
 import { NextResponse } from "next/server";
 
 import { requireUser } from "@/lib/server/auth";
-import { checkInspectionAccess } from "@/lib/server/inspections";
+import {
+  checkInspectionAccess,
+  getInspectionServer,
+} from "@/lib/server/inspections";
 import { renderInspectionPdf } from "@/lib/server/pdf-render";
 import { buildPublicBaseUrl } from "@/lib/server/qr";
 import {
@@ -45,6 +48,7 @@ export async function POST(req: Request) {
   }
 
   let verificationUrl: string | null = null;
+  let reportNumber: string | null = null;
   if (body.inspectionId) {
     // Antes de tocar share tokens hay que confirmar que el user es dueño
     // (o admin) del peritaje. Sin esto, un perito podía generar tokens
@@ -54,6 +58,14 @@ export async function POST(req: Request) {
       return new NextResponse("Sin permisos", { status: 403 });
     }
     if (access.kind === "ok") {
+      // Traemos el consecutivo oficial si ya está asignado. Para borradores
+      // (sin reportNumber) el PDF cae al docNumber derivado de placa+fecha.
+      try {
+        const stored = await getInspectionServer(body.inspectionId);
+        reportNumber = stored?.reportNumber ?? null;
+      } catch {
+        reportNumber = null;
+      }
       try {
         let token = await getActiveShareTokenForInspection(body.inspectionId);
         if (!token) {
@@ -80,6 +92,7 @@ export async function POST(req: Request) {
       report: body.report,
       mode: body.mode,
       verificationUrl,
+      reportNumber,
     });
     return new NextResponse(buffer as unknown as BodyInit, {
       status: 200,

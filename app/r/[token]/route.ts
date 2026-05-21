@@ -121,6 +121,7 @@ export async function GET(req: Request, ctx: { params: { token: string } }) {
     const { buffer, plateSlug } = await renderInspectionPdf({
       data: stored.data,
       verificationUrl,
+      reportNumber: stored.reportNumber ?? null,
     });
     // Fire-and-forget access tracking; no need to block the response on it.
     touchShareTokenAccess(token).catch(() => {});

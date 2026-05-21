@@ -17,9 +17,16 @@ import type { InspectionData } from "@/lib/types";
  * (público con token) usen exactamente la misma salida.
  */
 
-let cachedSignatureDataUrl: string | null | undefined;
-async function loadInspectorSignature(): Promise<string | null> {
-  if (cachedSignatureDataUrl !== undefined) return cachedSignatureDataUrl;
+/**
+ * Firma del perito en orden de preferencia:
+ *   1. La que capturó el perito en este peritaje (`data.conclusion.inspectorSignature`).
+ *   2. Firma genérica en disco `public/firma-perito.{png,jpg,jpeg}` — solo
+ *      fallback para peritajes legacy que se finalizaron antes de que el
+ *      wizard pidiera firma por inspección.
+ */
+let cachedFallbackSignature: string | null | undefined;
+async function loadFallbackInspectorSignature(): Promise<string | null> {
+  if (cachedFallbackSignature !== undefined) return cachedFallbackSignature;
   const dir = path.join(process.cwd(), "public");
   const candidates: { file: string; mime: string }[] = [
     { file: "firma-perito.png", mime: "image/png" },
@@ -29,13 +36,13 @@ async function loadInspectorSignature(): Promise<string | null> {
   for (const { file, mime } of candidates) {
     try {
       const buf = await fs.readFile(path.join(dir, file));
-      cachedSignatureDataUrl = `data:${mime};base64,${buf.toString("base64")}`;
-      return cachedSignatureDataUrl;
+      cachedFallbackSignature = `data:${mime};base64,${buf.toString("base64")}`;
+      return cachedFallbackSignature;
     } catch {
       // try next
     }
   }
-  cachedSignatureDataUrl = null;
+  cachedFallbackSignature = null;
   return null;
 }
 
@@ -54,6 +61,10 @@ export type RenderInspectionPdfOptions = {
   /** URL pública del peritaje (e.g. https://app/r/xyz). Si está set, el PDF
    *  embebe un QR + watermark de verificación. */
   verificationUrl?: string | null;
+  /** Consecutivo oficial del peritaje (`PER-2026-0001`). Si viene, el PDF lo
+   *  muestra en portada y en el header de cada página. Si no, cae a
+   *  `buildDocumentNumber(placa, fecha)` — útil para previews de borradores. */
+  reportNumber?: string | null;
 };
 
 export type RenderedPdf = {
@@ -87,7 +98,9 @@ export async function renderInspectionPdf(
     // DB unavailable — fallback already set.
   }
 
-  const inspectorSignatureDataUrl = await loadInspectorSignature();
+  const inspectorSignatureDataUrl =
+    data.conclusion?.inspectorSignature?.trim() ||
+    (await loadFallbackInspectorSignature());
   const vehicleRenderDataUrl = await getOrGenerateVehicleRender({
     make: data.vehicle.make,
     model: data.vehicle.model,
@@ -111,9 +124,12 @@ export async function renderInspectionPdf(
     vehicleRenderDataUrl,
     verificationUrl,
     verificationQrDataUrl,
+    reportNumber: opts.reportNumber ?? null,
   });
 
-  const docNumber = buildDocumentNumber(data.vehicle.plate, data.vehicle.date);
+  const docNumber =
+    opts.reportNumber ||
+    buildDocumentNumber(data.vehicle.plate, data.vehicle.date);
   const plateLabel = data.vehicle.plate || "Sin placa";
   const plateSlug = (data.vehicle.plate || "inspeccion").replace(/[^A-Z0-9]/gi, "");
 

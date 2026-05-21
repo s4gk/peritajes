@@ -1,5 +1,6 @@
 "use client";
 
+import { apiFetch } from "./client/api-client";
 import { analyze } from "./rules-engine";
 import type { InspectionData } from "./types";
 
@@ -13,12 +14,13 @@ export type PdfDownloadMode = "executive" | "detailed";
 export async function downloadInspectionPdf(
   data: InspectionData,
   mode: PdfDownloadMode = "executive",
+  inspectionId?: string,
 ): Promise<void> {
   const report = analyze(data);
-  const res = await fetch("/api/pdf", {
+  const res = await apiFetch("/api/pdf", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ data, report, mode }),
+    body: JSON.stringify({ data, report, mode, inspectionId }),
   });
   if (!res.ok) {
     const text = await res.text().catch(() => "");
