@@ -37,22 +37,32 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
     <ToastContext.Provider value={{ show }}>
       {children}
       <div
-        className="pointer-events-none fixed inset-x-3 top-3 z-[100] flex flex-col gap-2 sm:inset-auto sm:bottom-4 sm:right-4 sm:top-auto sm:w-full sm:max-w-sm"
-        style={{ paddingTop: "max(0.25rem, env(safe-area-inset-top))" }}
+        className="pointer-events-none fixed inset-x-3 bottom-3 z-[100] flex flex-col gap-2 sm:inset-auto sm:bottom-4 sm:right-4 sm:w-full sm:max-w-sm"
+        style={{ paddingBottom: "max(0.25rem, env(safe-area-inset-bottom))" }}
       >
         {items.map((t) => (
           <div
             key={t.id}
             className={cn(
               "pointer-events-auto rounded-lg border bg-background p-3 shadow-lg sm:p-4",
-              t.variant === "success" && "border-success/50 bg-success/10",
-              t.variant === "warning" && "border-warning/50 bg-warning/10",
-              t.variant === "danger" && "border-danger/50 bg-danger/10",
+              t.variant === "success" &&
+                "border-success bg-success text-success-foreground",
+              t.variant === "warning" &&
+                "border-warning bg-warning text-warning-foreground",
+              t.variant === "danger" &&
+                "border-danger bg-danger text-danger-foreground",
             )}
           >
             <div className="font-semibold text-sm">{t.title}</div>
             {t.description && (
-              <div className="mt-1 text-sm text-muted-foreground">
+              <div
+                className={cn(
+                  "mt-1 text-sm",
+                  t.variant && t.variant !== "default"
+                    ? "opacity-90"
+                    : "text-muted-foreground",
+                )}
+              >
                 {t.description}
               </div>
             )}

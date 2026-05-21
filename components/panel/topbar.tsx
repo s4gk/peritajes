@@ -7,6 +7,7 @@ import { LogOut, Menu } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/components/ui/toast";
 import { ThemeToggle } from "@/components/wizard/theme-toggle";
+import { apiFetch } from "@/lib/client/api-client";
 
 export type TopbarProps = {
   user: { fullName: string; role: "admin" | "perito" };
@@ -22,7 +23,7 @@ export function Topbar({ user, onMenuClick, title }: TopbarProps) {
   async function handleLogout() {
     setBusy(true);
     try {
-      const res = await fetch("/api/auth/logout", { method: "POST" });
+      const res = await apiFetch("/api/auth/logout", { method: "POST" });
       if (!res.ok) throw new Error("Error al cerrar sesión");
       router.replace("/login");
       router.refresh();

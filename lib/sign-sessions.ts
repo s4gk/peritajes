@@ -1,18 +1,28 @@
+import "server-only";
+
 /**
- * Ephemeral in-process store for client-side QR signing sessions.
+ * Persistencia de sesiones de firma cliente vía QR.
  *
- * A session is created by the perito in the summary step; the client then opens
- * /sign/[token] on their phone and posts a signature back. The perito's browser
- * polls the result endpoint until the signature arrives (or the session expires).
+ * Antes este módulo guardaba todo en `Map<string, SignSession>` en memoria —
+ * fácil pero se perdía al reiniciar pm2. Si el perito mostraba el QR y el
+ * server reiniciaba antes de que el cliente firmara, la sesión moría sin
+ * señal y el cliente recibía 404.
  *
- * This lives in module-level memory intentionally — for a self-hosted peritaje
- * app running a single Next.js process it's enough. If the app ever scales to
- * multi-instance, swap this for Redis/KV with the same public API.
+ * Ahora vive en Postgres (tabla `sign_sessions`). Cada sesión tiene:
+ *   - token (PK, 128 bits base64url)
+ *   - context (JSONB con datos del vehículo para mostrar al firmante)
+ *   - signature (data URL, NULL hasta que firma)
+ *   - expires_at (10 min por defecto, +60s al recibir firma)
+ *
+ * Sigue siendo single-tenant chico (no esperamos millones de sesiones), pero
+ * ahora es resiliente a reinicios y multi-instancia futura.
  */
 
 import { randomBytes } from "node:crypto";
 
-const SESSION_TTL_MS = 10 * 60 * 1000; // 10 minutes
+import { query } from "./server/db";
+
+const SESSION_TTL_MS = 10 * 60 * 1000;
 
 export type SignSessionContext = {
   plate?: string;
@@ -26,70 +36,98 @@ export type SignSessionContext = {
 export type SignSession = {
   token: string;
   context: SignSessionContext;
-  signature?: string; // data URL once submitted
+  signature?: string;
   createdAt: number;
   expiresAt: number;
   signedAt?: number;
 };
 
-// Ensure the Map survives hot reloads in dev so a freshly opened phone doesn't
-// land on a stale token after the perito edits code.
-const globalScope = globalThis as unknown as {
-  __peritoSignSessions?: Map<string, SignSession>;
+type Row = {
+  token: string;
+  context: SignSessionContext | null;
+  signature: string | null;
+  created_at: Date | string;
+  expires_at: Date | string;
+  signed_at: Date | string | null;
 };
-const sessions: Map<string, SignSession> =
-  globalScope.__peritoSignSessions ?? new Map<string, SignSession>();
-globalScope.__peritoSignSessions = sessions;
 
-function prune(now: number) {
-  for (const [token, session] of sessions) {
-    if (session.expiresAt < now) sessions.delete(token);
-  }
+function tsToMs(v: Date | string): number {
+  return typeof v === "string" ? Date.parse(v) : v.getTime();
+}
+
+function rowToSession(row: Row): SignSession {
+  return {
+    token: row.token,
+    context: row.context ?? {},
+    signature: row.signature ?? undefined,
+    createdAt: tsToMs(row.created_at),
+    expiresAt: tsToMs(row.expires_at),
+    signedAt: row.signed_at ? tsToMs(row.signed_at) : undefined,
+  };
 }
 
 function makeToken(): string {
-  // 128 bits de entropía en base64url (22 chars). Usamos crypto.randomBytes
-  // de Node directamente — sin fallback a Math.random(), que sería predecible.
   return randomBytes(16).toString("base64url");
 }
 
-export function createSession(context: SignSessionContext): SignSession {
-  const now = Date.now();
-  prune(now);
-  const session: SignSession = {
-    token: makeToken(),
-    context,
-    createdAt: now,
-    expiresAt: now + SESSION_TTL_MS,
-  };
-  sessions.set(session.token, session);
-  return session;
-}
-
-export function getSession(token: string): SignSession | null {
-  const now = Date.now();
-  prune(now);
-  const session = sessions.get(token);
-  if (!session) return null;
-  if (session.expiresAt < now) {
-    sessions.delete(token);
-    return null;
+/**
+ * Limpieza oportunista: barre filas vencidas. Se llama desde los flujos
+ * principales para que no haga falta un cron aparte. Costo bajo (índice por
+ * expires_at) y solo corre cuando llega un request.
+ */
+async function pruneExpired(): Promise<void> {
+  try {
+    await query("DELETE FROM sign_sessions WHERE expires_at < now()");
+  } catch {
+    /* la limpieza no debe romper el flow principal */
   }
-  return session;
 }
 
-export function submitSignature(token: string, signature: string): SignSession | null {
-  const session = getSession(token);
-  if (!session) return null;
-  session.signature = signature;
-  session.signedAt = Date.now();
-  // Extend expiration slightly so the perito has a window to pick it up even if
-  // they were slow to poll
-  session.expiresAt = Math.max(session.expiresAt, Date.now() + 60_000);
-  sessions.set(token, session);
-  return session;
+export async function createSession(
+  context: SignSessionContext,
+): Promise<SignSession> {
+  await pruneExpired();
+  const token = makeToken();
+  const expires = new Date(Date.now() + SESSION_TTL_MS);
+  const r = await query<Row>(
+    `INSERT INTO sign_sessions (token, context, expires_at)
+     VALUES ($1, $2::jsonb, $3)
+     RETURNING *`,
+    [token, JSON.stringify(context ?? {}), expires],
+  );
+  return rowToSession(r.rows[0]);
 }
 
-export function deleteSession(token: string): void {
-  sessions.delete(token);
+export async function getSession(token: string): Promise<SignSession | null> {
+  const r = await query<Row>(
+    `SELECT * FROM sign_sessions
+     WHERE token = $1 AND expires_at > now()`,
+    [token],
+  );
+  if (r.rowCount === 0) return null;
+  return rowToSession(r.rows[0]);
+}
+
+export async function submitSignature(
+  token: string,
+  signature: string,
+): Promise<SignSession | null> {
+  // Extendemos el TTL al recibir la firma para darle al perito ~60s extra para
+  // pollear y traerse la firma, aunque la sesión hubiera estado por vencer.
+  const newExpires = new Date(Date.now() + 60_000);
+  const r = await query<Row>(
+    `UPDATE sign_sessions
+     SET signature = $2,
+         signed_at = now(),
+         expires_at = GREATEST(expires_at, $3)
+     WHERE token = $1 AND expires_at > now()
+     RETURNING *`,
+    [token, signature, newExpires],
+  );
+  if (r.rowCount === 0) return null;
+  return rowToSession(r.rows[0]);
+}
+
+export async function deleteSession(token: string): Promise<void> {
+  await query("DELETE FROM sign_sessions WHERE token = $1", [token]);
 }

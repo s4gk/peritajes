@@ -67,6 +67,8 @@ CREATE TABLE IF NOT EXISTS users (
   last_login_at TIMESTAMPTZ
 );
 ALTER TABLE users ADD COLUMN IF NOT EXISTS license_id TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS signature_data_url TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS wa_phone TEXT;
 
 CREATE TABLE IF NOT EXISTS sessions (
   id TEXT PRIMARY KEY,
@@ -109,9 +111,38 @@ CREATE TABLE IF NOT EXISTS inspections (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+ALTER TABLE inspections ADD COLUMN IF NOT EXISTS report_number TEXT;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_inspections_report_number ON inspections(report_number) WHERE report_number IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_inspections_updated ON inspections(updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_inspections_user ON inspections(user_id);
 CREATE INDEX IF NOT EXISTS idx_inspections_plate ON inspections(plate) WHERE plate IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS report_counters (
+  year INTEGER PRIMARY KEY,
+  last_number INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS appointments (
+  id TEXT PRIMARY KEY,
+  scheduled_at TIMESTAMPTZ NOT NULL,
+  duration_minutes INTEGER NOT NULL DEFAULT 60,
+  owner_name TEXT NOT NULL DEFAULT '',
+  owner_phone TEXT NOT NULL DEFAULT '',
+  owner_document TEXT NOT NULL DEFAULT '',
+  plate TEXT NOT NULL DEFAULT '',
+  vehicle_label TEXT NOT NULL DEFAULT '',
+  location TEXT NOT NULL DEFAULT '',
+  notes TEXT NOT NULL DEFAULT '',
+  assigned_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+  inspection_id TEXT REFERENCES inspections(id) ON DELETE SET NULL,
+  status TEXT NOT NULL DEFAULT 'scheduled',
+  created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_appointments_scheduled ON appointments(scheduled_at);
+CREATE INDEX IF NOT EXISTS idx_appointments_assigned ON appointments(assigned_user_id);
+CREATE INDEX IF NOT EXISTS idx_appointments_status ON appointments(status);
 
 CREATE TABLE IF NOT EXISTS verifik_cache (
   service TEXT NOT NULL,
@@ -149,6 +180,27 @@ CREATE TABLE IF NOT EXISTS share_tokens (
 );
 CREATE INDEX IF NOT EXISTS idx_share_tokens_inspection ON share_tokens(inspection_id);
 CREATE INDEX IF NOT EXISTS idx_share_tokens_expires ON share_tokens(expires_at);
+
+CREATE TABLE IF NOT EXISTS password_reset_tokens (
+  token TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  expires_at TIMESTAMPTZ NOT NULL,
+  used_at TIMESTAMPTZ,
+  created_by TEXT REFERENCES users(id) ON DELETE SET NULL
+);
+CREATE INDEX IF NOT EXISTS idx_password_reset_user ON password_reset_tokens(user_id);
+CREATE INDEX IF NOT EXISTS idx_password_reset_expires ON password_reset_tokens(expires_at);
+
+CREATE TABLE IF NOT EXISTS sign_sessions (
+  token TEXT PRIMARY KEY,
+  context JSONB NOT NULL DEFAULT '{}'::jsonb,
+  signature TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  expires_at TIMESTAMPTZ NOT NULL,
+  signed_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_sign_sessions_expires ON sign_sessions(expires_at);
 `;
 
 async function ensureMigrated(): Promise<void> {

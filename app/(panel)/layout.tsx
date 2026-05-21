@@ -15,12 +15,17 @@ export default async function PanelLayout({
   const user = await getCurrentUser();
   if (!user) redirect("/login");
 
+  // La cookie CSRF la siembra el middleware en GETs de rutas del panel — no
+  // se puede mutar desde este Server Component.
+
   return (
     <PanelShell
       user={{
         id: user.id,
         username: user.username,
         fullName: user.fullName,
+        licenseId: user.licenseId,
+        signatureDataUrl: user.signatureDataUrl,
         role: user.role,
       }}
     >

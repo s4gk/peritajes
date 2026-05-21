@@ -60,6 +60,16 @@ export function VehiculosClient() {
     };
   }, []);
 
+  // initStore() ya no espera al server (corre en background). Cuando llega
+  // la versión canónica re-agregamos para reflejar vehículos editados desde
+  // otros dispositivos.
+  React.useEffect(() => {
+    if (typeof window === "undefined") return;
+    const onRefresh = () => setRows(aggregate(listInspections()));
+    window.addEventListener("perito:store-refreshed", onRefresh);
+    return () => window.removeEventListener("perito:store-refreshed", onRefresh);
+  }, []);
+
   const filtered = React.useMemo(() => {
     if (!rows) return null;
     const q = query.trim().toLowerCase();

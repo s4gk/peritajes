@@ -1,0 +1,59 @@
+1. Capot
+2. Punta Delantera Izquierda
+3. Guarda Polvo Metalico Delantero Izquierdo
+4. Torre Delantera Izquierda
+5. Guarda Fangos Delantero Izquierdo
+6. Amortiguador Delantero Izquierdo
+7. Estado Llanta Delantera Izquierda
+8. Retrovisor Izquierdo
+9. Puerta Delantera Izquierda (Sellante, Carteras, Estado Interno)
+10. Paral Puerta Delantera Izquierda
+11. Paral Panoramico Izquierda
+12. Larguero Capota Izquierda
+13. Techo Lado Izquierdo
+14. Paral Central Izquierdo
+15. Estado Interior Sección Delantera (Volante, Millare, Panel Instrumentos, Estado Pedales, Tapiceria, Piso y Techo)
+16. Estribo Izquierdo
+17. Puerta Trasera Izquierda
+18. Costado Izquierdo
+19. Guarda Polvo Metalico Trasero Izquierdo
+20. Amortiguador Trasero Izquierdo
+21. Llanta Trasera Izquierda (Rin, Neumaticos)
+22. Tapabaul Con Puerta
+23. Bomper Trasero
+24. Panel Trasero
+25. Piso Baul
+26. Llanta Repuesto
+27. Stop Izquierdo y Derecho
+28. Punta Trasera Izquierda
+29. Punta Trasera Derecha
+30. Costado Derecho
+31. Amortiguador Trasero Derecho
+32. Llanta Trasera Derecha (Rin, Neumaticos)
+33. Larguero Capota Derecho
+34. Paral Central Derecho
+35. Puerta Trasera Derecha
+36. Paral Panoramico Derecho
+37. Paral Puerta Derecha
+38. Estribo Derecho
+39. Puerta Delantera Derecha
+40. Retrovisor Derecho
+41. Guardafangos Derecho
+42. Torre Suspención Delantera Derecha
+43. Guarda Polvo Metalico Delantero Derecho
+44. Amortiguador Delantero Derecho
+45. Llanta Delantera Derecha (Rin, Neumaticos)
+46. Punta Delantera Derecha
+47. Verificar Estado Motor (Fugas, Ruidos Anormales, Aceite, Filtros, Liquidos)
+48. Accesorios
+49. Barra Estabilizadora
+50. Cuna Motor
+51. Soporte Motor
+52. Carter
+53. Farolas Delanteras
+54. Bloque
+55. Culata
+56. Tapavalvula
+57. Piso Carroceria
+58. Refuerzos Carroceria
+59. Estado Iluminación Vehiculo

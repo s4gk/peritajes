@@ -17,6 +17,12 @@ export type User = {
   fullName: string;
   email: string | null;
   licenseId: string | null;
+  /** Firma del perito guardada en perfil. Se inyecta en cada peritaje nuevo
+   *  como default — el perito puede sobreescribirla per-inspección. */
+  signatureDataUrl: string | null;
+  /** Número de WhatsApp para recibir notificaciones internas (intake nuevo,
+   *  firma completada). Formato libre — se normaliza al enviar. */
+  waPhone: string | null;
   role: UserRole;
   active: boolean;
   createdAt: string;
@@ -30,6 +36,8 @@ type UserRow = {
   full_name: string;
   email: string | null;
   license_id: string | null;
+  signature_data_url: string | null;
+  wa_phone: string | null;
   role: string;
   active: boolean;
   created_at: Date | string;
@@ -48,6 +56,8 @@ function rowToUser(row: UserRow): User {
     fullName: row.full_name,
     email: row.email,
     licenseId: row.license_id ?? null,
+    signatureDataUrl: row.signature_data_url ?? null,
+    waPhone: row.wa_phone ?? null,
     role: row.role === "admin" ? "admin" : "perito",
     active: row.active,
     createdAt: tsToISO(row.created_at) ?? "",
@@ -80,6 +90,26 @@ export async function listUsers(): Promise<User[]> {
     "SELECT * FROM users ORDER BY created_at ASC",
   );
   return r.rows.map(rowToUser);
+}
+
+/**
+ * Lista de teléfonos WhatsApp del equipo activo. Usado para fan-out de
+ * notificaciones internas (intake nuevo, firma completada). Devuelve solo
+ * usuarios activos con `wa_phone` configurado.
+ */
+export async function listTeamWhatsAppPhones(): Promise<
+  Array<{ id: string; fullName: string; waPhone: string }>
+> {
+  const r = await query<{ id: string; full_name: string; wa_phone: string }>(
+    `SELECT id, full_name, wa_phone
+     FROM users
+     WHERE active = TRUE AND wa_phone IS NOT NULL AND wa_phone <> ''`,
+  );
+  return r.rows.map((row) => ({
+    id: row.id,
+    fullName: row.full_name,
+    waPhone: row.wa_phone,
+  }));
 }
 
 export async function getUserByUsername(
@@ -168,7 +198,15 @@ export type ProfileUpdate = {
   fullName?: string;
   email?: string | null;
   licenseId?: string | null;
+  /** Pasar `null` borra la firma guardada. Cap a 1MB de base64 — más que eso
+   *  rebotamos para no atragantar el INSERT con un PNG enorme. */
+  signatureDataUrl?: string | null;
+  /** Teléfono WhatsApp del miembro del equipo. Se valida flexible (dígitos +
+   *  símbolos comunes) — la normalización a JID se hace al enviar. */
+  waPhone?: string | null;
 };
+
+const SIGNATURE_MAX_BYTES = 1024 * 1024;
 
 export async function updateUserProfile(
   id: string,
@@ -191,6 +229,33 @@ export async function updateUserProfile(
   if (patch.licenseId !== undefined) {
     sets.push(`license_id = $${i++}`);
     params.push(patch.licenseId?.trim() || null);
+  }
+  if (patch.signatureDataUrl !== undefined) {
+    const sig = patch.signatureDataUrl;
+    if (sig === null || sig === "") {
+      sets.push(`signature_data_url = $${i++}`);
+      params.push(null);
+    } else {
+      if (typeof sig !== "string" || !sig.startsWith("data:image/")) {
+        throw new Error("La firma debe ser una imagen válida.");
+      }
+      if (sig.length > SIGNATURE_MAX_BYTES) {
+        throw new Error("La firma excede el tamaño máximo (1 MB).");
+      }
+      sets.push(`signature_data_url = $${i++}`);
+      params.push(sig);
+    }
+  }
+  if (patch.waPhone !== undefined) {
+    const raw = patch.waPhone?.trim() || null;
+    if (raw) {
+      const digits = raw.replace(/\D/g, "");
+      if (digits.length < 10) {
+        throw new Error("El teléfono de WhatsApp debe tener al menos 10 dígitos.");
+      }
+    }
+    sets.push(`wa_phone = $${i++}`);
+    params.push(raw);
   }
   if (sets.length === 0) return;
 

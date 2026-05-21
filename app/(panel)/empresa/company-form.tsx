@@ -9,6 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/components/ui/toast";
+import { apiFetch } from "@/lib/client/api-client";
 
 type Company = {
   name: string;
@@ -52,7 +53,7 @@ export function CompanyForm({ initial }: { initial: Company }) {
     e.preventDefault();
     setBusy(true);
     try {
-      const res = await fetch("/api/company", {
+      const res = await apiFetch("/api/company", {
         method: "PUT",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(form),

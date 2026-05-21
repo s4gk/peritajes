@@ -6,6 +6,8 @@ export type PanelUser = {
   id: string;
   username: string;
   fullName: string;
+  licenseId: string | null;
+  signatureDataUrl: string | null;
   role: "admin" | "perito";
 };
 
