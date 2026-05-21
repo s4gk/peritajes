@@ -1,48 +1,95 @@
 "use client";
 
-import { emptyInspection } from "./default-data";
-import type { InspectionData, StoredInspection, VehicleInfo } from "./types";
+import { apiFetch } from "./client/api-client";
+import {
+  idbDeleteInspection,
+  idbEnqueueMutation,
+  idbListInspections,
+  idbPutInspection,
+  idbPutInspections,
+} from "./client/idb";
+import {
+  flushSyncQueue,
+  refreshPending,
+  requestBackgroundSync,
+  setSyncedInspectionHandler,
+  startSyncWatcher,
+} from "./client/sync-queue";
+import {
+  DEFAULT_PERITAJE_KIND,
+  FALLBACK_VEHICLE_TYPE,
+  PERITAJE_KINDS,
+  VEHICLE_TYPES,
+} from "./constants";
+import { emptyInspection, ensureMinCylinders } from "./default-data";
+import type {
+  InspectionData,
+  PeritajeKind,
+  StoredInspection,
+  VehicleInfo,
+  VehicleType,
+} from "./types";
 import type { VerifikSnapshot } from "./verifik/types";
 import { makeId } from "./utils";
 
 export type InspectionSeed = {
+  kind?: PeritajeKind;
+  vehicleType?: VehicleType;
   vehicle?: Partial<VehicleInfo>;
   verifik?: VerifikSnapshot;
 };
 
 /**
- * Storage strategy
- * ----------------
- * Server is the source of truth (Postgres via /api/inspections). The client
- * keeps an in-memory cache so list/get reads stay synchronous — the wizard
- * autosave fires through `saveInspectionData()` which debounces a PUT.
+ * Storage strategy (offline-first)
+ * --------------------------------
+ * Server (Postgres) is the canonical store. El cliente mantiene una copia en
+ * IndexedDB que sobrevive recargas y trabaja sin red, más un memory cache
+ * para reads síncronos durante el render.
  *
- * Optimistic create: the client generates the ID locally and the server
- * accepts it (see /api/inspections POST). That lets the wizard navigate
- * to /inspection/{id} without awaiting the round-trip.
+ * Boot:
+ *   1. Cargar IDB → memory (instantáneo, funciona offline)
+ *   2. Si hay red, fetchear /api/inspections y mergear: server gana en filas
+ *      que existen ambos lados (last-write-wins por updatedAt), local gana en
+ *      filas que el server no conoce todavía (nunca se subieron).
  *
- * If the network fails mid-edit, the latest data still lives in the cache;
- * the next successful PUT publishes it. We don't queue offline writes —
- * see project_admin_panel.md if you need to bring offline-first back.
+ * Writes: cada saveInspectionData/createInspection/deleteInspection escribe a
+ * IDB y empuja una mutation a la queue. La queue se procesa en orden por
+ * sync-queue.ts (replay sobre 'online' + intervalo de respaldo).
  */
 
 const memory = new Map<string, StoredInspection>();
 let initialized = false;
 let initPromise: Promise<void> | null = null;
-
-const SAVE_DEBOUNCE_MS = 600;
-const pendingTimers = new Map<string, ReturnType<typeof setTimeout>>();
-const inflightSaves = new Set<string>();
+/** Promise del refresh contra /api/inspections. Corre en background después
+ *  de initStore(): no bloquea la carga, pero los providers pueden esperarlo
+ *  como fallback si el ID que buscan no está en IDB. */
+let serverFetchPromise: Promise<void> | null = null;
 
 function mergeDefaults(inspection: StoredInspection): StoredInspection {
   const base = emptyInspection();
   const d = (inspection?.data ?? {}) as Partial<InspectionData>;
+  const kind: PeritajeKind =
+    d.kind && d.kind in PERITAJE_KINDS ? d.kind : DEFAULT_PERITAJE_KIND;
+  const vehicleType: VehicleType =
+    d.vehicleType && d.vehicleType in VEHICLE_TYPES
+      ? d.vehicleType
+      : FALLBACK_VEHICLE_TYPE;
   return {
     ...inspection,
     data: {
       ...base,
       ...d,
+      kind,
+      vehicleType,
       vehicle: { ...base.vehicle, ...(d.vehicle ?? {}) },
+      documents: {
+        ownershipCardFront: Array.isArray(d.documents?.ownershipCardFront)
+          ? d.documents!.ownershipCardFront
+          : [],
+        ownershipCardBack: Array.isArray(d.documents?.ownershipCardBack)
+          ? d.documents!.ownershipCardBack
+          : [],
+      },
       bodywork: { ...base.bodywork, ...(d.bodywork ?? {}) },
       chassis: { ...base.chassis, ...(d.chassis ?? {}) },
       suspension: { ...base.suspension, ...(d.suspension ?? {}) },
@@ -51,8 +98,35 @@ function mergeDefaults(inspection: StoredInspection): StoredInspection {
       leaks: { ...base.leaks, ...(d.leaks ?? {}) },
       comfort: { ...base.comfort, ...(d.comfort ?? {}) },
       roadTest: { ...base.roadTest, ...(d.roadTest ?? {}) },
+      roadTestSkipped: d.roadTestSkipped === true,
+      extraPhotos: Array.isArray(d.extraPhotos) ? d.extraPhotos : [],
+      mandatoryPhotos: {
+        diagonalFrontLeft: Array.isArray(d.mandatoryPhotos?.diagonalFrontLeft)
+          ? d.mandatoryPhotos!.diagonalFrontLeft
+          : [],
+        diagonalRearRight: Array.isArray(d.mandatoryPhotos?.diagonalRearRight)
+          ? d.mandatoryPhotos!.diagonalRearRight
+          : [],
+        innerCabin: Array.isArray(d.mandatoryPhotos?.innerCabin)
+          ? d.mandatoryPhotos!.innerCabin
+          : [],
+        chassisNumber: Array.isArray(d.mandatoryPhotos?.chassisNumber)
+          ? d.mandatoryPhotos!.chassisNumber
+          : [],
+        engineNumber: Array.isArray(d.mandatoryPhotos?.engineNumber)
+          ? d.mandatoryPhotos!.engineNumber
+          : [],
+        idPlate: Array.isArray(d.mandatoryPhotos?.idPlate)
+          ? d.mandatoryPhotos!.idPlate
+          : [],
+      },
       tires: { ...base.tires, ...(d.tires ?? {}) },
       accessories: Array.isArray(d.accessories) ? d.accessories : [],
+      // Siempre garantizamos el mínimo (3) — si el peritaje guardó menos
+      // (legacy o lista vacía de iteraciones previas), se rellena al cargar.
+      engineCompression: ensureMinCylinders(
+        Array.isArray(d.engineCompression) ? d.engineCompression : [],
+      ),
       confirmedSteps: Array.isArray(d.confirmedSteps) ? d.confirmedSteps : [],
       status: d.status === "completed" ? "completed" : "draft",
       completedAt: d.completedAt,
@@ -62,7 +136,9 @@ function mergeDefaults(inspection: StoredInspection): StoredInspection {
 }
 
 async function fetchJson(input: RequestInfo, init?: RequestInit) {
-  const res = await fetch(input, {
+  // apiFetch agrega el header CSRF cuando el método no es seguro (POST/PUT/
+  // PATCH/DELETE). Para GET se comporta igual que fetch nativo.
+  const res = await apiFetch(input, {
     credentials: "same-origin",
     ...init,
     headers: {
@@ -90,21 +166,91 @@ export function initStore(): Promise<void> {
       initialized = true;
       return;
     }
+
+    // Paso 1: cargar IDB → memory. Esto siempre debe correr aunque no haya red.
     try {
-      const json = (await fetchJson("/api/inspections")) as {
-        inspections: StoredInspection[];
-      };
-      for (const row of json.inspections ?? []) {
-        memory.set(row.id, mergeDefaults(row));
-      }
+      const local = await idbListInspections();
+      for (const row of local) memory.set(row.id, mergeDefaults(row));
     } catch {
-      // Auth failure or network — leave cache empty. The page may redirect
-      // to /login or show a banner; either way we don't crash.
+      // Si IDB falla (modo privado en algunos browsers), seguimos con memory
+      // limpio — el server hidratará abajo.
     }
+
+    // Paso 2: arrancar el watcher de sync (replay queue + listener online).
+    // Registramos el handler que aplica la versión canónica del server al
+    // cache local — necesario para que reportNumber asignado al finalizar
+    // aparezca sin esperar al próximo boot.
+    const applySyncedInspection = (insp: StoredInspection) => {
+      const merged = mergeDefaults(insp);
+      memory.set(merged.id, merged);
+      idbPutInspection(merged).catch(() => {});
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(
+          new CustomEvent("perito:inspection-synced", { detail: merged.id }),
+        );
+      }
+    };
+    setSyncedInspectionHandler(applySyncedInspection);
+
+    // El service worker también puede reportar inspecciones syncadas (cuando
+    // dispara el Background Sync con la app cerrada y vuelve a abrirse).
+    // Escuchamos su postMessage y aplicamos exactamente la misma lógica.
+    if (typeof navigator !== "undefined" && "serviceWorker" in navigator) {
+      navigator.serviceWorker.addEventListener("message", (event) => {
+        const msg = event.data as { type?: string; inspection?: StoredInspection } | null;
+        if (msg?.type === "inspection-synced" && msg.inspection) {
+          applySyncedInspection(msg.inspection);
+        }
+      });
+    }
+
+    startSyncWatcher();
+
+    // Paso 3: arrancar el fetch del server en background. NO lo awaiteamos
+    // acá porque bloquearía a callers (p.ej. InspectionProvider al recargar
+    // un peritaje ya guardado en IDB esperaría a que baje TODA la lista del
+    // server, lo que se siente como 1-3 seg de "Cargando..."). Quien necesite
+    // garantizar versión del server puede esperar a `awaitServerFetch()`.
+    serverFetchPromise = refreshFromServer();
+
     initialized = true;
   })();
 
   return initPromise;
+}
+
+async function refreshFromServer(): Promise<void> {
+  if (typeof window === "undefined") return;
+  try {
+    const json = (await fetchJson("/api/inspections")) as {
+      inspections: StoredInspection[];
+    };
+    const merged: StoredInspection[] = [];
+    for (const row of json.inspections ?? []) {
+      const incoming = mergeDefaults(row);
+      const local = memory.get(incoming.id);
+      const winner =
+        !local || local.updatedAt < incoming.updatedAt ? incoming : local;
+      memory.set(winner.id, winner);
+      merged.push(winner);
+    }
+    if (merged.length > 0) {
+      idbPutInspections(merged).catch(() => {});
+    }
+    // Avisamos a las pantallas que pueden re-leer del store con la versión
+    // canónica del server (p.ej. el listado de peritajes).
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent("perito:store-refreshed"));
+    }
+  } catch {
+    // Sin red o sin auth — seguimos con lo que tenga IDB.
+  }
+}
+
+/** Espera al fetch del server. Útil para callers que detectan que su ID no
+ *  está en IDB y quieren darle una chance al server antes de mostrar 404. */
+export function awaitServerFetch(): Promise<void> {
+  return serverFetchPromise ?? Promise.resolve();
 }
 
 export function isStoreReady(): boolean {
@@ -121,31 +267,14 @@ export function getInspection(id: string): StoredInspection | null {
   return memory.get(id) ?? null;
 }
 
-function postCreate(inspection: StoredInspection) {
-  fetchJson("/api/inspections", {
-    method: "POST",
-    body: JSON.stringify({ id: inspection.id, data: inspection.data }),
-  })
-    .then((json: { inspection: StoredInspection }) => {
-      // Reconcile timestamps with what the server stored.
-      const server = mergeDefaults(json.inspection);
-      const current = memory.get(server.id);
-      memory.set(server.id, {
-        ...server,
-        data: current ? current.data : server.data,
-      });
-    })
-    .catch(() => {
-      // The optimistic entry is still in cache; user can retry by editing.
-    });
-}
-
 export function createInspection(seed?: InspectionSeed): StoredInspection {
   const now = new Date().toISOString();
   const base = emptyInspection();
   const data: InspectionData = seed
     ? {
         ...base,
+        kind: seed.kind ?? base.kind,
+        vehicleType: seed.vehicleType ?? base.vehicleType,
         vehicle: { ...base.vehicle, ...(seed.vehicle ?? {}) },
         verifik: seed.verifik ?? base.verifik,
       }
@@ -157,42 +286,16 @@ export function createInspection(seed?: InspectionSeed): StoredInspection {
     data,
   };
   memory.set(insp.id, insp);
-  postCreate(insp);
+  // Persistir local + encolar create. El IDB write es fire-and-forget para no
+  // bloquear el navigate; si falla se va a ver al recargar (no estará en la
+  // lista) y el perito puede recrear. En la práctica nunca falla.
+  idbPutInspection(insp).catch(() => {});
+  idbEnqueueMutation({ kind: "create", inspectionId: insp.id, data: insp.data })
+    .then(refreshPending)
+    .then(flushSyncQueue)
+    .then(requestBackgroundSync)
+    .catch(() => {});
   return insp;
-}
-
-function flushSave(id: string) {
-  const existing = memory.get(id);
-  if (!existing) return;
-  if (inflightSaves.has(id)) {
-    // Another PUT is in flight — schedule a follow-up after it completes.
-    pendingTimers.set(
-      id,
-      setTimeout(() => flushSave(id), SAVE_DEBOUNCE_MS),
-    );
-    return;
-  }
-  inflightSaves.add(id);
-  fetchJson(`/api/inspections/${id}`, {
-    method: "PUT",
-    body: JSON.stringify({ data: existing.data }),
-  })
-    .then((json: { inspection: StoredInspection }) => {
-      const server = mergeDefaults(json.inspection);
-      const current = memory.get(id);
-      // Preserve the latest in-memory data (the user may have typed more
-      // while the request was in flight) — only adopt server timestamps.
-      memory.set(id, {
-        ...server,
-        data: current ? current.data : server.data,
-      });
-    })
-    .catch(() => {
-      // Will be retried on the next edit.
-    })
-    .finally(() => {
-      inflightSaves.delete(id);
-    });
 }
 
 export function saveInspectionData(id: string, data: InspectionData) {
@@ -204,28 +307,24 @@ export function saveInspectionData(id: string, data: InspectionData) {
     data,
   };
   memory.set(id, updated);
-
-  const t = pendingTimers.get(id);
-  if (t) clearTimeout(t);
-  pendingTimers.set(
-    id,
-    setTimeout(() => {
-      pendingTimers.delete(id);
-      flushSave(id);
-    }, SAVE_DEBOUNCE_MS),
-  );
+  idbPutInspection(updated).catch(() => {});
+  // La queue coalesa updates al mismo id, así que tipear rápido no apila
+  // mutations — solo pisa el último payload.
+  idbEnqueueMutation({ kind: "update", inspectionId: id, data })
+    .then(refreshPending)
+    .then(flushSyncQueue)
+    .then(requestBackgroundSync)
+    .catch(() => {});
 }
 
 export function deleteInspection(id: string) {
   memory.delete(id);
-  const t = pendingTimers.get(id);
-  if (t) {
-    clearTimeout(t);
-    pendingTimers.delete(id);
-  }
-  fetchJson(`/api/inspections/${id}`, { method: "DELETE" }).catch(() => {
-    // Silent — user already sees it gone from the list.
-  });
+  idbDeleteInspection(id).catch(() => {});
+  idbEnqueueMutation({ kind: "delete", inspectionId: id })
+    .then(refreshPending)
+    .then(flushSyncQueue)
+    .then(requestBackgroundSync)
+    .catch(() => {});
 }
 
 export function duplicateInspection(id: string): StoredInspection | null {
@@ -244,7 +343,12 @@ export function duplicateInspection(id: string): StoredInspection | null {
     },
   };
   memory.set(copy.id, copy);
-  postCreate(copy);
+  idbPutInspection(copy).catch(() => {});
+  idbEnqueueMutation({ kind: "create", inspectionId: copy.id, data: copy.data })
+    .then(refreshPending)
+    .then(flushSyncQueue)
+    .then(requestBackgroundSync)
+    .catch(() => {});
   return copy;
 }
 
@@ -274,9 +378,6 @@ export async function resetStore(): Promise<void> {
   memory.clear();
   initialized = false;
   initPromise = null;
-  for (const t of pendingTimers.values()) clearTimeout(t);
-  pendingTimers.clear();
-  inflightSaves.clear();
 }
 
 /**

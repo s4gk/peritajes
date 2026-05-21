@@ -9,47 +9,10 @@ import {
   DialogContent,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { compressImage } from "@/lib/client/image-compress";
 import { cn } from "@/lib/utils";
 import type { InspectedImage } from "@/lib/types";
 import { makeId } from "@/lib/utils";
-
-const MAX_WIDTH = 1600;
-const MAX_BYTES = 500 * 1024; // ~500 KB per image post-downscale
-
-async function readAndDownscale(file: File): Promise<string> {
-  const dataUrl = await new Promise<string>((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(reader.result as string);
-    reader.onerror = () => reject(reader.error);
-    reader.readAsDataURL(file);
-  });
-
-  const img = await new Promise<HTMLImageElement>((resolve, reject) => {
-    const image = new window.Image();
-    image.onload = () => resolve(image);
-    image.onerror = () => reject(new Error("invalid image"));
-    image.src = dataUrl;
-  });
-
-  const scale = Math.min(1, MAX_WIDTH / img.width);
-  const targetW = Math.round(img.width * scale);
-  const targetH = Math.round(img.height * scale);
-
-  const canvas = document.createElement("canvas");
-  canvas.width = targetW;
-  canvas.height = targetH;
-  const ctx = canvas.getContext("2d");
-  if (!ctx) return dataUrl;
-  ctx.drawImage(img, 0, 0, targetW, targetH);
-
-  let quality = 0.85;
-  let out = canvas.toDataURL("image/jpeg", quality);
-  while (out.length > MAX_BYTES * 1.37 && quality > 0.4) {
-    quality -= 0.1;
-    out = canvas.toDataURL("image/jpeg", quality);
-  }
-  return out;
-}
 
 export type ImageUploadHandle = {
   openPicker: () => void;
@@ -83,8 +46,13 @@ export const ImageUpload = React.forwardRef<ImageUploadHandle, Props>(
         const added: InspectedImage[] = [];
         for (const file of Array.from(files)) {
           if (!file.type.startsWith("image/")) continue;
-          const dataUrl = await readAndDownscale(file);
-          added.push({ id: makeId(), dataUrl });
+          try {
+            const { dataUrl } = await compressImage(file);
+            added.push({ id: makeId(), dataUrl });
+          } catch {
+            // Si la compresión falla por un blob raro, lo ignoramos antes que
+            // meter en IDB una foto sin procesar (peligro de llenar storage).
+          }
         }
         onChange([...images, ...added]);
       } finally {
