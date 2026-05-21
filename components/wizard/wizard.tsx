@@ -12,6 +12,7 @@ import {
   Unlock,
 } from "lucide-react";
 
+import { ErrorBoundary } from "@/components/shared/error-boundary";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -23,59 +24,33 @@ import {
 import { Progress } from "@/components/ui/progress";
 import { useToast } from "@/components/ui/toast";
 import {
-  BODYWORK_SECTION,
-  CHASSIS_SECTION,
-  COMFORT_SECTION,
-  ELECTRICAL_SECTION,
-  ENGINE_SECTION,
+  activeSectionsFor,
+  activeStepsFor,
+  isWalkaroundStageStep,
+  PERITAJE_KINDS,
   LEAKS_SECTION,
   ROAD_TEST_SECTION,
-  SUSPENSION_SECTION,
+  VEHICLE_TYPES,
   WIZARD_STEPS,
+  walkaroundSequenceFor,
   type StepId,
+  type WalkaroundStageStepId,
 } from "@/lib/constants";
-import { findOption, requiresPhoto } from "@/lib/findings-catalog";
+import { findOption, minPhotosFor } from "@/lib/findings-catalog";
 import { downloadInspectionPdf } from "@/lib/pdf-client";
 import { formatDate } from "@/lib/utils";
-import type { InspectionData, InspectionEntry, InspectionSectionDef } from "@/lib/types";
+import type { InspectionData, InspectionEntry } from "@/lib/types";
 
 import { InspectionProvider, useInspection } from "./inspection-context";
 import { SaveIndicator } from "./save-indicator";
 import { Stepper, type StepStats } from "./stepper";
-import { ThemeToggle } from "./theme-toggle";
 import { UIPreferencesProvider } from "./ui-preferences";
 import { VehicleInfoStep } from "./steps/vehicle-info";
-import { SectionStep } from "./steps/section-step";
-import { TiresStep } from "./steps/tires";
-import { AccessoriesStep } from "./steps/accessories";
+import { RoadTestStep } from "./steps/road-test";
+import { ExtraPhotosStep } from "./steps/extra-photos";
+import { LeaksStep } from "./steps/leaks";
+import { WalkaroundStep } from "./steps/walkaround";
 import { SummaryStep } from "./steps/summary";
-
-const SECTION_MAP: Partial<Record<StepId, { section: InspectionSectionDef; description: string }>> = {
-  bodywork: {
-    section: BODYWORK_SECTION,
-    description:
-      "Estado visual de paneles, puertas, vidrios y componentes de carrocería.",
-  },
-  chassis: {
-    section: CHASSIS_SECTION,
-    description: "Integridad estructural: largueros, parantes y soldaduras.",
-  },
-  suspension: {
-    section: SUSPENSION_SECTION,
-    description: "Suspensión delantera y sistema de dirección.",
-  },
-  engine: { section: ENGINE_SECTION, description: "Desempeño, componentes y transmisión." },
-  electrical: {
-    section: ELECTRICAL_SECTION,
-    description: "Luces, indicadores y sistemas electrónicos.",
-  },
-  leaks: { section: LEAKS_SECTION, description: "Fugas de fluidos por sistema." },
-  comfort: { section: COMFORT_SECTION, description: "Aire, interior e infoentretenimiento." },
-  roadTest: {
-    section: ROAD_TEST_SECTION,
-    description: "Desempeño real del vehículo en recorrido.",
-  },
-};
 
 function countFindingsInRecord(record: Record<string, InspectionEntry>): number {
   let count = 0;
@@ -86,71 +61,204 @@ function countFindingsInRecord(record: Record<string, InspectionEntry>): number 
   return count;
 }
 
-function validateStep(
-  step: StepId,
-  data: InspectionData,
-): { ok: boolean; message?: string } {
+type ValidateResult = {
+  ok: boolean;
+  message?: string;
+  /** Aviso no bloqueante. Si `ok=true` y `warning` está seteado, `goNext`
+   *  muestra el toast de advertencia pero deja avanzar igual. Lo usamos para
+   *  fotos pendientes en etapas del recorrido: el perito puede resolverlas
+   *  en el paso final "Fotografías adicionales" en vez de quedar atrapado. */
+  warning?: string;
+  /** Id del input al que conviene mover el foco si falla. */
+  focusId?: string;
+  /** Id del item de inspección al que conviene scrollear si falla
+   *  (los rows de InspectionItemRow exponen `data-item-id`). */
+  scrollItemId?: string;
+};
+
+function validateStep(step: StepId, data: InspectionData): ValidateResult {
   if (step === "vehicle") {
     const v = data.vehicle;
-    if (!v.plate) return { ok: false, message: "Falta la placa del vehículo." };
-    if (!v.make) return { ok: false, message: "Falta la marca." };
-    if (!v.model) return { ok: false, message: "Falta el modelo." };
-    if (!/^\d{4}$/u.test(v.year)) return { ok: false, message: "Año inválido." };
-    if (!/^\d+$/u.test(v.mileage)) return { ok: false, message: "Kilometraje inválido." };
-    if (!v.inspector) return { ok: false, message: "Falta el nombre del perito." };
-    if (!v.date) return { ok: false, message: "Falta la fecha." };
+    if (!v.plate) return { ok: false, message: "Falta la placa del vehículo.", focusId: "plate" };
+    if (!v.make) return { ok: false, message: "Falta la marca.", focusId: "make" };
+    if (!v.model) return { ok: false, message: "Falta el modelo.", focusId: "model" };
+    if (!/^\d{4}$/u.test(v.year))
+      return { ok: false, message: "Año inválido.", focusId: "year" };
+    if (!/^\d+$/u.test(v.mileage))
+      return { ok: false, message: "Kilometraje inválido.", focusId: "mileage" };
+    if (!v.inspector) return { ok: false, message: "Falta el nombre del perito.", focusId: "inspector" };
+    if (!v.date) return { ok: false, message: "Falta la fecha.", focusId: "date" };
+    const docs = data.documents;
+    if (!docs?.ownershipCardFront?.length)
+      return { ok: false, message: "Falta foto del frente de la tarjeta de propiedad." };
+    if (!docs?.ownershipCardBack?.length)
+      return { ok: false, message: "Falta foto del reverso de la tarjeta de propiedad." };
     return { ok: true };
   }
 
-  const sectionForStep = SECTION_MAP[step]?.section;
-
-  if (sectionForStep) {
-    const record = data[sectionForStep.id] as Record<string, InspectionEntry>;
-    for (const group of sectionForStep.groups) {
-      for (const item of group.items) {
-        const entry = record[item.id];
-        if (
-          requiresPhoto(entry?.status) &&
-          (entry?.images.length ?? 0) === 0
-        ) {
+  if (isWalkaroundStageStep(step)) {
+    const active = activeSectionsFor(data.kind, data.vehicleType);
+    const sequence = walkaroundSequenceFor(data.vehicleType, active).filter(
+      (e) => e.stage === step,
+    );
+    // Acumulamos pendientes de foto como warning suave: el perito puede
+    // resolverlas en el paso final "Fotografías adicionales". Solo bloqueamos
+    // por errores duros (rango de profundidad fuera de [0,100]).
+    let missingPhotos = 0;
+    for (const entry of sequence) {
+      if (entry.kind === "item") {
+        const bucket = data[entry.sectionId] as
+          | Record<string, InspectionEntry>
+          | undefined;
+        const r = bucket?.[entry.itemId];
+        const need = minPhotosFor(r?.status);
+        const have = r?.images.length ?? 0;
+        if (need > 0 && have < need) missingPhotos += need - have;
+      } else if (entry.kind === "tire") {
+        const depthKey = (
+          {
+            fl: "frontLeft",
+            fr: "frontRight",
+            rl: "rearLeft",
+            rr: "rearRight",
+            spare: "spare",
+          } as const
+        )[entry.position];
+        const depth = data.tires[depthKey];
+        if (depth < 0 || depth > 100) {
           return {
             ok: false,
-            message: `Falta foto para "${item.label}" (hallazgo seleccionado).`,
+            message: `Profundidad fuera de rango en ${entry.label}.`,
           };
         }
+        const f = data.tires.findings?.[entry.position];
+        const need = minPhotosFor(f?.status);
+        const have = f?.images?.length ?? 0;
+        if (need > 0 && have < need) missingPhotos += need - have;
       }
+    }
+    if (missingPhotos > 0) {
+      return {
+        ok: true,
+        warning:
+          missingPhotos === 1
+            ? "Falta 1 foto en esta etapa. Podés subirla al final."
+            : `Faltan ${missingPhotos} fotos en esta etapa. Podés subirlas al final.`,
+      };
     }
     return { ok: true };
   }
 
-  if (step === "tires") {
-    const t = data.tires;
-    for (const v of [t.frontLeft, t.frontRight, t.rearLeft, t.rearRight, t.spare]) {
-      if (v < 0 || v > 100)
-        return { ok: false, message: "Valores de llantas deben estar entre 0 y 100." };
+  if (step === "extraPhotos") {
+    const m = data.mandatoryPhotos;
+    const slots: { key: keyof InspectionData["mandatoryPhotos"]; label: string }[] = [
+      { key: "diagonalFrontLeft", label: "Diagonal Delantera Izquierda" },
+      { key: "diagonalRearRight", label: "Diagonal Trasera Derecha" },
+      { key: "innerCabin", label: "Habitáculo Interno" },
+      { key: "chassisNumber", label: "Número de Chasis" },
+      { key: "engineNumber", label: "Número de Motor" },
+      { key: "idPlate", label: "Número de Plaqueta" },
+    ];
+    const missing = slots.filter((s) => !(m?.[s.key]?.length ?? 0));
+    if (missing.length > 0) {
+      return {
+        ok: false,
+        message:
+          missing.length === 1
+            ? `Falta la foto: ${missing[0].label}.`
+            : `Faltan ${missing.length} fotos obligatorias: ${missing.map((s) => s.label).join(", ")}.`,
+      };
     }
     return { ok: true };
   }
+
+  if (step === "leaks") {
+    const record = data.leaks;
+    let missingPhotos = 0;
+    for (const group of LEAKS_SECTION.groups) {
+      for (const item of group.items) {
+        const r = record[item.id];
+        const need = minPhotosFor(r?.status);
+        const have = r?.images.length ?? 0;
+        if (need > 0 && have < need) missingPhotos += need - have;
+      }
+    }
+    if (missingPhotos > 0) {
+      return {
+        ok: true,
+        warning:
+          missingPhotos === 1
+            ? "Falta 1 foto en líquidos del motor. Podés subirla al final."
+            : `Faltan ${missingPhotos} fotos en líquidos del motor. Podés subirlas al final.`,
+      };
+    }
+    return { ok: true };
+  }
+
+  if (step === "roadTest") {
+    if (data.roadTestSkipped) return { ok: true };
+    const record = data.roadTest;
+    let missingPhotos = 0;
+    for (const group of ROAD_TEST_SECTION.groups) {
+      for (const item of group.items) {
+        const r = record[item.id];
+        const need = minPhotosFor(r?.status);
+        const have = r?.images.length ?? 0;
+        if (need > 0 && have < need) missingPhotos += need - have;
+      }
+    }
+    if (missingPhotos > 0) {
+      return {
+        ok: true,
+        warning:
+          missingPhotos === 1
+            ? "Falta 1 foto en la prueba de ruta. Podés subirla al final."
+            : `Faltan ${missingPhotos} fotos en la prueba de ruta. Podés subirlas al final.`,
+      };
+    }
+    return { ok: true };
+  }
+
   return { ok: true };
 }
 
 function isStepComplete(step: StepId, data: InspectionData): boolean {
   if (!validateStep(step, data).ok) return false;
-
   if (step === "vehicle") return true;
-
-  const sectionForStep = SECTION_MAP[step]?.section;
-
-  if (sectionForStep) {
-    const record = data[sectionForStep.id] as Record<string, InspectionEntry>;
-    return sectionForStep.groups.every((g) =>
-      g.items.every((i) => !!record[i.id]?.status),
+  if (isWalkaroundStageStep(step)) {
+    const active = activeSectionsFor(data.kind, data.vehicleType);
+    const sequence = walkaroundSequenceFor(data.vehicleType, active).filter(
+      (e) => e.stage === step,
+    );
+    return sequence.every((entry) => {
+      if (entry.kind === "item") {
+        const bucket = data[entry.sectionId] as
+          | Record<string, InspectionEntry>
+          | undefined;
+        return !!bucket?.[entry.itemId]?.status;
+      }
+      if (entry.kind === "tire") {
+        return !!data.tires.findings?.[entry.position]?.status;
+      }
+      // Compounds: interior_delantera exige status en todos los sub-items;
+      // accessories lo damos por completo (el perito puede dejarla vacía).
+      if (entry.compoundKey === "interior_delantera") {
+        return Object.keys(data.comfort ?? {}).length > 0;
+      }
+      return true;
+    });
+  }
+  if (step === "leaks") {
+    return LEAKS_SECTION.groups.every((g) =>
+      g.items.every((i) => !!data.leaks[i.id]?.status),
     );
   }
-
-  const confirmed = data.confirmedSteps ?? [];
-  if (step === "tires") return confirmed.includes("tires");
-  if (step === "accessories") return confirmed.includes("accessories");
+  if (step === "roadTest") {
+    if (data.roadTestSkipped) return true;
+    return ROAD_TEST_SECTION.groups.every((g) =>
+      g.items.every((i) => !!data.roadTest[i.id]?.status),
+    );
+  }
   if (step === "summary") {
     return !!data.conclusion.generalCondition;
   }
@@ -158,12 +266,32 @@ function isStepComplete(step: StepId, data: InspectionData): boolean {
 }
 
 function WizardInner() {
-  const { data, setData, isHydrated, notFound, isReadOnly } = useInspection();
+  const { data, setData, isHydrated, notFound, isReadOnly, id: inspectionId } = useInspection();
   const [current, setCurrent] = React.useState<StepId>("vehicle");
   const [shortcutsOpen, setShortcutsOpen] = React.useState(false);
   const [pdfBusy, setPdfBusy] = React.useState(false);
   const toast = useToast();
   const router = useRouter();
+
+  const activeStepIds = React.useMemo(
+    () => activeStepsFor(data.kind, data.vehicleType),
+    [data.kind, data.vehicleType],
+  );
+  const activeStepSet = React.useMemo(() => new Set(activeStepIds), [activeStepIds]);
+  const activeSteps = React.useMemo(
+    () => WIZARD_STEPS.filter((s) => activeStepSet.has(s.id)),
+    [activeStepSet],
+  );
+  const kindDef = PERITAJE_KINDS[data.kind];
+  const vehicleTypeDef = VEHICLE_TYPES[data.vehicleType];
+
+  // If the user lands on a step that's not part of the active kind (rare:
+  // happens if the kind was changed mid-edit), snap back to the first step.
+  React.useEffect(() => {
+    if (!activeStepSet.has(current)) {
+      setCurrent(activeSteps[0]?.id ?? "vehicle");
+    }
+  }, [activeStepSet, activeSteps, current]);
 
   const handleReopen = React.useCallback(() => {
     if (typeof window !== "undefined" && !window.confirm(
@@ -178,7 +306,7 @@ function WizardInner() {
   const handleDownloadPdf = React.useCallback(async () => {
     setPdfBusy(true);
     try {
-      await downloadInspectionPdf(data);
+      await downloadInspectionPdf(data, "executive", inspectionId);
       toast.show({ title: "PDF generado", variant: "success" });
     } catch (err) {
       toast.show({
@@ -189,53 +317,109 @@ function WizardInner() {
     } finally {
       setPdfBusy(false);
     }
-  }, [data, toast]);
+  }, [data, toast, inspectionId]);
 
   const completed = React.useMemo(() => {
     const set = new Set<StepId>();
-    for (const s of WIZARD_STEPS) {
+    for (const s of activeSteps) {
       if (isStepComplete(s.id, data)) set.add(s.id);
     }
     return set;
-  }, [data]);
+  }, [activeSteps, data]);
 
   const statsByStep = React.useMemo(() => {
     const stats: Partial<Record<StepId, StepStats>> = {};
-    for (const [stepId, ref] of Object.entries(SECTION_MAP) as [
-      StepId,
-      (typeof SECTION_MAP)[StepId],
-    ][]) {
-      if (!ref) continue;
-      const record = data[ref.section.id] as Record<string, InspectionEntry>;
-      stats[stepId] = { findings: countFindingsInRecord(record) };
+    // Hallazgos por etapa del recorrido — contamos findings con tono
+    // warning/danger en los entries de cada etapa.
+    const active = activeSectionsFor(data.kind, data.vehicleType);
+    const sequence = walkaroundSequenceFor(data.vehicleType, active);
+    const byStage = new Map<StepId, number>();
+    for (const entry of sequence) {
+      let status: string | undefined;
+      if (entry.kind === "item") {
+        const bucket = data[entry.sectionId] as
+          | Record<string, InspectionEntry>
+          | undefined;
+        status = bucket?.[entry.itemId]?.status;
+      } else if (entry.kind === "tire") {
+        status = data.tires.findings?.[entry.position]?.status;
+      }
+      const opt = findOption(status);
+      if (opt && (opt.tone === "warning" || opt.tone === "danger")) {
+        byStage.set(entry.stage, (byStage.get(entry.stage) ?? 0) + 1);
+      }
     }
+    for (const [stageId, count] of byStage.entries()) {
+      stats[stageId] = { findings: count };
+    }
+    stats.roadTest = {
+      findings: data.roadTestSkipped ? 0 : countFindingsInRecord(data.roadTest),
+    };
+    stats.leaks = { findings: countFindingsInRecord(data.leaks) };
     return stats;
   }, [data]);
 
-  const currentIndex = WIZARD_STEPS.findIndex((s) => s.id === current);
-  const progress = Math.round(((currentIndex + 1) / WIZARD_STEPS.length) * 100);
+  const currentIndex = Math.max(
+    activeSteps.findIndex((s) => s.id === current),
+    0,
+  );
+  const progress = Math.round(((currentIndex + 1) / activeSteps.length) * 100);
 
   const goNext = React.useCallback(() => {
     const v = validateStep(current, data);
     if (!v.ok) {
       toast.show({ title: "Revise los datos", description: v.message, variant: "warning" });
+      // Mover el foco al campo / row que disparó el error mejora el flujo
+      // móvil: en pantallas chicas el toast puede quedar oculto detrás del
+      // teclado y sin esto el usuario no ve qué falta.
+      if (typeof window !== "undefined") {
+        if (v.focusId) {
+          const el = document.getElementById(v.focusId) as
+            | HTMLElement
+            | null;
+          if (el) {
+            el.scrollIntoView({ behavior: "smooth", block: "center" });
+            // El focus inmediato choca con el scroll suave en algunos
+            // browsers — postergamos un tick.
+            window.setTimeout(() => {
+              try {
+                el.focus({ preventScroll: true });
+              } catch {
+                /* noop */
+              }
+            }, 250);
+          }
+        } else if (v.scrollItemId) {
+          const el = document.querySelector<HTMLElement>(
+            `[data-item-id="${v.scrollItemId}"]`,
+          );
+          if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+        }
+      }
       return;
+    }
+    if (v.warning) {
+      toast.show({
+        title: "Fotos pendientes",
+        description: v.warning,
+        variant: "warning",
+      });
     }
     setData((prev) => {
       const list = prev.confirmedSteps ?? [];
       if (list.includes(current)) return prev;
       return { ...prev, confirmedSteps: [...list, current] };
     });
-    const next = WIZARD_STEPS[Math.min(currentIndex + 1, WIZARD_STEPS.length - 1)];
+    const next = activeSteps[Math.min(currentIndex + 1, activeSteps.length - 1)];
     setCurrent(next.id);
     if (typeof window !== "undefined") window.scrollTo({ top: 0, behavior: "smooth" });
-  }, [current, currentIndex, data, setData, toast]);
+  }, [activeSteps, current, currentIndex, data, setData, toast]);
 
   const goPrev = React.useCallback(() => {
-    const prev = WIZARD_STEPS[Math.max(currentIndex - 1, 0)];
+    const prev = activeSteps[Math.max(currentIndex - 1, 0)];
     setCurrent(prev.id);
     if (typeof window !== "undefined") window.scrollTo({ top: 0, behavior: "smooth" });
-  }, [currentIndex]);
+  }, [activeSteps, currentIndex]);
 
   // Keyboard shortcuts: N/P navigate, ? help. We skip when focus is on a field.
   React.useEffect(() => {
@@ -299,14 +483,17 @@ function WizardInner() {
             Volver a peritajes
           </Button>
           <h1 className="truncate text-xl font-semibold tracking-tight sm:text-2xl">
-            {data.vehicle.plate
-              ? `Peritaje · ${data.vehicle.plate}`
-              : "Nuevo peritaje"}
+            {kindDef.label} · {vehicleTypeDef.label}
           </h1>
           <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+            {data.vehicle.plate ? (
+              <span className="inline-flex items-center rounded-full border bg-muted/40 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider">
+                {data.vehicle.plate}
+              </span>
+            ) : null}
             <span>
-              Paso {currentIndex + 1} de {WIZARD_STEPS.length} ·{" "}
-              {WIZARD_STEPS[currentIndex].label}
+              Paso {currentIndex + 1} de {activeSteps.length} ·{" "}
+              {activeSteps[currentIndex]?.label ?? ""}
             </span>
             <SaveIndicator />
           </div>
@@ -321,7 +508,6 @@ function WizardInner() {
           >
             <Keyboard className="h-4 w-4" />
           </button>
-          <ThemeToggle />
         </div>
       </div>
 
@@ -332,6 +518,7 @@ function WizardInner() {
         onSelect={setCurrent}
         completed={completed}
         statsByStep={statsByStep}
+        steps={activeSteps}
       />
 
       {isReadOnly && (
@@ -375,64 +562,12 @@ function WizardInner() {
 
       <fieldset disabled={isReadOnly} className="m-0 min-w-0 border-0 p-0">
         {current === "vehicle" && <VehicleInfoStep />}
-        {current === "bodywork" && (
-          <SectionStep
-            section={BODYWORK_SECTION}
-            title="Carrocería"
-            description={SECTION_MAP.bodywork?.description}
-          />
+        {isWalkaroundStageStep(current) && (
+          <WalkaroundStep stage={current as WalkaroundStageStepId} />
         )}
-        {current === "chassis" && (
-          <SectionStep
-            section={CHASSIS_SECTION}
-            title="Chasis y estructura"
-            description={SECTION_MAP.chassis?.description}
-          />
-        )}
-        {current === "suspension" && (
-          <SectionStep
-            section={SUSPENSION_SECTION}
-            title="Suspensión delantera y dirección"
-            description={SECTION_MAP.suspension?.description}
-          />
-        )}
-        {current === "tires" && <TiresStep />}
-        {current === "engine" && (
-          <SectionStep
-            section={ENGINE_SECTION}
-            title="Motor"
-            description={SECTION_MAP.engine?.description}
-          />
-        )}
-        {current === "electrical" && (
-          <SectionStep
-            section={ELECTRICAL_SECTION}
-            title="Sistema eléctrico"
-            description={SECTION_MAP.electrical?.description}
-          />
-        )}
-        {current === "leaks" && (
-          <SectionStep
-            section={LEAKS_SECTION}
-            title="Fugas de fluidos"
-            description={SECTION_MAP.leaks?.description}
-          />
-        )}
-        {current === "comfort" && (
-          <SectionStep
-            section={COMFORT_SECTION}
-            title="Confort e interior"
-            description={SECTION_MAP.comfort?.description}
-          />
-        )}
-        {current === "roadTest" && (
-          <SectionStep
-            section={ROAD_TEST_SECTION}
-            title="Prueba de ruta"
-            description={SECTION_MAP.roadTest?.description}
-          />
-        )}
-        {current === "accessories" && <AccessoriesStep />}
+        {current === "leaks" && <LeaksStep />}
+        {current === "roadTest" && <RoadTestStep />}
+        {current === "extraPhotos" && <ExtraPhotosStep />}
         {current === "summary" && <SummaryStep />}
       </fieldset>
 
@@ -452,12 +587,12 @@ function WizardInner() {
           <span className="sm:hidden">Atrás</span>
         </Button>
         <div className="hidden text-xs text-muted-foreground sm:block">
-          {completed.size}/{WIZARD_STEPS.length} pasos completos
+          {completed.size}/{activeSteps.length} pasos completos
         </div>
         <Button
           onClick={goNext}
           size="lg"
-          disabled={currentIndex === WIZARD_STEPS.length - 1}
+          disabled={currentIndex === activeSteps.length - 1}
           className="h-11 flex-1 sm:flex-none"
         >
           <span>Siguiente</span>
@@ -505,9 +640,14 @@ function ShortcutRow({ keys, label }: { keys: string[]; label: string }) {
 export function Wizard({ id }: { id: string }) {
   return (
     <UIPreferencesProvider>
-      <InspectionProvider id={id}>
-        <WizardInner />
-      </InspectionProvider>
+      <ErrorBoundary
+        title="No se pudo cargar el peritaje"
+        description="Hubo un error al hidratar esta inspección. Si pasa seguido, copiá el detalle y avisanos."
+      >
+        <InspectionProvider id={id}>
+          <WizardInner />
+        </InspectionProvider>
+      </ErrorBoundary>
     </UIPreferencesProvider>
   );
 }

@@ -19,16 +19,24 @@ export type StepStats = {
   findings: number;
 };
 
+type StepEntry = (typeof WIZARD_STEPS)[number];
+
 type Props = {
   current: StepId;
   onSelect: (step: StepId) => void;
   completed: Set<StepId>;
   statsByStep?: Partial<Record<StepId, StepStats>>;
+  /** Optional whitelist; when provided, only these steps are shown. */
+  steps?: readonly StepEntry[];
 };
 
-export function Stepper({ current, onSelect, completed, statsByStep }: Props) {
-  const currentIndex = WIZARD_STEPS.findIndex((s) => s.id === current);
-  const currentStep = WIZARD_STEPS[currentIndex];
+export function Stepper({ current, onSelect, completed, statsByStep, steps }: Props) {
+  const visibleSteps: readonly StepEntry[] = steps ?? WIZARD_STEPS;
+  const currentIndex = Math.max(
+    visibleSteps.findIndex((s) => s.id === current),
+    0,
+  );
+  const currentStep = visibleSteps[currentIndex];
   const [drawerOpen, setDrawerOpen] = React.useState(false);
 
   const totalFindings = React.useMemo(() => {
@@ -57,9 +65,9 @@ export function Stepper({ current, onSelect, completed, statsByStep }: Props) {
             </span>
             <div className="min-w-0">
               <div className="text-[11px] uppercase tracking-wider text-muted-foreground">
-                Paso {currentIndex + 1} / {WIZARD_STEPS.length}
+                Paso {currentIndex + 1} / {visibleSteps.length}
               </div>
-              <div className="truncate text-sm font-semibold">{currentStep.label}</div>
+              <div className="truncate text-sm font-semibold">{currentStep?.label ?? ""}</div>
             </div>
           </div>
           <div className="flex shrink-0 items-center gap-2">
@@ -78,7 +86,7 @@ export function Stepper({ current, onSelect, completed, statsByStep }: Props) {
         aria-label="Progreso"
         className="no-scrollbar hidden gap-1 overflow-x-auto rounded-lg border bg-card p-1.5 md:flex"
       >
-        {WIZARD_STEPS.map((step, idx) => {
+        {visibleSteps.map((step, idx) => {
           const isDone = completed.has(step.id);
           const isActive = step.id === current;
           const stats = statsByStep?.[step.id];
@@ -138,7 +146,7 @@ export function Stepper({ current, onSelect, completed, statsByStep }: Props) {
           </DialogHeader>
           <div className="flex-1 overflow-y-auto px-2 py-2">
             <ul className="space-y-1">
-              {WIZARD_STEPS.map((step, idx) => {
+              {visibleSteps.map((step, idx) => {
                 const isDone = completed.has(step.id);
                 const isActive = step.id === current;
                 const stats = statsByStep?.[step.id];

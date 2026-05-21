@@ -11,8 +11,9 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { Progress } from "@/components/ui/progress";
 import { useToast } from "@/components/ui/toast";
-import { defaultOkValueFor } from "@/lib/findings-catalog";
+import { defaultOkValueFor, findOption } from "@/lib/findings-catalog";
 import type {
   InspectionData,
   InspectionEntry,
@@ -28,30 +29,68 @@ type Props = {
 };
 
 export function SectionStep({ section, title, description }: Props) {
-  const { data, setData } = useInspection();
+  const { data, setData, isReadOnly } = useInspection();
   const toast = useToast();
   const sectionData = data[section.id] as Record<string, InspectionEntry>;
+  const autoFilledRef = React.useRef(false);
 
-  const { filled, total, hasIssues } = React.useMemo(() => {
+  // Auto pre-mark every item as Original on first entry to a virgin section.
+  // Runs once per mount and only when the section has zero filled items, so
+  // it never overrides explicit perito picks (or a re-entry to a section the
+  // perito already cleared on purpose).
+  React.useEffect(() => {
+    if (autoFilledRef.current) return;
+    if (isReadOnly) return;
+    let anyFilled = false;
+    for (const g of section.groups) {
+      for (const it of g.items) {
+        if (sectionData?.[it.id]?.status) {
+          anyFilled = true;
+          break;
+        }
+      }
+      if (anyFilled) break;
+    }
+    if (anyFilled) {
+      autoFilledRef.current = true;
+      return;
+    }
+    autoFilledRef.current = true;
+    const nextRecord: Record<string, InspectionEntry> = { ...sectionData };
+    for (const group of section.groups) {
+      for (const item of group.items) {
+        const existing = nextRecord[item.id] ?? {
+          status: undefined,
+          notes: "",
+          images: [],
+        };
+        nextRecord[item.id] = { ...existing, status: defaultOkValueFor(item.kind) };
+      }
+    }
+    setData((prev) => ({ ...prev, [section.id]: nextRecord } as InspectionData));
+    // No toast on auto-fill: it'd fire every time the perito enters a fresh
+    // section, which gets noisy. The progress counter shows N/N immediately.
+  }, [section, sectionData, setData, isReadOnly]);
+
+  const { filled, total, issues } = React.useMemo(() => {
     let t = 0;
     let f = 0;
-    let issues = false;
+    let i = 0;
     for (const g of section.groups) {
       for (const it of g.items) {
         t += 1;
         const e = sectionData?.[it.id];
-        if (e?.status) {
+        const opt = findOption(e?.status);
+        if (opt) {
           f += 1;
-          // tone-based issue detection is handled in accordion; we only need counts here
+          if (opt.tone === "warning" || opt.tone === "danger") i += 1;
         }
       }
     }
-    return { filled: f, total: t, hasIssues: issues };
+    return { filled: f, total: t, issues: i };
   }, [section, sectionData]);
 
   function markAllOk() {
-    // Pre-compute from current data so we can notify without running side effects
-    // inside the state updater (which fires during render).
     let changed = 0;
     const nextRecord: Record<string, InspectionEntry> = { ...sectionData };
     for (const group of section.groups) {
@@ -80,19 +119,39 @@ export function SectionStep({ section, title, description }: Props) {
     setData((prev) => ({ ...prev, [section.id]: nextRecord } as InspectionData));
     toast.show({
       title: `${changed} ítem${changed === 1 ? "" : "s"} marcado${changed === 1 ? "" : "s"} OK`,
-      description: "Puede ajustar las excepciones directamente.",
+      description: "Toca cada ítem para ajustar las excepciones.",
       variant: "success",
     });
   }
 
   const allFilled = filled === total;
+  const pct = total === 0 ? 0 : Math.round((filled / total) * 100);
 
   return (
     <Card>
       <CardHeader className="space-y-3 sm:space-y-4">
         <div className="flex flex-col gap-1">
-          <CardTitle>{title}</CardTitle>
-          {description && <CardDescription>{description}</CardDescription>}
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0 flex-1">
+              <CardTitle>{title}</CardTitle>
+              {description && <CardDescription>{description}</CardDescription>}
+            </div>
+            <div className="shrink-0 text-right">
+              <div className="text-xs uppercase tracking-wide text-muted-foreground">
+                Inspeccionados
+              </div>
+              <div className="text-lg font-semibold tabular-nums">
+                {filled}
+                <span className="text-muted-foreground">/{total}</span>
+              </div>
+              {issues > 0 && (
+                <div className="text-[11px] font-medium text-warning">
+                  {issues} hallazgo{issues === 1 ? "" : "s"}
+                </div>
+              )}
+            </div>
+          </div>
+          <Progress value={pct} className="h-1.5" />
         </div>
         {!allFilled && (
           <Button
@@ -103,8 +162,7 @@ export function SectionStep({ section, title, description }: Props) {
           >
             <CheckCheck className="h-4 w-4" />
             <span>
-              Todo OK en {title.toLowerCase()} · marcar {total - filled} restante
-              {total - filled === 1 ? "" : "s"}
+              Marcar {total - filled} restante{total - filled === 1 ? "" : "s"} como original
             </span>
           </Button>
         )}

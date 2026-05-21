@@ -19,6 +19,7 @@ import {
 } from "@/components/ui/dialog";
 import { SignaturePad } from "@/components/shared/signature-pad";
 import { useToast } from "@/components/ui/toast";
+import { apiFetch } from "@/lib/client/api-client";
 import { cn } from "@/lib/utils";
 
 type SessionContext = {
@@ -36,6 +37,9 @@ type Props = {
   value: string | undefined;
   onChange: (dataUrl: string | undefined) => void;
   buildContext: () => SessionContext;
+  /** Teléfono del cliente para mandarle el link de firma por WhatsApp.
+   *  Si está vacío, no se envía nada (el perito muestra el QR en pantalla). */
+  clientPhone?: string;
 };
 
 const POLL_INTERVAL_MS = 2500;
@@ -46,6 +50,7 @@ export function ClientSignatureCapture({
   value,
   onChange,
   buildContext,
+  clientPhone,
 }: Props) {
   const [dialogOpen, setDialogOpen] = React.useState(false);
   const [mode, setMode] = React.useState<"idle" | "qr" | "manual">("idle");
@@ -72,10 +77,13 @@ export function ClientSignatureCapture({
     setToken(null);
     setQrDataUrl(null);
     try {
-      const res = await fetch("/api/sign/session", {
+      const res = await apiFetch("/api/sign/session", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ context: buildContext() }),
+        body: JSON.stringify({
+          context: buildContext(),
+          clientPhone: clientPhone?.trim() || null,
+        }),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = (await res.json()) as { token: string; expiresAt: number };

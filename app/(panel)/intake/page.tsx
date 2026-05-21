@@ -2,7 +2,14 @@
 
 import * as React from "react";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, Loader2, Search } from "lucide-react";
+import {
+  ArrowLeft,
+  ArrowRight,
+  CheckCircle2,
+  ClipboardList,
+  DollarSign,
+  Gauge,
+} from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -12,8 +19,6 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import {
   Select,
   SelectContent,
@@ -21,123 +26,43 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { useToast } from "@/components/ui/toast";
+import {
+  PERITAJE_KINDS,
+  VEHICLE_TYPE_ORDER,
+  VEHICLE_TYPES,
+} from "@/lib/constants";
 import { createInspection, initStore } from "@/lib/inspections-store";
-import type { VehicleInfo } from "@/lib/types";
-import type { VerifikSnapshot } from "@/lib/verifik/types";
+import { cn } from "@/lib/utils";
+import type { PeritajeKind, VehicleType } from "@/lib/types";
 
-const DOCUMENT_TYPES = [
-  { value: "CC", label: "Cédula de ciudadanía" },
-  { value: "CE", label: "Cédula de extranjería" },
-  { value: "TI", label: "Tarjeta de identidad" },
-  { value: "PA", label: "Pasaporte" },
-  { value: "NIT", label: "NIT" },
-];
-
-type LookupResponse = {
-  configured?: boolean;
-  message?: string;
-  result?: Partial<VehicleInfo>;
-  snapshot?: VerifikSnapshot;
-  warnings?: string[];
-  error?: string;
+const KIND_ICONS: Record<PeritajeKind, React.ComponentType<{ className?: string }>> = {
+  complete: ClipboardList,
+  quick: Gauge,
+  appraisal: DollarSign,
 };
+
+const KIND_ORDER: PeritajeKind[] = ["complete", "quick", "appraisal"];
 
 export default function IntakePage() {
   const router = useRouter();
-  const toast = useToast();
-
-  const [documentType, setDocumentType] = React.useState("CC");
-  const [documentNumber, setDocumentNumber] = React.useState("");
-  const [plate, setPlate] = React.useState("");
-  const [loading, setLoading] = React.useState(false);
+  const [vehicleType, setVehicleType] = React.useState<VehicleType | null>(null);
+  const [kind, setKind] = React.useState<PeritajeKind | null>(null);
 
   React.useEffect(() => {
     void initStore();
   }, []);
 
-  const canSubmit =
-    !!documentType.trim() && !!documentNumber.trim() && plate.trim().length >= 5;
-
-  async function startWithLookup() {
-    if (!canSubmit || loading) return;
-    setLoading(true);
-    try {
-      const params = new URLSearchParams({
-        documentType,
-        documentNumber: documentNumber.trim(),
-        plate: plate.trim().toUpperCase(),
-      });
-      const res = await fetch(`/api/plate-lookup?${params.toString()}`);
-      const body = (await res.json().catch(() => ({}))) as LookupResponse;
-
-      if (res.status === 501) {
-        toast.show({
-          title: "Verifik no está configurado",
-          description:
-            body.message ?? "Falta VERIFIK_TOKEN en el servidor. Inicia manual mientras se configura.",
-          variant: "warning",
-        });
-        return;
-      }
-      if (!res.ok || (!body.result && !body.snapshot)) {
-        toast.show({
-          title: "No se pudo consultar la placa",
-          description: body.error ?? `El proveedor respondió con error (${res.status}).`,
-          variant: "danger",
-        });
-        return;
-      }
-
-      const seed = body.result ?? {};
-      const snapshot = body.snapshot;
-
-      const created = createInspection({
-        vehicle: {
-          ...seed,
-          plate: plate.trim().toUpperCase(),
-          owner: seed.owner ?? "",
-        },
-        verifik: snapshot,
-      });
-
-      if (body.warnings && body.warnings.length > 0) {
-        toast.show({
-          title: "Consulta parcial",
-          description: body.warnings.join(" · "),
-          variant: "warning",
-        });
-      } else {
-        toast.show({
-          title: "Datos importados",
-          description: "FASECOLDA + RUNT cargados. Verifica los campos antes de continuar.",
-          variant: "success",
-        });
-      }
-      router.push(`/inspection/${created.id}`);
-    } catch (err) {
-      toast.show({
-        title: "Sin conexión al proveedor",
-        description: (err as Error)?.message ?? "Verifica tu red e inténtalo de nuevo.",
-        variant: "danger",
-      });
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  function startManual() {
-    const created = createInspection(
-      plate.trim()
-        ? { vehicle: { plate: plate.trim().toUpperCase() } }
-        : undefined,
-    );
+  function startInspection() {
+    if (!vehicleType || !kind) return;
+    const created = createInspection({ kind, vehicleType });
     router.push(`/inspection/${created.id}`);
   }
 
+  const canStart = !!vehicleType && !!kind;
+
   return (
     <div className="min-h-screen bg-muted/30 py-6">
-      <div className="container max-w-2xl">
+      <div className="mx-auto w-full max-w-screen-2xl px-4 sm:px-6 lg:px-8">
         <div className="mb-4">
           <Button
             type="button"
@@ -153,84 +78,128 @@ export default function IntakePage() {
           <CardHeader>
             <CardTitle>Nuevo peritaje</CardTitle>
             <CardDescription>
-              Ingresa la placa y la cédula del propietario para consultar
-              FASECOLDA + RUNT y precargar el peritaje. Esta consulta tiene
-              costo (~0.8 USD por placa).
+              Elegí el tipo de vehículo a inspeccionar y el tipo de peritaje. Cada
+              combinación define el inventario de carrocería y los pasos del
+              wizard.
             </CardDescription>
           </CardHeader>
-          <CardContent className="space-y-5">
-            <div className="grid gap-4 sm:grid-cols-2">
-              <div className="space-y-1.5">
-                <Label htmlFor="docType">Tipo de documento del propietario *</Label>
-                <Select value={documentType} onValueChange={setDocumentType}>
-                  <SelectTrigger id="docType" className="h-11 sm:h-10">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {DOCUMENT_TYPES.map((d) => (
-                      <SelectItem key={d.value} value={d.value}>
-                        {d.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+          <CardContent className="space-y-8">
+            <section className="space-y-2">
+              <div className="flex items-baseline gap-2">
+                <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-primary text-xs font-semibold text-primary-foreground">
+                  1
+                </span>
+                <h3 className="text-base font-semibold">Tipo de vehículo</h3>
               </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="docNumber">Número de documento *</Label>
-                <Input
-                  id="docNumber"
-                  inputMode="numeric"
-                  value={documentNumber}
-                  onChange={(e) => setDocumentNumber(e.target.value.replace(/\s+/g, ""))}
-                  placeholder="123456789"
-                  className="h-11 sm:h-10"
-                  autoComplete="off"
-                />
-              </div>
-              <div className="space-y-1.5 sm:col-span-2">
-                <Label htmlFor="plate">Placa del vehículo *</Label>
-                <Input
-                  id="plate"
-                  value={plate}
-                  onChange={(e) => setPlate(e.target.value.toUpperCase().replace(/\s+/g, ""))}
-                  placeholder="ABC123"
-                  maxLength={7}
-                  className="h-11 text-base font-semibold tracking-wider sm:h-10 sm:text-sm"
-                  autoComplete="off"
-                />
-              </div>
-            </div>
-
-            <div className="rounded-md border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
-              <p>
-                <strong>¿Qué se consulta?</strong> FASECOLDA (marca, línea, valor de mercado, equipamiento)
-                + RUNT (VIN, motor, color, prendas, SOAT, RTM, historial). Los datos pre-llenan el
-                formulario, pero vos siempre verificás contra el carro físico.
-              </p>
-            </div>
-
-            <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
-              <Button
-                type="button"
-                variant="ghost"
-                onClick={startManual}
-                disabled={loading}
-                className="h-11 sm:h-10"
+              <Select
+                value={vehicleType ?? undefined}
+                onValueChange={(v) => setVehicleType(v as VehicleType)}
               >
-                Iniciar manual sin consulta
-              </Button>
-              <Button
-                type="button"
-                onClick={startWithLookup}
-                disabled={!canSubmit || loading}
-                className="h-11 sm:h-10"
-              >
-                {loading ? (
-                  <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
-                ) : (
-                  <Search className="mr-1.5 h-4 w-4" />
+                <SelectTrigger className="h-11 w-full sm:max-w-md">
+                  <SelectValue placeholder="Elegí el tipo de vehículo…" />
+                </SelectTrigger>
+                <SelectContent>
+                  {VEHICLE_TYPE_ORDER.map((vt) => (
+                    <SelectItem key={vt} value={vt}>
+                      {VEHICLE_TYPES[vt].label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {vehicleType && (
+                <p className="text-xs leading-snug text-muted-foreground sm:max-w-md">
+                  {VEHICLE_TYPES[vehicleType].description}
+                </p>
+              )}
+            </section>
+
+            <section className="space-y-3">
+              <div className="flex items-baseline gap-2">
+                <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-primary text-xs font-semibold text-primary-foreground">
+                  2
+                </span>
+                <h3 className="text-base font-semibold">Tipo de peritaje</h3>
+                {kind && (
+                  <span className="text-xs text-muted-foreground">
+                    · {PERITAJE_KINDS[kind].label}
+                  </span>
                 )}
-                {loading ? "Consultando…" : "Consultar y empezar"}
+              </div>
+              <div className="grid gap-3 md:grid-cols-3">
+                {KIND_ORDER.map((k) => {
+                  const def = PERITAJE_KINDS[k];
+                  const Icon = KIND_ICONS[k];
+                  const selected = kind === k;
+                  return (
+                    <button
+                      key={k}
+                      type="button"
+                      onClick={() => setKind(k)}
+                      aria-pressed={selected}
+                      className={cn(
+                        "group relative flex flex-col gap-3 rounded-xl border-2 p-5 text-left transition-all",
+                        selected
+                          ? "border-primary bg-primary/5 shadow-sm"
+                          : "border-border bg-card hover:border-primary/40 hover:bg-muted/30",
+                      )}
+                    >
+                      {selected && (
+                        <span className="absolute right-3 top-3 inline-flex h-6 w-6 items-center justify-center rounded-full bg-primary text-primary-foreground">
+                          <CheckCircle2 className="h-4 w-4" />
+                        </span>
+                      )}
+                      <span
+                        className={cn(
+                          "inline-flex h-10 w-10 items-center justify-center rounded-lg",
+                          selected
+                            ? "bg-primary/15 text-primary"
+                            : "bg-muted text-muted-foreground group-hover:bg-primary/10 group-hover:text-primary",
+                        )}
+                      >
+                        <Icon className="h-5 w-5" />
+                      </span>
+                      <div className="space-y-1">
+                        <div className="text-base font-semibold leading-tight">
+                          {def.label}
+                        </div>
+                        <p className="text-xs leading-relaxed text-muted-foreground">
+                          {def.description}
+                        </p>
+                      </div>
+                      <div className="mt-auto flex items-center gap-1.5 pt-1 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+                        <span
+                          className={cn(
+                            "inline-flex h-5 min-w-5 items-center justify-center rounded-full px-1.5 text-[10px] font-bold",
+                            selected
+                              ? "bg-primary text-primary-foreground"
+                              : "bg-muted",
+                          )}
+                        >
+                          {def.sections.length}
+                        </span>
+                        secciones
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </section>
+
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+              <p className="text-xs text-muted-foreground">
+                {canStart
+                  ? "Listo. Después de iniciar llenás los datos del vehículo dentro del peritaje."
+                  : "Elegí tipo de vehículo y tipo de peritaje para continuar."}
+              </p>
+              <Button
+                type="button"
+                onClick={startInspection}
+                size="lg"
+                className="h-11"
+                disabled={!canStart}
+              >
+                Iniciar peritaje
+                <ArrowRight className="ml-1.5 h-4 w-4" />
               </Button>
             </div>
           </CardContent>

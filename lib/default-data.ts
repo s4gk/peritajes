@@ -1,6 +1,6 @@
-import { ALL_SECTIONS } from "./constants";
+import { ALL_SECTIONS, DEFAULT_PERITAJE_KIND, FALLBACK_VEHICLE_TYPE } from "./constants";
 import { defaultOkValueFor } from "./findings-catalog";
-import type { InspectionData, InspectionEntry } from "./types";
+import type { CylinderEntry, InspectionData, InspectionEntry } from "./types";
 
 /**
  * DEMO MODE
@@ -8,10 +8,11 @@ import type { InspectionData, InspectionEntry } from "./types";
  * `emptyInspection()` pre-rellena todos los campos con datos de prueba para que
  * el perito pueda recorrer el wizard rápido mientras revisa la app.
  *
- * Para volver a un peritaje vacío en producción, pon DEMO_MODE = false y se
- * usarán los defaults en blanco.
+ * En prod queremos peritajes en blanco. Lo controlamos por env var pública
+ * (NEXT_PUBLIC_DEMO_MODE) — en dev local podés ponerla en "true" para que el
+ * wizard arranque sembrado y vaya rápido al hacer pruebas.
  */
-const DEMO_MODE = true;
+const DEMO_MODE = process.env.NEXT_PUBLIC_DEMO_MODE === "true";
 
 function emptySection(sectionId: string): Record<string, InspectionEntry> {
   const section = ALL_SECTIONS.find((s) => s.id === sectionId);
@@ -23,6 +24,47 @@ function emptySection(sectionId: string): Record<string, InspectionEntry> {
     }
   }
   return acc;
+}
+
+/** Mínimo de cilindros que el grupo "Compresión" siempre muestra. La UI no
+ *  deja borrar por debajo de este número y `ensureMinCylinders` rellena
+ *  peritajes guardados con menos. */
+export const MIN_CYLINDERS = 3;
+
+/** Cilindros iniciales que aparecen en el grupo "Compresión" del paso Motor.
+ *  El perito puede agregar más, pero nunca queda con menos de MIN_CYLINDERS. */
+export function initialCylinders(count = MIN_CYLINDERS): CylinderEntry[] {
+  return Array.from({ length: count }, (_, i) => ({
+    id: `cyl-${i + 1}`,
+    label: `Cilindro ${i + 1}`,
+    status: undefined,
+    notes: "",
+    images: [],
+  }));
+}
+
+/** Si la lista guardada tiene menos cilindros que el mínimo, la rellena
+ *  preservando los existentes. Usado al hidratar peritajes legacy o que
+ *  arrastran un campo vacío. */
+export function ensureMinCylinders(
+  list: CylinderEntry[],
+  min = MIN_CYLINDERS,
+): CylinderEntry[] {
+  if (list.length >= min) return list;
+  const padding: CylinderEntry[] = Array.from(
+    { length: min - list.length },
+    (_, i) => {
+      const n = list.length + i + 1;
+      return {
+        id: `cyl-${n}`,
+        label: `Cilindro ${n}`,
+        status: undefined,
+        notes: "",
+        images: [],
+      };
+    },
+  );
+  return [...list, ...padding];
 }
 
 /** Rellena una sección marcando todos los items con el valor "OK" por defecto. */
@@ -45,22 +87,45 @@ function demoSection(sectionId: string): Record<string, InspectionEntry> {
 export function emptyInspection(): InspectionData {
   if (!DEMO_MODE) {
     return {
+      kind: DEFAULT_PERITAJE_KIND,
+      vehicleType: FALLBACK_VEHICLE_TYPE,
       vehicle: {
         plate: "",
         vin: "",
+        chassisNumber: "",
+        engineNumber: "",
         make: "",
         model: "",
         year: "",
         color: "",
+        vehicleClass: "",
+        nationality: "",
+        cylinderCapacity: "",
+        serviceType: "",
+        paintCondition: "",
         mileage: "",
         fuel: "",
         transmission: "",
         bodyType: "",
         owner: "",
+        ownerDocument: "",
+        ownerPhone: "",
+        insurer: "",
+        hasClaimsHistory: "",
+        claimsCount: "",
+        claimsValue: "",
+        propertyCardStatus: "",
+        sibgaCode: "",
+        depreciationPct: "",
+        depreciationNotes: "",
         inspector: "",
         inspectorId: "",
         location: "",
         date: new Date().toISOString().slice(0, 10),
+      },
+      documents: {
+        ownershipCardFront: [],
+        ownershipCardBack: [],
       },
       bodywork: emptySection("bodywork"),
       chassis: emptySection("chassis"),
@@ -75,10 +140,21 @@ export function emptyInspection(): InspectionData {
         images: [],
       },
       engine: emptySection("engine"),
+      engineCompression: initialCylinders(),
       electrical: emptySection("electrical"),
       leaks: emptySection("leaks"),
       comfort: emptySection("comfort"),
       roadTest: emptySection("roadTest"),
+      roadTestSkipped: false,
+      extraPhotos: [],
+      mandatoryPhotos: {
+        diagonalFrontLeft: [],
+        diagonalRearRight: [],
+        innerCabin: [],
+        chassisNumber: [],
+        engineNumber: [],
+        idPlate: [],
+      },
       accessories: [],
       confirmedSteps: [],
       status: "draft",
@@ -94,22 +170,46 @@ export function emptyInspection(): InspectionData {
 
   // Datos de demostración — todo listo para pasar rápido por el wizard
   return {
+    kind: DEFAULT_PERITAJE_KIND,
+    vehicleType: FALLBACK_VEHICLE_TYPE,
     vehicle: {
       plate: "DEMO123",
       vin: "1HGBH41JXMN109186",
+      chassisNumber: "1HGBH41JXMN109186",
+      engineNumber: "M20A3001234",
       make: "Toyota",
-      model: "Corolla Cross",
+      model: "Corolla Cross XEi 2.0",
       year: "2023",
       color: "Blanco Perla",
+      vehicleClass: "Camioneta",
+      nationality: "Importado",
+      cylinderCapacity: "1987",
+      serviceType: "Particular",
+      paintCondition: "Original",
       mileage: "28500",
       fuel: "gasoline",
       transmission: "automatic",
       bodyType: "SUV",
       owner: "Laura Restrepo Gómez",
+      ownerDocument: "1.020.456.789",
+      ownerPhone: "+57 310 555 1234",
+      insurer: "Seguros Sura",
+      hasClaimsHistory: "No",
+      claimsCount: "0",
+      claimsValue: "0",
+      propertyCardStatus: "Original",
+      sibgaCode: "TY-CRC-23-XEI20",
+      depreciationPct: "12",
+      depreciationNotes:
+        "Depreciación moderada: 2 años de uso, kilometraje bajo (28.500 km), sin reparaciones estructurales ni reportes de siniestros.",
       inspector: "Carlos Mendoza",
       inspectorId: "PI-20451",
       location: "Bogotá · Carrera 15 #93-47",
       date: new Date().toISOString().slice(0, 10),
+    },
+    documents: {
+      ownershipCardFront: [],
+      ownershipCardBack: [],
     },
     bodywork: demoSection("bodywork"),
     chassis: demoSection("chassis"),
@@ -125,21 +225,27 @@ export function emptyInspection(): InspectionData {
       images: [],
     },
     engine: demoSection("engine"),
+    engineCompression: [
+      { id: "cyl-1", label: "Cilindro 1", status: "mech_optimal", notes: "165 psi", images: [] },
+      { id: "cyl-2", label: "Cilindro 2", status: "mech_optimal", notes: "162 psi", images: [] },
+      { id: "cyl-3", label: "Cilindro 3", status: "mech_optimal", notes: "160 psi", images: [] },
+      { id: "cyl-4", label: "Cilindro 4", status: "mech_optimal", notes: "163 psi", images: [] },
+    ],
     electrical: demoSection("electrical"),
     leaks: demoSection("leaks"),
     comfort: demoSection("comfort"),
     roadTest: demoSection("roadTest"),
-    accessories: [
-      { id: "a-tapetes", name: "Tapetes", status: "mech_optimal", notes: "" },
-      { id: "a-llave-extra", name: "Llave extra", status: "mech_optimal", notes: "" },
-      { id: "a-manual", name: "Manual del propietario", status: "mech_optimal", notes: "" },
-      { id: "a-gato", name: "Gato", status: "mech_optimal", notes: "" },
-      { id: "a-cruceta", name: "Cruceta", status: "mech_optimal", notes: "" },
-      { id: "a-triangulos", name: "Triángulos de seguridad", status: "mech_optimal", notes: "" },
-      { id: "a-botiquin", name: "Botiquín", status: "mech_optimal", notes: "" },
-      { id: "a-extintor", name: "Extintor", status: "mech_optimal", notes: "Vigente 2026" },
-      { id: "a-camara", name: "Cámara de reversa", status: "mech_optimal", notes: "" },
-    ],
+    roadTestSkipped: false,
+    extraPhotos: [],
+    mandatoryPhotos: {
+      diagonalFrontLeft: [],
+      diagonalRearRight: [],
+      innerCabin: [],
+      chassisNumber: [],
+      engineNumber: [],
+      idPlate: [],
+    },
+    accessories: [],
     confirmedSteps: [
       "vehicle",
       "bodywork",

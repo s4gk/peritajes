@@ -8,7 +8,7 @@ import {
 } from "@/lib/findings-catalog";
 import type { ItemKind } from "@/lib/types";
 
-const KINDS: ItemKind[] = ["bodywork", "structural", "mechanical", "road_test", "leak"];
+const KINDS: ItemKind[] = ["bodywork", "structural", "mechanical", "road_test", "leak", "light_unit", "panoramic"];
 
 describe("findings-catalog: structural integrity", () => {
   it("every kind has a catalog with at least one quick OK option", () => {
@@ -62,9 +62,19 @@ describe("findOption", () => {
   });
 
   it("finds quick options across catalogs", () => {
+    expect(findOption("common_good")?.tone).toBe("success");
+    expect(findOption("leak_none")?.tone).toBe("success");
+    expect(findOption("road_optimal")?.tone).toBe("success");
+  });
+
+  it("preserves legacy values for historical peritajes", () => {
+    // Catálogos viejos (bodywork/structural/mechanical) ya no son seleccionables,
+    // pero sus valores siguen resolviendo labels para peritajes ya guardados.
     expect(findOption("original")?.tone).toBe("success");
     expect(findOption("mech_optimal")?.tone).toBe("success");
-    expect(findOption("leak_none")?.tone).toBe("success");
+    expect(findOption("structural_original")?.tone).toBe("success");
+    expect(findOption("repainted_full")?.tone).toBe("warning");
+    expect(findOption("scratch_surface")?.tone).toBe("warning");
   });
 
   it("finds danger options with correct severity", () => {
@@ -77,23 +87,28 @@ describe("findOption", () => {
 
 describe("defaultOkValueFor", () => {
   it("returns the success value for each kind", () => {
-    expect(defaultOkValueFor("bodywork")).toBe("original");
-    expect(defaultOkValueFor("structural")).toBe("structural_original");
-    expect(defaultOkValueFor("mechanical")).toBe("mech_optimal");
+    expect(defaultOkValueFor("bodywork")).toBe("common_good");
+    expect(defaultOkValueFor("structural")).toBe("common_good");
+    expect(defaultOkValueFor("mechanical")).toBe("common_good");
     expect(defaultOkValueFor("road_test")).toBe("road_optimal");
     expect(defaultOkValueFor("leak")).toBe("leak_none");
+    expect(defaultOkValueFor("light_unit")).toBe("light_ok");
+    expect(defaultOkValueFor("panoramic")).toBe("panoramic_good");
   });
 });
 
 describe("isOkFinding", () => {
   it("treats success and neutral as OK", () => {
-    expect(isOkFinding("original")).toBe(true);
+    expect(isOkFinding("common_good")).toBe(true);
     expect(isOkFinding("na")).toBe(true);
-    expect(isOkFinding("mech_optimal")).toBe(true);
+    expect(isOkFinding("original")).toBe(true); // legacy
+    expect(isOkFinding("mech_optimal")).toBe(true); // legacy
   });
 
   it("treats warning/danger as not OK", () => {
-    expect(isOkFinding("repainted_full")).toBe(false);
+    expect(isOkFinding("common_regular")).toBe(false);
+    expect(isOkFinding("common_deformed")).toBe(false);
+    expect(isOkFinding("repainted_full")).toBe(false); // legacy
     expect(isOkFinding("road_braking_deficient")).toBe(false);
   });
 
@@ -104,15 +119,14 @@ describe("isOkFinding", () => {
 });
 
 describe("requiresPhoto", () => {
-  it("requires photo for warnings and dangers", () => {
-    expect(requiresPhoto("repainted_full")).toBe(true);
-    expect(requiresPhoto("road_braking_deficient")).toBe(true);
-  });
-
-  it("does not require photo for OK / N/A / unknown", () => {
-    expect(requiresPhoto("original")).toBe(false);
+  it("never requires a photo — la foto siempre es opcional", () => {
+    // Antes algunas calificaciones forzaban foto; ahora todas son opcionales.
+    expect(requiresPhoto("common_good")).toBe(false);
+    expect(requiresPhoto("common_regular")).toBe(false);
+    expect(requiresPhoto("common_deformed")).toBe(false);
+    expect(requiresPhoto("road_braking_deficient")).toBe(false);
     expect(requiresPhoto("na")).toBe(false);
-    expect(requiresPhoto("mech_optimal")).toBe(false);
+    expect(requiresPhoto("original")).toBe(false); // legacy
     expect(requiresPhoto(undefined)).toBe(false);
     expect(requiresPhoto("does_not_exist")).toBe(false);
   });

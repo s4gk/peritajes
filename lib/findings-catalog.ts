@@ -44,7 +44,41 @@ export type FindingCatalog = {
 };
 
 /* -----------------------------------------------------------
- *  BODYWORK — exterior panels, glass, lights
+ *  COMMON — calificación unificada para estructura, carrocería,
+ *  suspensión, motor, eléctrico y confort. 8 opciones simples que
+ *  cubren el espectro de hallazgos visuales/mecánicos sin meterse en
+ *  taxonomías técnicas detalladas.
+ * --------------------------------------------------------- */
+const COMMON_CATALOG: FindingCatalog = {
+  quick: [
+    { value: "common_good", label: "Bueno", tone: "success", risks: ["original"] },
+    { value: "na", label: "N/A", tone: "neutral", risks: ["na"] },
+  ],
+  categories: [
+    {
+      label: "Estado",
+      options: [
+        { value: "common_regular", label: "Regular", tone: "warning", severity: 1, risks: ["damage"] },
+        { value: "common_scratch", label: "Rayón", tone: "warning", severity: 1, risks: ["damage"] },
+        { value: "common_sunken", label: "Sumido", tone: "warning", severity: 2, risks: ["damage"] },
+        { value: "common_deformed", label: "Deformado", tone: "danger", severity: 3, risks: ["damage"] },
+      ],
+    },
+    {
+      label: "Intervención",
+      options: [
+        { value: "common_well_repaired", label: "Bien reparado", tone: "warning", severity: 1, risks: ["repaired"] },
+        { value: "common_repainted", label: "Repintado", tone: "warning", severity: 1, risks: ["repainted"] },
+        { value: "common_poor_repair", label: "Mal reparado", tone: "danger", severity: 3, risks: ["poor_repair", "repaired"] },
+      ],
+    },
+  ],
+};
+
+/* -----------------------------------------------------------
+ *  BODYWORK — exterior panels, glass, lights (LEGACY — conservado
+ *  para que findOption() resuelva labels de peritajes guardados
+ *  antes del cambio a COMMON_CATALOG).
  * --------------------------------------------------------- */
 const BODYWORK_CATALOG: FindingCatalog = {
   quick: [
@@ -124,6 +158,57 @@ const BODYWORK_CATALOG: FindingCatalog = {
         { value: "loose_fit", label: "Desajuste / encaje irregular", tone: "warning", severity: 2, risks: ["fit", "poor_repair"] },
         { value: "crack", label: "Fisura / grieta", tone: "danger", severity: 2, risks: ["damage"] },
         { value: "missing_part", label: "Pieza faltante", tone: "danger", severity: 2, risks: ["missing"] },
+      ],
+    },
+  ],
+};
+
+/* -----------------------------------------------------------
+ *  PANORAMIC — parabrisas delantero (vistas izq/der) y vidrio trasero.
+ *  3 calificaciones específicas para vidrios panorámicos.
+ * --------------------------------------------------------- */
+const PANORAMIC_CATALOG: FindingCatalog = {
+  quick: [
+    { value: "panoramic_good", label: "Bueno", tone: "success", risks: ["original"] },
+    { value: "na", label: "N/A", tone: "neutral", risks: ["na"] },
+  ],
+  categories: [
+    {
+      label: "Daño",
+      options: [
+        { value: "panoramic_chipped", label: "Picado", tone: "warning", severity: 1, risks: ["glass"] },
+        { value: "panoramic_cracked", label: "Fisurado", tone: "danger", severity: 2, risks: ["glass", "damage"] },
+      ],
+    },
+  ],
+};
+
+/* -----------------------------------------------------------
+ *  LIGHT_UNIT — stops y farolas (ópticas delanteras/traseras).
+ *  Catálogo específico para los conjuntos de iluminación, donde el
+ *  perito califica el estado del lente/talco, la rotura, la hermeticidad
+ *  y reparaciones previas.
+ * --------------------------------------------------------- */
+const LIGHT_CATALOG: FindingCatalog = {
+  quick: [
+    { value: "light_ok", label: "Bueno", tone: "success", risks: ["original"] },
+    { value: "na", label: "N/A", tone: "neutral", risks: ["na"] },
+  ],
+  categories: [
+    {
+      label: "Daño",
+      options: [
+        { value: "light_bad", label: "Malo", tone: "danger", severity: 2, risks: ["light", "damage"] },
+        { value: "light_talc_crack", label: "Talco fisurado", tone: "warning", severity: 1, risks: ["light"] },
+        { value: "light_heavy_break", label: "Rotura fuerte", tone: "danger", severity: 3, risks: ["light", "damage"] },
+        { value: "light_scratched", label: "Rayado", tone: "warning", severity: 1, risks: ["light", "damage"] },
+      ],
+    },
+    {
+      label: "Intervención y sellado",
+      options: [
+        { value: "light_poor_repair", label: "Mal reparado", tone: "danger", severity: 3, risks: ["light", "poor_repair"] },
+        { value: "light_poor_seal", label: "Hermeticidad deficiente", tone: "warning", severity: 2, risks: ["light", "fit"] },
       ],
     },
   ],
@@ -251,6 +336,7 @@ const ROAD_TEST_CATALOG: FindingCatalog = {
 const LEAK_CATALOG: FindingCatalog = {
   quick: [
     { value: "leak_none", label: "Sin fugas", tone: "success" },
+    { value: "na", label: "N/A", tone: "neutral", risks: ["na"] },
   ],
   categories: [
     {
@@ -273,20 +359,99 @@ const LEAK_CATALOG: FindingCatalog = {
 };
 
 export const FINDING_CATALOGS: Record<ItemKind, FindingCatalog> = {
-  bodywork: BODYWORK_CATALOG,
-  structural: STRUCTURAL_CATALOG,
-  mechanical: MECHANICAL_CATALOG,
+  bodywork: COMMON_CATALOG,
+  structural: COMMON_CATALOG,
+  mechanical: COMMON_CATALOG,
   road_test: ROAD_TEST_CATALOG,
   leak: LEAK_CATALOG,
+  light_unit: LIGHT_CATALOG,
+  panoramic: PANORAMIC_CATALOG,
+};
+
+/** Catálogos previos (carrocería, estructura, mecánica) que ya no se ofrecen
+ *  como opciones nuevas pero conservamos sus valores en el lookup global para
+ *  que peritajes históricos sigan resolviendo labels y tonos correctamente. */
+const LEGACY_LOOKUP_CATALOGS: FindingCatalog[] = [
+  BODYWORK_CATALOG,
+  STRUCTURAL_CATALOG,
+  MECHANICAL_CATALOG,
+];
+
+/* -----------------------------------------------------------
+ *  ACCESSORIES — separate catalog (not an ItemKind). Accesorios
+ *  son cosas tipo "Tapetes", "Triángulos", "Llave extra" — el
+ *  estado relevante es presencia/condición, no fallas mecánicas.
+ * --------------------------------------------------------- */
+export const ACCESSORY_CATALOG: FindingCatalog = {
+  quick: [
+    { value: "acc_present", label: "Presente", tone: "success", risks: ["original"] },
+    { value: "acc_missing", label: "Falta", tone: "danger", risks: ["missing"] },
+  ],
+  categories: [
+    {
+      label: "Estado",
+      options: [
+        { value: "acc_regular", label: "Regular / desgastado", tone: "warning", severity: 1 },
+        { value: "acc_damaged", label: "Dañado / inservible", tone: "danger", severity: 2, risks: ["damage"] },
+        { value: "acc_replaced", label: "Reemplazado / no original", tone: "warning", severity: 1, risks: ["replaced"] },
+      ],
+    },
+  ],
+};
+
+/* -----------------------------------------------------------
+ *  RIN — defectos típicos de rin (acero/aluminio/magnesio). Se evalúa
+ *  dentro del acordeón de cada llanta del walkaround. No es un ItemKind:
+ *  el componente lo importa explícitamente porque solo se usa ahí.
+ * --------------------------------------------------------- */
+export const RIM_CATALOG: FindingCatalog = {
+  quick: [
+    { value: "rim_ok", label: "Bueno", tone: "success", risks: ["original"] },
+    { value: "na", label: "N/A", tone: "neutral", risks: ["na"] },
+  ],
+  categories: [
+    {
+      label: "Daño",
+      options: [
+        { value: "rim_scratched", label: "Rayado", tone: "warning", severity: 1, risks: ["damage"] },
+        { value: "rim_dented", label: "Golpe / abolladura", tone: "warning", severity: 2, risks: ["damage"] },
+        { value: "rim_bent", label: "Doblado", tone: "danger", severity: 3, risks: ["damage"] },
+        { value: "rim_cracked", label: "Fisurado", tone: "danger", severity: 3, risks: ["damage"] },
+      ],
+    },
+    {
+      label: "Intervención",
+      options: [
+        { value: "rim_repaired", label: "Reparado", tone: "warning", severity: 2, risks: ["repaired"] },
+      ],
+    },
+  ],
 };
 
 /** Flat lookup across all catalogs — useful for rendering a known value outside of context. */
 const ALL_FINDINGS_BY_VALUE = new Map<string, FindingOption>();
+// Legacy primero — opciones obsoletas que se conservan solo para resolver
+// labels/tonos en peritajes históricos. Cualquier valor que se redefina en
+// los catálogos activos los sobrescribe en la siguiente vuelta.
+for (const catalog of LEGACY_LOOKUP_CATALOGS) {
+  for (const opt of catalog.quick) ALL_FINDINGS_BY_VALUE.set(opt.value, opt);
+  for (const cat of catalog.categories) {
+    for (const opt of cat.options) ALL_FINDINGS_BY_VALUE.set(opt.value, opt);
+  }
+}
 for (const catalog of Object.values(FINDING_CATALOGS)) {
   for (const opt of catalog.quick) ALL_FINDINGS_BY_VALUE.set(opt.value, opt);
   for (const cat of catalog.categories) {
     for (const opt of cat.options) ALL_FINDINGS_BY_VALUE.set(opt.value, opt);
   }
+}
+for (const opt of ACCESSORY_CATALOG.quick) ALL_FINDINGS_BY_VALUE.set(opt.value, opt);
+for (const cat of ACCESSORY_CATALOG.categories) {
+  for (const opt of cat.options) ALL_FINDINGS_BY_VALUE.set(opt.value, opt);
+}
+for (const opt of RIM_CATALOG.quick) ALL_FINDINGS_BY_VALUE.set(opt.value, opt);
+for (const cat of RIM_CATALOG.categories) {
+  for (const opt of cat.options) ALL_FINDINGS_BY_VALUE.set(opt.value, opt);
 }
 
 export function findOption(value: string | undefined): FindingOption | undefined {
@@ -310,6 +475,18 @@ export function isOkFinding(value: string | undefined): boolean {
  * Quick picks like Original / Óptimo / N/A never require a photo.
  */
 export function requiresPhoto(value: string | undefined): boolean {
-  const opt = findOption(value);
-  return !!opt && (opt.tone === "warning" || opt.tone === "danger");
+  return minPhotosFor(value) > 0;
+}
+
+/**
+ * Mínimo de fotos requeridas para soportar un hallazgo. Las fotos son
+ * opcionales — el perito puede adjuntarlas si quiere, pero el sistema no
+ * obliga ni bloquea el paso por falta de evidencia fotográfica.
+ *
+ * Devolvemos siempre 0 para que `requiresPhoto()` y la validación de los
+ * steps del walkaround no marquen el row como incompleto cuando hay status
+ * sin foto.
+ */
+export function minPhotosFor(_value: string | undefined): number {
+  return 0;
 }

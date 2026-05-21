@@ -3,7 +3,7 @@ import { Wizard } from "@/components/wizard/wizard";
 export default function InspectionPage({ params }: { params: { id: string } }) {
   return (
     <div className="min-h-screen bg-muted/30 py-6">
-      <div className="container max-w-5xl">
+      <div className="mx-auto w-full max-w-screen-2xl px-4 sm:px-6 lg:px-8">
         <Wizard id={params.id} />
       </div>
     </div>

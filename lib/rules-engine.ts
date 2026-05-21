@@ -191,23 +191,27 @@ export function analyze(data: InspectionData): RiskReport {
   }
 
   // --- Road test ---
-  for (const { opt, label, itemId } of entriesOf(ROAD_TEST_SECTION, data.roadTest)) {
-    if (!opt) continue;
-    if (hasRisk(opt, "braking_fail")) counters.brakingIssues += 1;
-    if (opt.tone === "danger") counters.roadTestDeficient += 1;
+  // Si el perito marcó la etapa como "No aplica", no contamos hallazgos ni
+  // sumamos al score. Los datos en data.roadTest (si los hay) se ignoran.
+  if (!data.roadTestSkipped) {
+    for (const { opt, label, itemId } of entriesOf(ROAD_TEST_SECTION, data.roadTest)) {
+      if (!opt) continue;
+      if (hasRisk(opt, "braking_fail")) counters.brakingIssues += 1;
+      if (opt.tone === "danger") counters.roadTestDeficient += 1;
 
-    const lvl = catalogLevel(opt);
-    if (lvl) {
-      const isBrakingCritical = hasRisk(opt, "braking_fail") && opt.tone === "danger";
-      findings.push({
-        level: isBrakingCritical ? "critical" : lvl,
-        section: "Prueba de ruta",
-        item: label,
-        message: isBrakingCritical && itemId === "braking"
-          ? `${opt.label} — riesgo de seguridad`
-          : opt.label,
-      });
-      score += catalogSeverityScore(opt) + (isBrakingCritical ? 5 : 0);
+      const lvl = catalogLevel(opt);
+      if (lvl) {
+        const isBrakingCritical = hasRisk(opt, "braking_fail") && opt.tone === "danger";
+        findings.push({
+          level: isBrakingCritical ? "critical" : lvl,
+          section: "Prueba de ruta",
+          item: label,
+          message: isBrakingCritical && itemId === "braking"
+            ? `${opt.label} — riesgo de seguridad`
+            : opt.label,
+        });
+        score += catalogSeverityScore(opt) + (isBrakingCritical ? 5 : 0);
+      }
     }
   }
 
@@ -240,22 +244,28 @@ export function analyze(data: InspectionData): RiskReport {
   }
 
   // --- Risk level ---
+  // El nivel se determina por los gates duros definidos en lib/scoring.ts
+  // (estructura/frenos/fugas/llantas/reparaciones) o por el agregado ponderado
+  // de pilares, no por umbrales arbitrarios sobre el score acumulado. El score
+  // queda como dato auxiliar para auditoría.
+  // Aplicamos la misma lógica de gates aquí para que `report.level` coincida
+  // con lo que muestra el PDF en la sección de pilares.
   let level: RiskLevel = "low";
-  if (
-    score >= 40 ||
-    counters.structuralHits >= 2 ||
-    counters.poorlyRepaired >= 2 ||
+  const hasHardGate =
+    counters.structuralHits >= 1 ||
     counters.criticalLeaks >= 1 ||
     counters.brakingIssues >= 1 ||
-    counters.tiresCritical >= 2
-  ) {
+    counters.tiresCritical >= 2 ||
+    counters.poorlyRepaired >= 2;
+  if (hasHardGate) {
     level = "high";
   } else if (
-    score >= 15 ||
     counters.damaged >= 1 ||
     counters.mechanicalBad >= 2 ||
     counters.repaired >= 2 ||
-    counters.tiresCritical >= 1
+    counters.tiresCritical >= 1 ||
+    counters.repainted >= 4 ||
+    counters.rustHits >= 3
   ) {
     level = "medium";
   }
@@ -286,4 +296,155 @@ export function analyze(data: InspectionData): RiskReport {
 
 export function riskTone(level: RiskLevel): "success" | "warning" | "danger" {
   return level === "low" ? "success" : level === "medium" ? "warning" : "danger";
+}
+
+/**
+ * Health metric derived from the same severity weights used by analyze().
+ *
+ * - `penalty` is the cumulative penalty score using catalog severity (warning = sev×2,
+ *   danger = sev×5) plus the same bonuses analyze() applies (structural +5,
+ *   critical braking +5, critical tire wear 8, moderate tire wear 2).
+ * - `maxPenalty` is the theoretical worst-case penalty for the *items actually
+ *   inspected* in this section, using the per-item ceiling for that section.
+ * - `healthPct` = 100 − (penalty / maxPenalty) × 100. So the score scales with
+ *   the size and risk profile of the inspection performed, not against a fixed
+ *   threshold.
+ */
+export type SectionHealth = {
+  inspected: number;
+  ok: number;
+  warning: number;
+  danger: number;
+  penalty: number;
+  maxPenalty: number;
+  healthPct: number | null;
+};
+
+export type HealthReport = {
+  global: SectionHealth;
+  bySection: Record<string, SectionHealth>;
+};
+
+/**
+ * Worst-case penalty per inspected item, derived from the rules in analyze():
+ *  - default item: severity 3 × 5 = 15
+ *  - chassis: + structural bonus 5 = 20
+ *  - road test: + critical braking bonus 5 = 20
+ *  - tires: hard cap 8 (motor uses fixed +8 / +2, not severity)
+ */
+const MAX_PENALTY_PER_ITEM: Record<string, number> = {
+  bodywork: 15,
+  chassis: 20,
+  suspension: 15,
+  engine: 15,
+  electrical: 15,
+  leaks: 15,
+  comfort: 15,
+  roadTest: 20,
+  tires: 8,
+  accessories: 15,
+};
+
+function emptyHealth(): SectionHealth {
+  return { inspected: 0, ok: 0, warning: 0, danger: 0, penalty: 0, maxPenalty: 0, healthPct: null };
+}
+
+function pctFromPenalty(penalty: number, maxPenalty: number): number | null {
+  if (maxPenalty === 0) return null;
+  return Math.max(0, Math.min(100, Math.round(100 - (penalty / maxPenalty) * 100)));
+}
+
+function processSectionInto(
+  target: SectionHealth,
+  sectionDef: InspectionSectionDef,
+  record: Record<string, InspectionEntry> | undefined,
+  extraPenalty?: (opt: FindingOption) => number,
+) {
+  for (const { opt } of entriesOf(sectionDef, record)) {
+    if (!opt || opt.tone === "neutral") continue;
+    target.inspected += 1;
+    if (opt.tone === "success") {
+      target.ok += 1;
+      continue;
+    }
+    if (opt.tone === "warning") target.warning += 1;
+    else if (opt.tone === "danger") target.danger += 1;
+    target.penalty += catalogSeverityScore(opt);
+    if (extraPenalty) target.penalty += extraPenalty(opt);
+  }
+}
+
+export function computeHealth(data: InspectionData): HealthReport {
+  const sections: Record<string, SectionHealth> = {
+    bodywork: emptyHealth(),
+    chassis: emptyHealth(),
+    suspension: emptyHealth(),
+    engine: emptyHealth(),
+    electrical: emptyHealth(),
+    leaks: emptyHealth(),
+    comfort: emptyHealth(),
+    roadTest: emptyHealth(),
+    tires: emptyHealth(),
+    accessories: emptyHealth(),
+  };
+
+  processSectionInto(sections.bodywork, BODYWORK_SECTION, data.bodywork);
+  processSectionInto(sections.chassis, CHASSIS_SECTION, data.chassis, (opt) =>
+    hasRisk(opt, "structural") ? 5 : 0,
+  );
+  processSectionInto(sections.suspension, SUSPENSION_SECTION, data.suspension);
+  processSectionInto(sections.engine, ENGINE_SECTION, data.engine);
+  processSectionInto(sections.electrical, ELECTRICAL_SECTION, data.electrical);
+  processSectionInto(sections.leaks, LEAKS_SECTION, data.leaks);
+  processSectionInto(sections.comfort, COMFORT_SECTION, data.comfort);
+  if (!data.roadTestSkipped) {
+    processSectionInto(sections.roadTest, ROAD_TEST_SECTION, data.roadTest, (opt) =>
+      hasRisk(opt, "braking_fail") && opt.tone === "danger" ? 5 : 0,
+    );
+  }
+
+  // Tires: same buckets and weights analyze() uses (8 critical, 2 moderate)
+  const tireSpots = [
+    data.tires.frontLeft,
+    data.tires.frontRight,
+    data.tires.rearLeft,
+    data.tires.rearRight,
+  ];
+  for (const v of tireSpots) {
+    sections.tires.inspected += 1;
+    if (v <= 25) {
+      sections.tires.danger += 1;
+      sections.tires.penalty += 8;
+    } else if (v <= 50) {
+      sections.tires.warning += 1;
+      sections.tires.penalty += 2;
+    } else {
+      sections.tires.ok += 1;
+    }
+  }
+
+  // Accesorios: ahora son informativos (solo presencia, sin estado), así que
+  // no contribuyen al cálculo de salud ni al pillar de equipo. Quedan en el
+  // mapa con healthPct = null para que el pilar `equipment` solo dependa de
+  // las llantas.
+
+  for (const key of Object.keys(sections)) {
+    const s = sections[key];
+    const perItemMax = MAX_PENALTY_PER_ITEM[key] ?? 15;
+    s.maxPenalty = s.inspected * perItemMax;
+    s.healthPct = pctFromPenalty(s.penalty, s.maxPenalty);
+  }
+
+  const global = emptyHealth();
+  for (const s of Object.values(sections)) {
+    global.inspected += s.inspected;
+    global.ok += s.ok;
+    global.warning += s.warning;
+    global.danger += s.danger;
+    global.penalty += s.penalty;
+    global.maxPenalty += s.maxPenalty;
+  }
+  global.healthPct = pctFromPenalty(global.penalty, global.maxPenalty);
+
+  return { global, bySection: sections };
 }

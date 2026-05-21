@@ -52,8 +52,8 @@ describe("analyze: bodywork", () => {
 describe("analyze: structural escalation", () => {
   it("two structural hits force high risk", () => {
     const data = pristineInspection();
-    setChassis(data, "front_rails", "struct_repair_bench");
-    setChassis(data, "pillar_b", "struct_welded_later");
+    setChassis(data, "floor", "struct_repair_bench");
+    setChassis(data, "reinforcements", "struct_welded_later");
     const r = analyze(data);
     expect(r.counters.structuralHits).toBe(2);
     expect(r.level).toBe("high");
@@ -141,8 +141,8 @@ describe("analyze: tires", () => {
 describe("analyze: mechanical", () => {
   it("two mechanical fails escalate to medium via counters", () => {
     const data = pristineInspection();
-    setEngine(data, "noise", "mech_noise_metal");
-    setEngine(data, "smoke", "mech_smoke");
+    setEngine(data, "general_check", "mech_noise_metal");
+    setEngine(data, "block", "mech_smoke");
     const r = analyze(data);
     expect(r.counters.mechanicalBad).toBeGreaterThanOrEqual(2);
     expect(["medium", "high"]).toContain(r.level);
@@ -150,7 +150,7 @@ describe("analyze: mechanical", () => {
 
   it("an engine leak via mechanical catalog also bumps criticalLeaks", () => {
     const data = pristineInspection();
-    setEngine(data, "noise", "mech_leak_active");
+    setEngine(data, "general_check", "mech_leak_active");
     const r = analyze(data);
     expect(r.counters.criticalLeaks).toBeGreaterThanOrEqual(1);
     expect(r.level).toBe("high");
@@ -173,7 +173,7 @@ describe("analyze: ordering & summary", () => {
 
   it("conditionSummary reflects worst category", () => {
     const data = pristineInspection();
-    setChassis(data, "front_rails", "struct_repair_bench");
+    setChassis(data, "floor", "struct_repair_bench");
     const r = analyze(data);
     expect(r.conditionSummary).toMatch(/estructural/i);
   });

@@ -1,11 +1,13 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 
+import { InspectionDataSchema } from "@/lib/inspection-schema";
 import { requireUser } from "@/lib/server/auth";
 import {
   createInspectionServer,
   listInspectionsServer,
 } from "@/lib/server/inspections";
+import { notifyTeamNewIntake } from "@/lib/server/whatsapp-notifications";
 import type { InspectionData } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -18,9 +20,7 @@ const MAX_DATA_BYTES = 12 * 1024 * 1024;
 
 const InspectionPostSchema = z.object({
   id: z.string().regex(/^[A-Za-z0-9_-]{6,32}$/).optional(),
-  data: z.record(z.unknown()).refine((d) => !!d && typeof d === "object", {
-    message: "data debe ser un objeto",
-  }),
+  data: InspectionDataSchema,
 });
 
 function unauth(e: unknown) {
@@ -74,5 +74,19 @@ export async function POST(req: Request) {
     user.id,
     parsed.data.id,
   );
+  // Fire-and-forget: notificar al equipo por WhatsApp. Si WA no está
+  // conectado, la cola interna se encarga; si falla, solo logueamos.
+  const vehicle = created.data.vehicle;
+  void notifyTeamNewIntake({
+    inspectionId: created.id,
+    plate: vehicle?.plate ?? "",
+    vehicle: [vehicle?.make, vehicle?.model, vehicle?.year]
+      .filter((v) => v && v.trim())
+      .join(" "),
+    owner: vehicle?.owner ?? "",
+    inspectorName: user.fullName,
+  }).catch((err) => {
+    console.error("[inspections] notify team failed:", (err as Error).message);
+  });
   return NextResponse.json({ inspection: created });
 }
