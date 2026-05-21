@@ -6,6 +6,7 @@ import {
   clearSessionCookie,
   destroySession,
 } from "@/lib/server/auth";
+import { clearCsrfCookie } from "@/lib/server/csrf";
 import { logAudit } from "@/lib/server/db";
 
 export const runtime = "nodejs";
@@ -17,5 +18,6 @@ export async function POST() {
     await logAudit(null, "logout");
   }
   clearSessionCookie();
+  clearCsrfCookie();
   return NextResponse.json({ ok: true });
 }

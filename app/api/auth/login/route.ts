@@ -7,6 +7,7 @@ import {
   setSessionCookie,
   verifyPassword,
 } from "@/lib/server/auth";
+import { ensureCsrfCookie } from "@/lib/server/csrf";
 import { logAudit } from "@/lib/server/db";
 import {
   clientIpFromHeaders,
@@ -99,6 +100,9 @@ export async function POST(req: Request) {
   const ua = req.headers.get("user-agent") ?? undefined;
   const sid = await createSession(row.id, ua);
   setSessionCookie(sid);
+  // Emitimos también la cookie CSRF de modo que el cliente pueda leerla y
+  // mandarla en el header de los siguientes requests state-changing.
+  ensureCsrfCookie();
   await logAudit(row.id, "login.success");
 
   return NextResponse.json({ ok: true });

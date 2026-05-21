@@ -6,6 +6,7 @@ import {
   createUser,
   setSessionCookie,
 } from "@/lib/server/auth";
+import { ensureCsrfCookie } from "@/lib/server/csrf";
 import { logAudit } from "@/lib/server/db";
 
 export const runtime = "nodejs";
@@ -44,6 +45,7 @@ export async function POST(req: Request) {
     });
     const sid = await createSession(user.id, req.headers.get("user-agent") ?? undefined);
     setSessionCookie(sid);
+    ensureCsrfCookie();
     await logAudit(user.id, "setup.completed");
     return NextResponse.json({ ok: true });
   } catch (e) {
