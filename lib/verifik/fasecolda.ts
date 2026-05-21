@@ -1,6 +1,13 @@
 import type { VehicleInfo } from "@/lib/types";
 import type { FasecoldaResponse } from "./types";
-import { mapBodyType, mapFuel, titleCase } from "./mappings";
+import {
+  mapBodyType,
+  mapFuel,
+  mapNationality,
+  mapServiceType,
+  mapVehicleClass,
+  titleCase,
+} from "./mappings";
 
 /**
  * Convert a FASECOLDA response into a partial VehicleInfo seed.
@@ -21,11 +28,22 @@ export function fasecoldaToVehicleSeed(res: FasecoldaResponse): Partial<VehicleI
     .filter((p) => p.length > 0);
   if (modelParts.length > 0) seed.model = modelParts.join(" ");
 
+  if (d.cylinderCapacity) seed.cylinderCapacity = d.cylinderCapacity.trim();
+
   const fuel = mapFuel(d.fuel);
   if (fuel) seed.fuel = fuel;
 
   const body = mapBodyType(d.typology);
   if (body) seed.bodyType = body;
+
+  const klass = mapVehicleClass(d.class);
+  if (klass) seed.vehicleClass = klass;
+
+  const service = mapServiceType(d.service);
+  if (service) seed.serviceType = service;
+
+  const nationality = mapNationality(d.importedShow);
+  if (nationality) seed.nationality = nationality;
 
   return seed;
 }

@@ -21,10 +21,16 @@ export function mergeVerifikSeeds(
   return prune({
     plate: fromRunt.plate ?? fromFasecolda.plate,
     vin: fromRunt.vin,
+    chassisNumber: fromRunt.chassisNumber,
+    engineNumber: fromRunt.engineNumber,
     make: fromRunt.make ?? fromFasecolda.make,
     model: fromFasecolda.model ?? fromRunt.model,
     year: fromRunt.year,
     color: fromRunt.color,
+    vehicleClass: fromRunt.vehicleClass ?? fromFasecolda.vehicleClass,
+    nationality: fromFasecolda.nationality,
+    cylinderCapacity: fromRunt.cylinderCapacity ?? fromFasecolda.cylinderCapacity,
+    serviceType: fromRunt.serviceType ?? fromFasecolda.serviceType,
     fuel: fromRunt.fuel ?? fromFasecolda.fuel,
     bodyType: fromRunt.bodyType ?? fromFasecolda.bodyType,
   });

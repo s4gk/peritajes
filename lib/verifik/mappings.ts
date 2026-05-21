@@ -51,3 +51,48 @@ export function mapBodyType(raw: string | undefined): string | undefined {
   if (!raw) return undefined;
   return BODY_MAP[raw.trim().toUpperCase()];
 }
+
+const CLASS_MAP: Record<string, string> = {
+  AUTOMOVIL: "Automóvil",
+  "AUTOMÓVIL": "Automóvil",
+  CAMIONETA: "Camioneta",
+  CAMPERO: "Campero",
+  PICKUP: "Pickup",
+  MOTOCICLETA: "Motocicleta",
+  MOTOCARRO: "Motocarro",
+  CAMION: "Camión",
+  "CAMIÓN": "Camión",
+  BUS: "Bus",
+  BUSETA: "Buseta",
+  MICROBUS: "Microbús",
+  CUATRIMOTO: "Cuatrimoto",
+};
+
+export function mapVehicleClass(raw: string | undefined): string | undefined {
+  if (!raw) return undefined;
+  const key = raw.trim().toUpperCase();
+  return CLASS_MAP[key] ?? titleCase(raw);
+}
+
+const SERVICE_MAP: Record<string, string> = {
+  PARTICULAR: "Particular",
+  PUBLICO: "Público",
+  "PÚBLICO": "Público",
+  OFICIAL: "Oficial",
+  DIPLOMATICO: "Diplomático",
+  "DIPLOMÁTICO": "Diplomático",
+};
+
+export function mapServiceType(raw: string | undefined): string | undefined {
+  if (!raw) return undefined;
+  const key = raw.trim().toUpperCase();
+  return SERVICE_MAP[key] ?? titleCase(raw);
+}
+
+export function mapNationality(importedShow: string | undefined): string | undefined {
+  if (!importedShow) return undefined;
+  const v = importedShow.trim().toUpperCase();
+  if (v === "SI" || v === "SÍ") return "Importado";
+  if (v === "NO") return "Nacional";
+  return undefined;
+}

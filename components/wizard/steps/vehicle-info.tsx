@@ -1,9 +1,8 @@
 "use client";
 
 import * as React from "react";
-import { CheckCircle2, Loader2, Search, Sparkles } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Sparkles } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -15,38 +14,109 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useToast } from "@/components/ui/toast";
+import { useCurrentUser } from "@/components/panel/current-user";
 import { listKnownVehicles } from "@/lib/inspections-store";
 import type { VehicleInfo } from "@/lib/types";
+import { cn, makeId } from "@/lib/utils";
+import {
+  OwnershipCardScanner,
+  type ExtractedFields,
+} from "../ownership-card-scanner";
 import { useInspection } from "../inspection-context";
+import { VerifikMismatchBanner } from "../verifik-mismatch-banner";
 
 const FUEL_OPTIONS: { value: VehicleInfo["fuel"]; label: string }[] = [
-  { value: "gasoline", label: "Gasolina" },
-  { value: "diesel", label: "Diésel" },
-  { value: "hybrid", label: "Híbrido" },
-  { value: "electric", label: "Eléctrico" },
+  { value: "gasoline", label: "GASOLINA" },
+  { value: "diesel", label: "DIÉSEL" },
+  { value: "hybrid", label: "HÍBRIDO" },
+  { value: "electric", label: "ELÉCTRICO" },
   { value: "gas", label: "GNV" },
 ];
 
 const TX_OPTIONS: { value: VehicleInfo["transmission"]; label: string }[] = [
-  { value: "manual", label: "Manual" },
-  { value: "automatic", label: "Automática" },
+  { value: "manual", label: "MANUAL" },
+  { value: "automatic", label: "AUTOMÁTICA" },
   { value: "cvt", label: "CVT" },
   { value: "dct", label: "DCT" },
 ];
 
-const BODY_TYPES = ["Sedán", "Hatchback", "SUV", "Pickup", "Van", "Coupé", "Convertible"];
+// TODAS las opciones en MAYÚSCULA — así matchean con cómo viene impreso en la
+// tarjeta de propiedad (que es texto en caps por el RUNT) y con lo que devuelve
+// el OCR. Cambiar también acá si cambiás algo en `toVehicleFormFields`.
+const BODY_TYPES = ["SEDÁN", "HATCHBACK", "SUV", "PICKUP", "VAN", "COUPÉ", "CONVERTIBLE"];
+
+const VEHICLE_CLASSES = [
+  "AUTOMÓVIL",
+  "CAMIONETA",
+  "CAMPERO",
+  "PICKUP",
+  "MOTOCICLETA",
+  "CAMIÓN",
+  "BUS",
+  "BUSETA",
+  "MICROBÚS",
+];
+
+const NATIONALITY_OPTIONS = ["NACIONAL", "IMPORTADO"];
+
+const SERVICE_OPTIONS = ["PARTICULAR", "PÚBLICO", "OFICIAL"];
+
+// Marcas más comunes en el parque vehicular colombiano. Va por <datalist> en
+// el input de marca — autocompleta sin bloquear al perito si tipea una marca
+// rara que no esté en la lista.
+const COMMON_MAKES = [
+  "CHEVROLET", "RENAULT", "MAZDA", "TOYOTA", "HYUNDAI", "KIA", "NISSAN",
+  "FORD", "VOLKSWAGEN", "SUZUKI", "HONDA", "MITSUBISHI", "FIAT", "PEUGEOT",
+  "CITROËN", "AUDI", "BMW", "MERCEDES-BENZ", "SUBARU", "JEEP", "DODGE",
+  "VOLVO", "LAND ROVER", "MINI", "FOTON", "JAC", "CHANGAN", "CHERY",
+  "GREAT WALL", "DFM", "DFSK",
+];
+
+const COMMON_COLORS = [
+  "BLANCO", "NEGRO", "GRIS", "PLATA", "PLATEADO", "ROJO", "AZUL",
+  "AZUL OSCURO", "VERDE", "AMARILLO", "NARANJA", "BEIGE", "MARRÓN",
+  "VINO TINTO", "CHAMPAGNE",
+];
+
+
+const CLAIMS_OPTIONS = ["NO", "SÍ"];
+
+const PROPERTY_CARD_OPTIONS = ["ORIGINAL", "DUPLICADO"];
 
 export function VehicleInfoStep() {
   const { id: currentId, data, setData } = useInspection();
   const v = data.vehicle;
   const toast = useToast();
+  const currentUser = useCurrentUser();
   const [known, setKnown] = React.useState<VehicleInfo[]>([]);
   const [plateFocused, setPlateFocused] = React.useState(false);
-  const [runtLoading, setRuntLoading] = React.useState(false);
 
   React.useEffect(() => {
     setKnown(listKnownVehicles().filter((x) => x.plate));
   }, [currentId]);
+
+  // Seed perito name + license from the logged-in user's profile when this
+  // peritaje doesn't have them yet. Only fills empty fields — never overwrites
+  // a value the perito (or admin in /usuarios) typed by hand.
+  React.useEffect(() => {
+    if (!currentUser) return;
+    setData((prev) => {
+      const needsName = !prev.vehicle.inspector && !!currentUser.fullName;
+      const needsLicense =
+        !prev.vehicle.inspectorId && !!currentUser.licenseId;
+      if (!needsName && !needsLicense) return prev;
+      return {
+        ...prev,
+        vehicle: {
+          ...prev.vehicle,
+          inspector: needsName ? currentUser.fullName : prev.vehicle.inspector,
+          inspectorId: needsLicense
+            ? currentUser.licenseId ?? ""
+            : prev.vehicle.inspectorId,
+        },
+      };
+    });
+  }, [currentUser, setData]);
 
   const plateQuery = v.plate.trim().toUpperCase();
   const suggestions = React.useMemo(() => {
@@ -61,76 +131,54 @@ export function VehicleInfoStep() {
     setData((prev) => ({ ...prev, vehicle: { ...prev.vehicle, [key]: value } }));
   }
 
-  async function lookupPlate() {
-    const plate = v.plate.trim().toUpperCase();
-    if (!plate) {
-      toast.show({
-        title: "Ingrese una placa",
-        description: "Escriba la placa antes de consultar.",
-        variant: "warning",
-      });
-      return;
-    }
-    setRuntLoading(true);
-    try {
-      const res = await fetch(`/api/plate-lookup?plate=${encodeURIComponent(plate)}`);
-      if (res.status === 501) {
-        toast.show({
-          title: "Consulta externa no configurada",
-          description:
-            "Define PLATE_LOOKUP_URL en el servidor para habilitar RUNT u otro proveedor.",
-          variant: "warning",
-        });
-        return;
-      }
-      if (!res.ok) {
-        toast.show({
-          title: "No se pudo consultar la placa",
-          description: `El proveedor respondió con error (${res.status}).`,
-          variant: "danger",
-        });
-        return;
-      }
-      const body = (await res.json()) as {
-        result?: Partial<VehicleInfo>;
+  function saveDocImage(side: "front" | "back", dataUrl: string | null) {
+    if (!dataUrl) return;
+    setData((prev) => ({
+      ...prev,
+      documents: {
+        ...prev.documents,
+        [side === "front" ? "ownershipCardFront" : "ownershipCardBack"]: [
+          { id: makeId(), dataUrl },
+        ],
+      },
+    }));
+  }
+
+  function applyOcrFields(fields: ExtractedFields, imageDataUrl: string | null) {
+    setData((prev) => {
+      const v = prev.vehicle;
+      const next: VehicleInfo = {
+        ...v,
+        plate: fields.plate ?? v.plate,
+        vin: fields.vin ?? v.vin,
+        chassisNumber: fields.chassisNumber ?? v.chassisNumber,
+        engineNumber: fields.engineNumber ?? v.engineNumber,
+        make: fields.make ?? v.make,
+        model: fields.model ?? v.model,
+        year: fields.year ?? v.year,
+        color: fields.color ?? v.color,
+        bodyType: fields.bodyType ?? v.bodyType,
+        fuel: fields.fuel ?? v.fuel,
+        transmission: fields.transmission ?? v.transmission,
+        vehicleClass: fields.vehicleClass ?? v.vehicleClass,
+        nationality: fields.nationality ?? v.nationality,
+        serviceType: fields.serviceType ?? v.serviceType,
+        cylinderCapacity: fields.cylinderCapacity ?? v.cylinderCapacity,
+        owner: fields.owner ?? v.owner,
+        ownerDocument: fields.ownerDocument ?? v.ownerDocument,
+        propertyCardStatus: fields.propertyCardStatus ?? v.propertyCardStatus,
       };
-      const r = body.result ?? {};
-      if (!r.make && !r.model && !r.vin && !r.year) {
-        toast.show({
-          title: "Sin resultados",
-          description: "El proveedor no devolvió datos para esa placa.",
-          variant: "default",
-        });
-        return;
-      }
-      setData((prev) => ({
+      return {
         ...prev,
-        vehicle: {
-          ...prev.vehicle,
-          vin: r.vin || prev.vehicle.vin,
-          make: r.make || prev.vehicle.make,
-          model: r.model || prev.vehicle.model,
-          year: r.year || prev.vehicle.year,
-          color: r.color || prev.vehicle.color,
-          fuel: (r.fuel as VehicleInfo["fuel"]) || prev.vehicle.fuel,
-          bodyType: r.bodyType || prev.vehicle.bodyType,
-          owner: r.owner || prev.vehicle.owner,
-        },
-      }));
-      toast.show({
-        title: "Datos importados",
-        description: "Revisa kilometraje y fecha antes de continuar.",
-        variant: "success",
-      });
-    } catch {
-      toast.show({
-        title: "Sin conexión al proveedor",
-        description: "Verifica tu red e inténtalo de nuevo.",
-        variant: "danger",
-      });
-    } finally {
-      setRuntLoading(false);
-    }
+        vehicle: next,
+        documents: imageDataUrl
+          ? {
+              ...prev.documents,
+              ownershipCardFront: [{ id: makeId(), dataUrl: imageDataUrl }],
+            }
+          : prev.documents,
+      };
+    });
   }
 
   function prefillFrom(source: VehicleInfo) {
@@ -140,10 +188,17 @@ export function VehicleInfoStep() {
         ...prev.vehicle,
         plate: source.plate,
         vin: source.vin || prev.vehicle.vin,
+        chassisNumber: source.chassisNumber || prev.vehicle.chassisNumber,
+        engineNumber: source.engineNumber || prev.vehicle.engineNumber,
         make: source.make || prev.vehicle.make,
         model: source.model || prev.vehicle.model,
         year: source.year || prev.vehicle.year,
         color: source.color || prev.vehicle.color,
+        vehicleClass: source.vehicleClass || prev.vehicle.vehicleClass,
+        nationality: source.nationality || prev.vehicle.nationality,
+        cylinderCapacity: source.cylinderCapacity || prev.vehicle.cylinderCapacity,
+        serviceType: source.serviceType || prev.vehicle.serviceType,
+        paintCondition: source.paintCondition || prev.vehicle.paintCondition,
         fuel: source.fuel || prev.vehicle.fuel,
         transmission: source.transmission || prev.vehicle.transmission,
         bodyType: source.bodyType || prev.vehicle.bodyType,
@@ -158,8 +213,129 @@ export function VehicleInfoStep() {
     });
   }
 
+  const front = data.documents.ownershipCardFront[0];
+  const back = data.documents.ownershipCardBack[0];
+
+  // Una vez que hay foto del frente capturada, todos los campos que siguen
+  // vacíos quedan "pendientes". Algunos los trae el OCR (y si quedaron vacíos
+  // es porque la lectura falló), otros nunca vienen del documento (kilometraje,
+  // fecha, teléfono — son siempre manuales). El resaltado los hace visibles
+  // para que el perito no los pase por alto.
+  const cardScanned = !!front;
+  const PENDING_TARGETS: Array<{ key: keyof VehicleInfo; label: string }> = [
+    { key: "plate", label: "Placa" },
+    { key: "vin", label: "No. Serial" },
+    { key: "chassisNumber", label: "No. Chasis" },
+    { key: "engineNumber", label: "No. Motor" },
+    { key: "make", label: "Marca" },
+    { key: "model", label: "Línea" },
+    { key: "year", label: "Modelo (año)" },
+    { key: "color", label: "Color" },
+    { key: "bodyType", label: "Carrocería" },
+    { key: "vehicleClass", label: "Clase" },
+    { key: "nationality", label: "Nacionalidad" },
+    { key: "cylinderCapacity", label: "Cilindraje" },
+    { key: "fuel", label: "Combustible" },
+    { key: "transmission", label: "Caja" },
+    { key: "serviceType", label: "Servicio" },
+    { key: "mileage", label: "Kilometraje" },
+    { key: "owner", label: "Propietario" },
+    { key: "location", label: "Lugar" },
+    { key: "date", label: "Fecha" },
+    { key: "ownerDocument", label: "Documento" },
+    { key: "ownerPhone", label: "Teléfono" },
+    { key: "propertyCardStatus", label: "Tarjeta" },
+    { key: "insurer", label: "Aseguradora" },
+    { key: "hasClaimsHistory", label: "Siniestros" },
+  ];
+  const pendingFields = cardScanned
+    ? PENDING_TARGETS.filter(({ key }) => !String(v[key] ?? "").trim())
+    : [];
+  const isPending = (key: keyof VehicleInfo): boolean =>
+    cardScanned && !String(v[key] ?? "").trim();
+  // Clase de resaltado para inputs y triggers de select pendientes.
+  const HL = "border-warning bg-warning/5 ring-1 ring-warning/30 focus-visible:ring-warning";
+
+  function focusField(targetId: string) {
+    const el = document.getElementById(targetId);
+    if (!el) return;
+    el.scrollIntoView({ behavior: "smooth", block: "center" });
+    if (typeof (el as HTMLElement).focus === "function") {
+      (el as HTMLElement).focus({ preventScroll: true });
+    }
+  }
+
   return (
     <div className="space-y-6">
+      <Card>
+        <CardHeader>
+          <CardTitle>Tarjeta de propiedad / Licencia de tránsito *</CardTitle>
+          <CardDescription>
+            Escaneá las dos caras. El frente extrae datos por OCR y rellena el formulario;
+            el reverso solo se guarda como evidencia. Las dos caras son obligatorias y
+            cuentan como las dos primeras fotos del peritaje.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-4 sm:grid-cols-2">
+          <div className="space-y-2">
+            <Label>Frente *</Label>
+            {front ? (
+              <div className="relative overflow-hidden rounded-md border bg-muted/30">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={front.dataUrl}
+                  alt="Tarjeta de propiedad — Frente"
+                  className="h-40 w-full object-cover"
+                />
+                <span className="absolute right-1.5 top-1.5 rounded-full bg-success/90 px-2 py-0.5 text-[10px] font-medium text-success-foreground">
+                  Capturado
+                </span>
+              </div>
+            ) : (
+              <div className="flex h-40 items-center justify-center rounded-md border border-dashed bg-muted/30 text-xs text-muted-foreground">
+                Sin captura
+              </div>
+            )}
+            <OwnershipCardScanner
+              onApply={applyOcrFields}
+              buttonLabel={front ? "Re-escanear frente" : "Escanear frente (OCR)"}
+              buttonLabelShort={front ? "Re-escanear frente" : "Escanear frente"}
+              expectedSide="front"
+              // Si el OCR detecta que la foto es el REVERSO, ofrecemos
+              // guardarla directo en el slot del reverso. Evita que el perito
+              // tenga que cancelar, ir al otro botón y volver a tomar la foto.
+              onWrongSide={(dataUrl) => saveDocImage("back", dataUrl)}
+            />
+          </div>
+          <div className="space-y-2">
+            <Label>Reverso *</Label>
+            {back ? (
+              <div className="relative overflow-hidden rounded-md border bg-muted/30">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={back.dataUrl}
+                  alt="Tarjeta de propiedad — Reverso"
+                  className="h-40 w-full object-cover"
+                />
+                <span className="absolute right-1.5 top-1.5 rounded-full bg-success/90 px-2 py-0.5 text-[10px] font-medium text-success-foreground">
+                  Capturado
+                </span>
+              </div>
+            ) : (
+              <div className="flex h-40 items-center justify-center rounded-md border border-dashed bg-muted/30 text-xs text-muted-foreground">
+                Sin captura
+              </div>
+            )}
+            <OwnershipCardScanner
+              onApply={(_fields, dataUrl) => saveDocImage("back", dataUrl)}
+              runOcr={false}
+              buttonLabel={back ? "Re-capturar reverso" : "Capturar reverso"}
+              buttonLabelShort={back ? "Re-capturar reverso" : "Capturar reverso"}
+            />
+          </div>
+        </CardContent>
+      </Card>
+
       <Card>
         <CardHeader>
           <CardTitle>Datos del vehículo</CardTitle>
@@ -167,7 +343,42 @@ export function VehicleInfoStep() {
             Información de identificación del vehículo inspeccionado.
           </CardDescription>
         </CardHeader>
-        <CardContent className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        <CardContent className="space-y-4">
+          <VerifikMismatchBanner vehicle={v} verifik={data.verifik} />
+          {pendingFields.length > 0 && (
+            <div className="flex items-start gap-3 rounded-lg border border-warning/40 bg-warning/10 p-3">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
+              <div className="min-w-0 flex-1 space-y-1.5">
+                <p className="text-sm font-medium text-warning">
+                  {pendingFields.length === 1
+                    ? "1 campo por completar"
+                    : `${pendingFields.length} campos por completar`}
+                </p>
+                <p className="text-xs text-warning/80">
+                  El OCR no llenó estos campos. Revísalos antes de continuar — quedan
+                  resaltados abajo.
+                </p>
+                <div className="flex flex-wrap gap-1.5 pt-0.5">
+                  {pendingFields.slice(0, 8).map(({ key, label }) => (
+                    <button
+                      key={key}
+                      type="button"
+                      onClick={() => focusField(String(key))}
+                      className="inline-flex items-center rounded-full border border-warning/40 bg-background px-2 py-0.5 text-[11px] font-medium text-warning hover:bg-warning/10"
+                    >
+                      {label}
+                    </button>
+                  ))}
+                  {pendingFields.length > 8 && (
+                    <span className="inline-flex items-center text-[11px] text-warning/80">
+                      +{pendingFields.length - 8} más
+                    </span>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           <div className="space-y-1.5 sm:col-span-2 lg:col-span-1">
             <Label htmlFor="plate">Placa *</Label>
             <div className="relative flex gap-2">
@@ -182,33 +393,24 @@ export function VehicleInfoStep() {
                 }}
                 placeholder="ABC123"
                 autoComplete="off"
-                className="h-11 flex-1 text-base font-semibold tracking-wider sm:h-10 sm:text-sm"
+                autoCorrect="off"
+                autoCapitalize="characters"
+                spellCheck={false}
+                inputMode="text"
+                maxLength={8}
+                className={cn(
+                  "h-11 flex-1 text-base font-semibold tracking-wider sm:h-10 sm:text-sm",
+                  isPending("plate") && HL,
+                )}
               />
-              {data.verifik ? (
+              {data.verifik && (
                 <span
                   className="inline-flex h-11 shrink-0 items-center gap-1.5 rounded-md border border-success/40 bg-success/10 px-3 text-xs font-medium text-success sm:h-10"
-                  title={`Consultado el ${new Date(data.verifik.queriedAt).toLocaleString("es-CO")} · datos cacheados (no se vuelve a llamar Verifik)`}
+                  title={`Consultado el ${new Date(data.verifik.queriedAt).toLocaleString("es-CO")} · datos cacheados`}
                 >
                   <CheckCircle2 className="h-4 w-4" />
                   <span className="hidden sm:inline">Consultado</span>
                 </span>
-              ) : (
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={lookupPlate}
-                  disabled={runtLoading || !v.plate.trim()}
-                  className="h-11 shrink-0 px-3 sm:h-10"
-                  aria-label="Consultar FASECOLDA"
-                  title="Consultar FASECOLDA por placa (no consulta RUNT — para eso usa la pantalla de inicio)"
-                >
-                  {runtLoading ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  ) : (
-                    <Search className="h-4 w-4" />
-                  )}
-                  <span className="ml-1.5 hidden sm:inline">Consultar</span>
-                </Button>
               )}
               {plateFocused && suggestions.length > 0 && (
                 <div className="absolute inset-x-0 top-full z-20 mt-1 overflow-hidden rounded-md border bg-popover shadow-lg">
@@ -246,111 +448,102 @@ export function VehicleInfoStep() {
             )}
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="vin">VIN / Chasis</Label>
+            <Label htmlFor="vin">No. Serial</Label>
             <Input
               id="vin"
               value={v.vin}
               onChange={(e) => update("vin", e.target.value.toUpperCase())}
               placeholder="17 caracteres"
               maxLength={17}
-              className="h-11 sm:h-10"
+              className={cn("h-11 sm:h-10", isPending("vin") && HL)}
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="chassisNumber">No. Chasis</Label>
+            <Input
+              id="chassisNumber"
+              value={v.chassisNumber}
+              onChange={(e) => update("chassisNumber", e.target.value.toUpperCase())}
+              placeholder="Estampado en chasis"
+              className={cn("h-11 sm:h-10", isPending("chassisNumber") && HL)}
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="engineNumber">No. Motor</Label>
+            <Input
+              id="engineNumber"
+              value={v.engineNumber}
+              onChange={(e) => update("engineNumber", e.target.value.toUpperCase())}
+              placeholder="Estampado en bloque"
+              className={cn("h-11 sm:h-10", isPending("engineNumber") && HL)}
             />
           </div>
           <div className="space-y-1.5">
             <Label htmlFor="make">Marca *</Label>
             <Input
               id="make"
+              list="vehicle-makes-list"
               value={v.make}
-              onChange={(e) => update("make", e.target.value)}
-              placeholder="Toyota"
-              className="h-11 sm:h-10"
+              onChange={(e) => update("make", e.target.value.toUpperCase())}
+              placeholder="TOYOTA"
+              autoComplete="off"
+              autoCorrect="off"
+              autoCapitalize="characters"
+              className={cn("h-11 uppercase sm:h-10", isPending("make") && HL)}
             />
+            <datalist id="vehicle-makes-list">
+              {COMMON_MAKES.map((m) => (
+                <option key={m} value={m} />
+              ))}
+            </datalist>
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="model">Modelo *</Label>
+            <Label htmlFor="model">Línea *</Label>
             <Input
               id="model"
               value={v.model}
-              onChange={(e) => update("model", e.target.value)}
-              placeholder="Corolla"
-              className="h-11 sm:h-10"
+              onChange={(e) => update("model", e.target.value.toUpperCase())}
+              placeholder="COROLLA XEI 1.8"
+              autoCapitalize="characters"
+              className={cn("h-11 uppercase sm:h-10", isPending("model") && HL)}
             />
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="year">Año *</Label>
+            <Label htmlFor="year">Modelo *</Label>
             <Input
               id="year"
               inputMode="numeric"
               value={v.year}
               onChange={(e) => update("year", e.target.value.replace(/\D/g, "").slice(0, 4))}
               placeholder="2020"
-              className="h-11 sm:h-10"
+              className={cn("h-11 sm:h-10", isPending("year") && HL)}
             />
           </div>
           <div className="space-y-1.5">
             <Label htmlFor="color">Color</Label>
             <Input
               id="color"
+              list="vehicle-colors-list"
               value={v.color}
-              onChange={(e) => update("color", e.target.value)}
-              placeholder="Blanco"
-              className="h-11 sm:h-10"
+              onChange={(e) => update("color", e.target.value.toUpperCase())}
+              placeholder="BLANCO"
+              autoComplete="off"
+              autoCapitalize="characters"
+              className={cn("h-11 uppercase sm:h-10", isPending("color") && HL)}
             />
+            <datalist id="vehicle-colors-list">
+              {COMMON_COLORS.map((c) => (
+                <option key={c} value={c} />
+              ))}
+            </datalist>
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="mileage">Kilometraje *</Label>
-            <Input
-              id="mileage"
-              inputMode="numeric"
-              value={v.mileage}
-              onChange={(e) => update("mileage", e.target.value.replace(/\D/g, ""))}
-              placeholder="85000"
-              className="h-11 sm:h-10"
-            />
-          </div>
-          <div className="space-y-1.5">
-            <Label>Combustible</Label>
-            <Select
-              value={v.fuel || undefined}
-              onValueChange={(val) => update("fuel", val as VehicleInfo["fuel"])}
-            >
-              <SelectTrigger className="h-11 sm:h-10">
-                <SelectValue placeholder="Seleccione" />
-              </SelectTrigger>
-              <SelectContent>
-                {FUEL_OPTIONS.map((o) => (
-                  <SelectItem key={o.value} value={o.value}>
-                    {o.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="space-y-1.5">
-            <Label>Transmisión</Label>
-            <Select
-              value={v.transmission || undefined}
-              onValueChange={(val) => update("transmission", val as VehicleInfo["transmission"])}
-            >
-              <SelectTrigger className="h-11 sm:h-10">
-                <SelectValue placeholder="Seleccione" />
-              </SelectTrigger>
-              <SelectContent>
-                {TX_OPTIONS.map((o) => (
-                  <SelectItem key={o.value} value={o.value}>
-                    {o.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="space-y-1.5">
-            <Label>Tipo de carrocería</Label>
+            <Label>Carrocería</Label>
             <Select
               value={v.bodyType || undefined}
               onValueChange={(val) => update("bodyType", val)}
             >
-              <SelectTrigger className="h-11 sm:h-10">
+              <SelectTrigger id="bodyType" className={cn("h-11 sm:h-10", isPending("bodyType") && HL)}>
                 <SelectValue placeholder="Seleccione" />
               </SelectTrigger>
               <SelectContent>
@@ -363,13 +556,126 @@ export function VehicleInfoStep() {
             </Select>
           </div>
           <div className="space-y-1.5">
+            <Label>Clase</Label>
+            <Select
+              value={v.vehicleClass || undefined}
+              onValueChange={(val) => update("vehicleClass", val)}
+            >
+              <SelectTrigger id="vehicleClass" className={cn("h-11 sm:h-10", isPending("vehicleClass") && HL)}>
+                <SelectValue placeholder="Seleccione" />
+              </SelectTrigger>
+              <SelectContent>
+                {VEHICLE_CLASSES.map((c) => (
+                  <SelectItem key={c} value={c}>
+                    {c}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-1.5">
+            <Label>Nacionalidad</Label>
+            <Select
+              value={v.nationality || undefined}
+              onValueChange={(val) => update("nationality", val)}
+            >
+              <SelectTrigger id="nationality" className={cn("h-11 sm:h-10", isPending("nationality") && HL)}>
+                <SelectValue placeholder="Seleccione" />
+              </SelectTrigger>
+              <SelectContent>
+                {NATIONALITY_OPTIONS.map((n) => (
+                  <SelectItem key={n} value={n}>
+                    {n}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="cylinderCapacity">Cilindraje (cc)</Label>
+            <Input
+              id="cylinderCapacity"
+              inputMode="numeric"
+              value={v.cylinderCapacity}
+              onChange={(e) => update("cylinderCapacity", e.target.value.replace(/\D/g, "").slice(0, 5))}
+              placeholder="1598"
+              className={cn("h-11 sm:h-10", isPending("cylinderCapacity") && HL)}
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label>Combustible</Label>
+            <Select
+              value={v.fuel || undefined}
+              onValueChange={(val) => update("fuel", val as VehicleInfo["fuel"])}
+            >
+              <SelectTrigger id="fuel" className={cn("h-11 sm:h-10", isPending("fuel") && HL)}>
+                <SelectValue placeholder="Seleccione" />
+              </SelectTrigger>
+              <SelectContent>
+                {FUEL_OPTIONS.map((o) => (
+                  <SelectItem key={o.value} value={o.value}>
+                    {o.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-1.5">
+            <Label>Tipo de caja</Label>
+            <Select
+              value={v.transmission || undefined}
+              onValueChange={(val) => update("transmission", val as VehicleInfo["transmission"])}
+            >
+              <SelectTrigger id="transmission" className={cn("h-11 sm:h-10", isPending("transmission") && HL)}>
+                <SelectValue placeholder="Seleccione" />
+              </SelectTrigger>
+              <SelectContent>
+                {TX_OPTIONS.map((o) => (
+                  <SelectItem key={o.value} value={o.value}>
+                    {o.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-1.5">
+            <Label>Servicio</Label>
+            <Select
+              value={v.serviceType || undefined}
+              onValueChange={(val) => update("serviceType", val)}
+            >
+              <SelectTrigger id="serviceType" className={cn("h-11 sm:h-10", isPending("serviceType") && HL)}>
+                <SelectValue placeholder="Seleccione" />
+              </SelectTrigger>
+              <SelectContent>
+                {SERVICE_OPTIONS.map((s) => (
+                  <SelectItem key={s} value={s}>
+                    {s}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="mileage">Kilometraje *</Label>
+            <Input
+              id="mileage"
+              inputMode="numeric"
+              value={v.mileage}
+              onChange={(e) => update("mileage", e.target.value.replace(/\D/g, ""))}
+              placeholder="85000"
+              className={cn("h-11 sm:h-10", isPending("mileage") && HL)}
+            />
+          </div>
+          <div className="space-y-1.5">
             <Label htmlFor="owner">Propietario</Label>
             <Input
               id="owner"
               value={v.owner}
-              onChange={(e) => update("owner", e.target.value)}
-              placeholder="Nombre del titular"
-              className="h-11 sm:h-10"
+              onChange={(e) => update("owner", e.target.value.toUpperCase())}
+              placeholder="NOMBRE DEL TITULAR"
+              autoCapitalize="characters"
+              className={cn("h-11 uppercase sm:h-10", isPending("owner") && HL)}
             />
           </div>
           <div className="space-y-1.5">
@@ -379,36 +685,7 @@ export function VehicleInfoStep() {
               value={v.location}
               onChange={(e) => update("location", e.target.value)}
               placeholder="Ciudad / dirección"
-              className="h-11 sm:h-10"
-            />
-          </div>
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>Perito inspector</CardTitle>
-          <CardDescription>
-            Datos del técnico responsable de la inspección.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          <div className="space-y-1.5">
-            <Label htmlFor="inspector">Nombre del perito *</Label>
-            <Input
-              id="inspector"
-              value={v.inspector}
-              onChange={(e) => update("inspector", e.target.value)}
-              className="h-11 sm:h-10"
-            />
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="inspectorId">Documento / licencia</Label>
-            <Input
-              id="inspectorId"
-              value={v.inspectorId}
-              onChange={(e) => update("inspectorId", e.target.value)}
-              className="h-11 sm:h-10"
+              className={cn("h-11 sm:h-10", isPending("location") && HL)}
             />
           </div>
           <div className="space-y-1.5">
@@ -418,11 +695,130 @@ export function VehicleInfoStep() {
               type="date"
               value={v.date}
               onChange={(e) => update("date", e.target.value)}
-              className="h-11 sm:h-10"
+              className={cn("h-11 sm:h-10", isPending("date") && HL)}
             />
+          </div>
           </div>
         </CardContent>
       </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Documentación</CardTitle>
+          <CardDescription>
+            Datos del propietario, póliza particular y reporte de siniestros. Lo que el RUNT no entrega lo digita el perito.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          <div className="space-y-1.5">
+            <Label htmlFor="ownerDocument">Documento o NIT</Label>
+            <Input
+              id="ownerDocument"
+              value={v.ownerDocument}
+              onChange={(e) => update("ownerDocument", e.target.value)}
+              placeholder="1.020.456.789"
+              className={cn("h-11 sm:h-10", isPending("ownerDocument") && HL)}
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="ownerPhone">Teléfono</Label>
+            <Input
+              id="ownerPhone"
+              type="tel"
+              inputMode="tel"
+              value={v.ownerPhone}
+              onChange={(e) => update("ownerPhone", e.target.value)}
+              placeholder="+57 310 555 1234"
+              className={cn("h-11 sm:h-10", isPending("ownerPhone") && HL)}
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label>Tarjeta de Propiedad</Label>
+            <Select
+              value={v.propertyCardStatus || undefined}
+              onValueChange={(val) => update("propertyCardStatus", val)}
+            >
+              <SelectTrigger
+                id="propertyCardStatus"
+                className={cn("h-11 sm:h-10", isPending("propertyCardStatus") && HL)}
+              >
+                <SelectValue placeholder="Seleccione" />
+              </SelectTrigger>
+              <SelectContent>
+                {PROPERTY_CARD_OPTIONS.map((p) => (
+                  <SelectItem key={p} value={p}>
+                    {p}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="insurer">Aseguradora (todo riesgo)</Label>
+            <Input
+              id="insurer"
+              value={v.insurer}
+              onChange={(e) => update("insurer", e.target.value)}
+              placeholder="Sura, Bolívar, Allianz…"
+              className={cn("h-11 sm:h-10", isPending("insurer") && HL)}
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label>Reporta siniestros</Label>
+            <Select
+              value={v.hasClaimsHistory || undefined}
+              onValueChange={(val) => {
+                update("hasClaimsHistory", val);
+                if (val !== "SÍ") {
+                  update("claimsCount", "");
+                  update("claimsValue", "");
+                }
+              }}
+            >
+              <SelectTrigger
+                id="hasClaimsHistory"
+                className={cn("h-11 sm:h-10", isPending("hasClaimsHistory") && HL)}
+              >
+                <SelectValue placeholder="Seleccione" />
+              </SelectTrigger>
+              <SelectContent>
+                {CLAIMS_OPTIONS.map((c) => (
+                  <SelectItem key={c} value={c}>
+                    {c}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          {v.hasClaimsHistory === "SÍ" && (
+            <>
+              <div className="space-y-1.5">
+                <Label htmlFor="claimsCount">Número de siniestros</Label>
+                <Input
+                  id="claimsCount"
+                  inputMode="numeric"
+                  value={v.claimsCount}
+                  onChange={(e) => update("claimsCount", e.target.value.replace(/\D/g, "").slice(0, 4))}
+                  placeholder="0"
+                  className="h-11 sm:h-10"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="claimsValue">Valor de reclamaciones (COP)</Label>
+                <Input
+                  id="claimsValue"
+                  inputMode="numeric"
+                  value={v.claimsValue}
+                  onChange={(e) => update("claimsValue", e.target.value.replace(/\D/g, ""))}
+                  placeholder="0"
+                  className="h-11 sm:h-10"
+                />
+              </div>
+            </>
+          )}
+        </CardContent>
+      </Card>
+
     </div>
   );
 }
