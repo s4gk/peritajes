@@ -3,9 +3,11 @@ import { NextResponse } from "next/server";
 import { requireUser } from "@/lib/server/auth";
 import {
   checkInspectionAccess,
+  ensureCompletedPdf,
   getInspectionServer,
 } from "@/lib/server/inspections";
 import { renderInspectionPdf } from "@/lib/server/pdf-render";
+import { readPdf } from "@/lib/server/pdf-storage";
 import { buildPublicBaseUrl } from "@/lib/server/qr";
 import {
   createShareToken,
@@ -58,10 +60,38 @@ export async function POST(req: Request) {
       return new NextResponse("Sin permisos", { status: 403 });
     }
     if (access.kind === "ok") {
-      // Traemos el consecutivo oficial si ya está asignado. Para borradores
-      // (sin reportNumber) el PDF cae al docNumber derivado de placa+fecha.
+      // Si el peritaje ya está finalizado, devolvemos directamente el PDF
+      // stored — es el documento oficial entregable y debe coincidir bit a
+      // bit con el sha256 registrado en DB. No re-rendereamos para no
+      // introducir divergencias por cambios de branding, fuentes, etc.
       try {
         const stored = await getInspectionServer(body.inspectionId);
+        if (stored?.lockedAt) {
+          const inspection = await ensureCompletedPdf({
+            inspectionId: body.inspectionId,
+            user,
+            baseUrl: buildPublicBaseUrl(req) || new URL(req.url).origin,
+          });
+          const bytes = await readPdf(body.inspectionId);
+          if (bytes) {
+            const slug = (inspection.data.vehicle.plate || "inspeccion").replace(
+              /[^A-Z0-9]/gi,
+              "",
+            );
+            return new NextResponse(bytes as unknown as BodyInit, {
+              status: 200,
+              headers: {
+                "content-type": "application/pdf",
+                "content-disposition": `attachment; filename="peritaje-${slug}.pdf"`,
+                "cache-control": "no-store",
+                "content-length": String(bytes.length),
+                ...(inspection.pdfSha256
+                  ? { "x-pdf-sha256": inspection.pdfSha256 }
+                  : {}),
+              },
+            });
+          }
+        }
         reportNumber = stored?.reportNumber ?? null;
       } catch {
         reportNumber = null;

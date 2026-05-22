@@ -6,6 +6,12 @@ import { formatReportNumber } from "@/lib/company";
 import type { InspectionData, StoredInspection } from "@/lib/types";
 
 import { logAudit, query } from "./db";
+import { deletePdf, savePdf } from "./pdf-storage";
+import { renderInspectionPdf } from "./pdf-render";
+import {
+  createShareToken,
+  getActiveShareTokenForInspection,
+} from "./share-tokens";
 
 type InspectionRow = {
   id: string;
@@ -14,6 +20,10 @@ type InspectionRow = {
   plate: string | null;
   data: InspectionData;
   report_number: string | null;
+  locked_at: Date | string | null;
+  pdf_path: string | null;
+  pdf_sha256: string | null;
+  pdf_size: number | null;
   created_at: Date | string;
   updated_at: Date | string;
 };
@@ -28,6 +38,9 @@ function rowToStored(row: InspectionRow): StoredInspection {
     createdAt: tsToISO(row.created_at),
     updatedAt: tsToISO(row.updated_at),
     reportNumber: row.report_number ?? undefined,
+    lockedAt: row.locked_at ? tsToISO(row.locked_at) : undefined,
+    pdfSha256: row.pdf_sha256 ?? undefined,
+    pdfSize: row.pdf_size ?? undefined,
     data: row.data,
   };
 }
@@ -151,27 +164,39 @@ export async function createInspectionServer(
   }
 }
 
+export type UpdateInspectionResult =
+  | { kind: "ok"; inspection: StoredInspection; justLocked: boolean }
+  | { kind: "not_found" }
+  | { kind: "locked"; inspection: StoredInspection };
+
 export async function updateInspectionServer(
   id: string,
   data: InspectionData,
   userId: string | null,
-): Promise<StoredInspection | null> {
-  const nextStatus = data.status === "completed" ? "completed" : "draft";
+): Promise<UpdateInspectionResult> {
+  const existing = await query<InspectionRow>(
+    "SELECT * FROM inspections WHERE id = $1",
+    [id],
+  );
+  if (existing.rowCount === 0) return { kind: "not_found" };
+  const existingRow = existing.rows[0];
+  // Lock total: una vez finalizado el peritaje es inmutable. Defensa en
+  // profundidad — el UI ya bloquea la edición, pero alguien con un PUT a mano
+  // no debe poder pisar la fila. Cubrimos también filas legacy (status =
+  // completed sin locked_at) por si acaso.
+  const isLocked =
+    existingRow.locked_at !== null || existingRow.status === "completed";
+  if (isLocked) {
+    return { kind: "locked", inspection: rowToStored(existingRow) };
+  }
 
-  // Si está pasando a "completed" y todavía no tiene consecutivo, lo asignamos
-  // ahora. Una vez asignado nunca lo reescribimos — incluso si el peritaje se
-  // reabre y se vuelve a finalizar, el número se mantiene (es el documento
-  // entregado al cliente).
+  const nextStatus = data.status === "completed" ? "completed" : "draft";
+  const justLocking = nextStatus === "completed";
+
+  // En la transición draft→completed asignamos consecutivo si no tiene.
   let assignedReportNumber: string | null = null;
-  if (nextStatus === "completed") {
-    const existing = await query<{ report_number: string | null }>(
-      "SELECT report_number FROM inspections WHERE id = $1",
-      [id],
-    );
-    if (existing.rowCount === 0) return null;
-    if (!existing.rows[0].report_number) {
-      assignedReportNumber = await reserveReportNumber(new Date().getFullYear());
-    }
+  if (justLocking && !existingRow.report_number) {
+    assignedReportNumber = await reserveReportNumber(new Date().getFullYear());
   }
 
   const r = await query<InspectionRow>(
@@ -180,6 +205,7 @@ export async function updateInspectionServer(
          status = $3,
          plate = $4,
          report_number = COALESCE(report_number, $5),
+         locked_at = CASE WHEN $3 = 'completed' THEN COALESCE(locked_at, now()) ELSE locked_at END,
          updated_at = now()
      WHERE id = $1
      RETURNING *`,
@@ -191,17 +217,26 @@ export async function updateInspectionServer(
       assignedReportNumber,
     ],
   );
-  if (!r.rows[0]) return null;
-  // We don't audit autosaves — just status transitions to keep the log clean.
-  if (data.status === "completed") {
+  if (!r.rows[0]) return { kind: "not_found" };
+  if (justLocking) {
     await logAudit(
       userId,
       "inspection.completed",
       assignedReportNumber ? `${id} ${assignedReportNumber}` : id,
     );
   }
-  return rowToStored(r.rows[0]);
+  return {
+    kind: "ok",
+    inspection: rowToStored(r.rows[0]),
+    justLocked: justLocking,
+  };
 }
+
+export type UpdateInspectionForUserResult =
+  | { kind: "ok"; inspection: StoredInspection; justLocked: boolean }
+  | { kind: "not_found" }
+  | { kind: "forbidden" }
+  | { kind: "locked"; inspection: StoredInspection };
 
 /**
  * Update con ownership check: solo dueño o admin. Cierra el IDOR de PUT
@@ -211,18 +246,16 @@ export async function updateInspectionForUser(
   id: string,
   data: InspectionData,
   user: { id: string; role: string },
-): Promise<{ inspection: StoredInspection | null; forbidden: boolean }> {
+): Promise<UpdateInspectionForUserResult> {
   if (user.role !== "admin") {
     const owner = await query<{ user_id: string | null }>(
       "SELECT user_id FROM inspections WHERE id = $1",
       [id],
     );
-    if (owner.rowCount === 0) return { inspection: null, forbidden: false };
-    if (owner.rows[0].user_id !== user.id)
-      return { inspection: null, forbidden: true };
+    if (owner.rowCount === 0) return { kind: "not_found" };
+    if (owner.rows[0].user_id !== user.id) return { kind: "forbidden" };
   }
-  const inspection = await updateInspectionServer(id, data, user.id);
-  return { inspection, forbidden: false };
+  return updateInspectionServer(id, data, user.id);
 }
 
 export async function deleteInspectionServer(
@@ -231,8 +264,120 @@ export async function deleteInspectionServer(
 ): Promise<boolean> {
   const r = await query("DELETE FROM inspections WHERE id = $1", [id]);
   if (r.rowCount === 0) return false;
+  // El share token se borra por CASCADE en DB. El PDF guardado en disco no
+  // — lo limpiamos manualmente para no dejar archivos huérfanos cuando un
+  // admin borra un peritaje finalizado.
+  await deletePdf(id).catch((err) => {
+    console.error("[inspections] deletePdf failed:", (err as Error).message);
+  });
   await logAudit(userId, "inspection.deleted", id);
   return true;
+}
+
+export type DeleteInspectionResult =
+  | { kind: "ok" }
+  | { kind: "not_found" }
+  | { kind: "forbidden" }
+  | { kind: "locked" };
+
+/**
+ * Borra con chequeo de propiedad + lock:
+ *  - admin: puede borrar cualquier peritaje, finalizado o no.
+ *  - owner: puede borrar SOLO borradores propios. Los finalizados son
+ *    inmutables (la promesa de integridad del informe entregado al cliente);
+ *    si necesita borrar uno, debe pedírselo al admin.
+ */
+export async function deleteInspectionForUser(
+  id: string,
+  user: { id: string; role: string },
+): Promise<DeleteInspectionResult> {
+  const row = await query<{ user_id: string | null; locked_at: Date | string | null; status: string }>(
+    "SELECT user_id, locked_at, status FROM inspections WHERE id = $1",
+    [id],
+  );
+  if (row.rowCount === 0) return { kind: "not_found" };
+  const r = row.rows[0];
+  const isLocked = r.locked_at !== null || r.status === "completed";
+
+  if (user.role !== "admin") {
+    if (r.user_id !== user.id) return { kind: "forbidden" };
+    if (isLocked) return { kind: "locked" };
+  }
+  const ok = await deleteInspectionServer(id, user.id);
+  return ok ? { kind: "ok" } : { kind: "not_found" };
+}
+
+/**
+ * Asegura que un peritaje finalizado tenga su PDF persistido en disco. Si la
+ * fila ya tiene pdf_path/pdf_sha256, no hace nada (verificación opcional).
+ * Si no, lo renderiza, lo guarda y actualiza la fila con los metadatos.
+ *
+ * Se invoca:
+ *  - desde PUT /api/inspections/[id] cuando el peritaje pasa a completed
+ *    (queremos que el archivo esté listo antes de devolver la respuesta).
+ *  - desde GET /api/inspections/[id]/pdf y /api/pdf como recuperación si una
+ *    finalización previa quedó sin PDF (p.ej. Puppeteer falló y se reintenta).
+ *
+ * Devuelve la fila actualizada (con pdf_path/sha256/size si todo fue bien)
+ * o lanza si la inspection no existe.
+ */
+export async function ensureCompletedPdf(opts: {
+  inspectionId: string;
+  user: { id: string; role: string };
+  /** URL base del request para armar el verificationUrl del QR del PDF. */
+  baseUrl: string;
+}): Promise<StoredInspection> {
+  const { inspectionId, user, baseUrl } = opts;
+  const row = await query<InspectionRow>(
+    "SELECT * FROM inspections WHERE id = $1",
+    [inspectionId],
+  );
+  if (row.rowCount === 0) {
+    throw new Error("INSPECTION_NOT_FOUND");
+  }
+  const r = row.rows[0];
+  if (!r.locked_at && r.status !== "completed") {
+    throw new Error("INSPECTION_NOT_FINALIZED");
+  }
+  if (r.pdf_path && r.pdf_sha256) {
+    return rowToStored(r);
+  }
+
+  // Reusamos un share token activo (para que el QR del PDF apunte a la versión
+  // pública verificable) o creamos uno nuevo si no hay.
+  let verificationUrl: string | null = null;
+  try {
+    let token = await getActiveShareTokenForInspection(inspectionId);
+    if (!token) {
+      token = await createShareToken({
+        inspectionId,
+        createdBy: user.id,
+      });
+    }
+    const base = baseUrl.replace(/\/$/, "");
+    verificationUrl = `${base}/r/${token.token}`;
+  } catch {
+    verificationUrl = null;
+  }
+
+  const { buffer } = await renderInspectionPdf({
+    data: r.data,
+    verificationUrl,
+    reportNumber: r.report_number ?? null,
+  });
+  const meta = await savePdf(inspectionId, buffer);
+
+  const updated = await query<InspectionRow>(
+    `UPDATE inspections
+     SET pdf_path = $2,
+         pdf_sha256 = $3,
+         pdf_size = $4
+     WHERE id = $1
+     RETURNING *`,
+    [inspectionId, meta.relativePath, meta.sha256, meta.size],
+  );
+  await logAudit(user.id, "inspection.pdf_persisted", `${inspectionId} ${meta.sha256.slice(0, 12)}`);
+  return rowToStored(updated.rows[0]);
 }
 
 export async function duplicateInspectionServer(

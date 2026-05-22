@@ -260,5 +260,14 @@ export type StoredInspection = {
    *  peritaje se finaliza — en borradores es undefined. Inmutable una vez
    *  asignado. */
   reportNumber?: string;
+  /** ISO timestamp del momento en que el peritaje quedó finalizado e
+   *  inmutable. Si está presente, ninguna mutación (PUT, autosave) puede
+   *  alterar `data` — solo admins pueden borrar la fila completa. */
+  lockedAt?: string;
+  /** SHA-256 hex del PDF persistido al finalizar. Permite verificar que el
+   *  archivo en disco no fue alterado fuera del flujo de la app. */
+  pdfSha256?: string;
+  /** Bytes del PDF stored, para mostrar tamaño en UI sin leer el archivo. */
+  pdfSize?: number;
   data: InspectionData;
 };

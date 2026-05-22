@@ -65,6 +65,16 @@ let initPromise: Promise<void> | null = null;
  *  como fallback si el ID que buscan no está en IDB. */
 let serverFetchPromise: Promise<void> | null = null;
 
+/** True si el peritaje ya fue finalizado y es inmutable: el lock se determina
+ *  por `lockedAt` (campo nuevo) o por `data.status === "completed"` (fallback
+ *  para filas legacy). Lo usamos del lado del cliente para no encolar
+ *  mutaciones que el server va a rechazar con 423. */
+function isInspectionLocked(insp: StoredInspection | null | undefined): boolean {
+  if (!insp) return false;
+  if (insp.lockedAt) return true;
+  return insp.data?.status === "completed";
+}
+
 function mergeDefaults(inspection: StoredInspection): StoredInspection {
   const base = emptyInspection();
   const d = (inspection?.data ?? {}) as Partial<InspectionData>;
@@ -298,9 +308,26 @@ export function createInspection(seed?: InspectionSeed): StoredInspection {
   return insp;
 }
 
+export function isLocked(id: string): boolean {
+  return isInspectionLocked(memory.get(id));
+}
+
 export function saveInspectionData(id: string, data: InspectionData) {
   const existing = memory.get(id);
+  // Si el peritaje ya está finalizado, ignoramos la mutación. Es defensa en
+  // profundidad: la UI debería ya estar en modo solo-lectura, pero un
+  // autosave pendiente o un caller mal portado no debe pisar la fila.
+  if (isInspectionLocked(existing)) {
+    if (typeof console !== "undefined") {
+      console.warn(
+        "[inspections-store] saveInspectionData ignorado: peritaje finalizado",
+        id,
+      );
+    }
+    return;
+  }
   const updated: StoredInspection = {
+    ...(existing ?? {}),
     id,
     createdAt: existing?.createdAt ?? new Date().toISOString(),
     updatedAt: new Date().toISOString(),
@@ -318,6 +345,9 @@ export function saveInspectionData(id: string, data: InspectionData) {
 }
 
 export function deleteInspection(id: string) {
+  // Nota: solo admin tiene el botón de borrar en la UI. El bloqueo dura del
+  // server (deleteInspectionServer + requireAdmin) sigue siendo la frontera
+  // real. Acá solo evitamos encolar mutaciones que vamos a saber inválidas.
   memory.delete(id);
   idbDeleteInspection(id).catch(() => {});
   idbEnqueueMutation({ kind: "delete", inspectionId: id })

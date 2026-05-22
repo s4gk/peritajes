@@ -2821,6 +2821,7 @@ export function renderReportHtml(
           <div class="brand-cols">
             <div>
               <div class="hdr-value">${esc(brand.nit)}</div>
+              ${brand.phone ? `<div class="hdr-value">${esc(brand.phone)}</div>` : ""}
               <div class="hdr-value">${esc(v.inspector)}</div>
               <div class="hdr-value">${esc(v.inspectorId)}</div>
             </div>
@@ -2968,7 +2969,7 @@ export function renderReportHtml(
       ? `<div class="sig-verify">
           <img src="${verificationQrDataUrl}" alt="QR de verificación" />
           <div class="text">
-            <strong>Peritaje verificable en línea.</strong> Escaneá este código o ingresá a la URL para confirmar que esta copia coincide con la versión oficial registrada por ${escapeHtml(brand.name)}.
+            <strong>Peritaje verificable en línea.</strong> Escanea este código o ingresa a la URL para confirmar que esta copia coincide con la versión oficial registrada por ${escapeHtml(brand.name)}.
             <div class="url">${escapeHtml(verificationUrl ?? "")}</div>
           </div>
         </div>`
