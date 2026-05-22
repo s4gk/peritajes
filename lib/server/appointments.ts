@@ -45,6 +45,7 @@ export type Appointment = {
   inspectionId: string | null;
   status: AppointmentStatus;
   createdBy: string | null;
+  orgId: string | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -65,6 +66,7 @@ type Row = {
   inspection_id: string | null;
   status: string;
   created_by: string | null;
+  org_id: string | null;
   created_at: Date | string;
   updated_at: Date | string;
 };
@@ -93,6 +95,7 @@ function rowToAppointment(row: Row): Appointment {
     inspectionId: row.inspection_id,
     status,
     createdBy: row.created_by,
+    orgId: row.org_id,
     createdAt: tsToISO(row.created_at),
     updatedAt: tsToISO(row.updated_at),
   };
@@ -109,17 +112,30 @@ function makeId(): string {
 }
 
 /**
- * Visibilidad: admin ve todo. Perito ve sus citas asignadas + las que están
- * sin asignar todavía (cola abierta — cualquiera puede tomarlas).
+ * Visibilidad:
+ *   admin    → todas las citas (cross-org)
+ *   owner    → todas las citas de su org (asignadas + sin asignar)
+ *   employee → solo citas asignadas a él (no ve la cola abierta de su org;
+ *              el owner es el que distribuye)
  */
 export async function listAppointmentsFor(user: User): Promise<Appointment[]> {
   if (user.role === "admin") {
     const r = await query<Row>(`${SELECT_BASE} ORDER BY a.scheduled_at ASC`);
     return r.rows.map(rowToAppointment);
   }
+  if (user.role === "owner") {
+    const r = await query<Row>(
+      `${SELECT_BASE}
+       WHERE a.org_id = $1
+       ORDER BY a.scheduled_at ASC`,
+      [user.orgId],
+    );
+    return r.rows.map(rowToAppointment);
+  }
+  // employee: solo lo asignado a él.
   const r = await query<Row>(
     `${SELECT_BASE}
-     WHERE a.assigned_user_id IS NULL OR a.assigned_user_id = $1
+     WHERE a.assigned_user_id = $1
      ORDER BY a.scheduled_at ASC`,
     [user.id],
   );
@@ -132,9 +148,13 @@ export type AppointmentAccess =
   | { kind: "forbidden" };
 
 /**
- * Solo el admin o el perito asignado (o el creador) pueden ver/editar una
- * cita. Una cita sin asignar es accesible por cualquier perito autenticado
- * — la idea es que cualquiera pueda tomarla.
+ * Acceso a una cita:
+ *   admin    → todas
+ *   owner    → cualquiera de su org (incluso asignadas a otros empleados,
+ *              porque es el que reasigna y administra agenda).
+ *   employee → solo si está asignada a él. (Las creadas por él que luego
+ *              se reasignaron a otro empleado, ya NO las ve — el owner
+ *              tomó control.)
  */
 export async function getAppointmentFor(
   id: string,
@@ -144,11 +164,15 @@ export async function getAppointmentFor(
   if (r.rowCount === 0) return { kind: "not_found" };
   const appt = rowToAppointment(r.rows[0]);
   if (user.role === "admin") return { kind: "ok", appointment: appt };
-  if (appt.assignedUserId === null || appt.assignedUserId === user.id) {
-    return { kind: "ok", appointment: appt };
+  if (user.role === "owner") {
+    return appt.orgId === user.orgId
+      ? { kind: "ok", appointment: appt }
+      : { kind: "forbidden" };
   }
-  if (appt.createdBy === user.id) return { kind: "ok", appointment: appt };
-  return { kind: "forbidden" };
+  // employee
+  return appt.assignedUserId === user.id
+    ? { kind: "ok", appointment: appt }
+    : { kind: "forbidden" };
 }
 
 export type CreateAppointmentInput = {
@@ -183,8 +207,8 @@ export async function createAppointment(
        id, scheduled_at, duration_minutes,
        owner_name, owner_phone, owner_document,
        plate, vehicle_label, location, notes,
-       assigned_user_id, status, created_by
-     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'scheduled', $12)`,
+       assigned_user_id, status, created_by, org_id
+     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'scheduled', $12, $13)`,
     [
       id,
       scheduledAt.toISOString(),
@@ -198,6 +222,7 @@ export async function createAppointment(
       (input.notes ?? "").trim(),
       input.assignedUserId ?? null,
       user.id,
+      user.orgId,
     ],
   );
   await logAudit(user.id, "appointment.created", id);
@@ -326,6 +351,10 @@ export async function startInspectionFromAppointment(
       },
     },
     user.id,
+    undefined,
+    // El peritaje hereda el org de la cita. Si la cita no tiene org (legacy
+    // o admin creó sin scope), cae al org del user que arranca el peritaje.
+    appt.orgId ?? user.orgId ?? null,
   );
 
   await query(

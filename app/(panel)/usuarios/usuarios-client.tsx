@@ -42,7 +42,7 @@ type User = {
   username: string;
   fullName: string;
   email: string | null;
-  role: "admin" | "owner";
+  role: "admin" | "owner" | "employee";
   active: boolean;
   createdAt: string;
   lastLoginAt: string | null;
@@ -55,7 +55,7 @@ export function UsuariosClient({
 }: {
   initialUsers: User[];
   currentUserId: string;
-  currentUserRole: "admin" | "owner";
+  currentUserRole: "admin" | "owner" | "employee";
 }) {
   const toast = useToast();
   const [users, setUsers] = React.useState<User[]>(initialUsers);
@@ -337,7 +337,7 @@ function CreateUserDialog({
   const [username, setUsername] = React.useState("");
   const [email, setEmail] = React.useState("");
   const [password, setPassword] = React.useState("");
-  const [role, setRole] = React.useState<"admin" | "owner">("owner");
+  const [role, setRole] = React.useState<"admin" | "owner" | "employee">("owner");
   const [busy, setBusy] = React.useState(false);
 
   React.useEffect(() => {
@@ -410,7 +410,7 @@ function CreateUserDialog({
               {canCreateAdmin ? (
                 <Select
                   value={role}
-                  onValueChange={(v) => setRole(v as "admin" | "owner")}
+                  onValueChange={(v) => setRole(v as "admin" | "owner" | "employee")}
                 >
                   <SelectTrigger>
                     <SelectValue />

@@ -8,7 +8,7 @@ export type PanelUser = {
   fullName: string;
   licenseId: string | null;
   signatureDataUrl: string | null;
-  role: "admin" | "owner";
+  role: "admin" | "owner" | "employee";
 };
 
 const CurrentUserContext = React.createContext<PanelUser | null>(null);

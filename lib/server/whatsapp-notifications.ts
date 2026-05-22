@@ -68,12 +68,24 @@ function safe(label: string, fn: () => void): void {
  * vez de "nadie recibió y nadie sabe por qué". Devolvemos array vacío en
  * cualquiera de los dos casos (error o legítimamente sin teléfonos) para que
  * los callers tengan un único camino, pero la diferencia queda en logs.
+ *
+ * Multi-tenant: cada org tiene su propio "equipo" — solo le mandamos avisos
+ * internos a usuarios de la misma org que el peritaje/cita. Si orgId es
+ * null (cross-org, owner del peritaje borrado, admin sin org), no notificamos
+ * a nadie — el admin se entera por log y puede investigar.
  */
-async function loadTeamPhones(context: string): Promise<
-  Awaited<ReturnType<typeof listTeamWhatsAppPhones>>
-> {
+async function loadTeamPhones(
+  context: string,
+  orgId: string | null,
+): Promise<Awaited<ReturnType<typeof listTeamWhatsAppPhones>>> {
+  if (!orgId) {
+    console.warn(
+      `[wa-notify] ${context}: sin orgId, no se mandan avisos internos.`,
+    );
+    return [];
+  }
   try {
-    return await listTeamWhatsAppPhones();
+    return await listTeamWhatsAppPhones(orgId);
   } catch (err) {
     console.error(
       `[wa-notify] ${context}: listTeamWhatsAppPhones falló:`,
@@ -93,9 +105,11 @@ export async function notifyTeamNewIntake(input: {
   vehicle: string; // "Toyota Corolla 2018"
   owner: string;
   inspectorName: string;
+  /** Org del peritaje. El fan-out solo va a usuarios de esta org. */
+  orgId: string | null;
 }): Promise<void> {
   if (!isReady()) return;
-  const team = await loadTeamPhones("team-intake");
+  const team = await loadTeamPhones("team-intake", input.orgId);
   if (team.length === 0) return;
   const lines = [
     "🚗 *Nuevo peritaje*",
@@ -127,9 +141,10 @@ export async function notifyTeamSignatureCompleted(input: {
   inspectionId: string;
   plate: string;
   owner: string;
+  orgId: string | null;
 }): Promise<void> {
   if (!isReady()) return;
-  const team = await loadTeamPhones("team-signed");
+  const team = await loadTeamPhones("team-signed", input.orgId);
   if (team.length === 0) return;
   const text = [
     "✅ *Peritaje firmado*",

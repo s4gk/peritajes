@@ -10,14 +10,20 @@ export const SESSION_COOKIE = "perito_session";
 const SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 30; // 30 days
 
 /**
- * Roles de la app:
- *  - admin: superuser técnico (Vestel/desarrollo). Único que puede borrar
- *    peritajes finalizados y acceder a auditoría.
- *  - owner: dueño del negocio. Hace peritajes, configura su empresa y
- *    administra usuarios. Es el rol "operativo" que reemplaza al antiguo
- *    "perito" — filas legacy con role='perito' se mapean a 'owner' al leer.
+ * Roles de la app (jerarquía multi-tenant):
+ *  - admin: superuser técnico (Vestel). No pertenece a ninguna org. Ve y
+ *    administra TODO. Único que puede crear nuevos owners.
+ *  - owner: dueño del negocio (cliente de Vestel). Pertenece a SU org y
+ *    es `owner_user_id` de ella. Ve todos los peritajes de su org
+ *    (propios + de sus empleados) y gestiona empleados/empresa/WhatsApp
+ *    de la org.
+ *  - employee: perito asalariado de un owner. Pertenece a la org del
+ *    owner que lo dio de alta. Solo ve y edita SUS propios peritajes;
+ *    no accede a /empresa, /usuarios, /backup ni a peritajes de otros.
+ *
+ * Filas legacy: role='perito' se mapeó a 'owner' en la migración previa.
  */
-export type UserRole = "admin" | "owner";
+export type UserRole = "admin" | "owner" | "employee";
 
 export type User = {
   id: string;
@@ -77,7 +83,12 @@ function rowToUser(row: UserRow): User {
     licenseId: row.license_id ?? null,
     signatureDataUrl: row.signature_data_url ?? null,
     waPhone: row.wa_phone ?? null,
-    role: row.role === "admin" ? "admin" : "owner",
+    role:
+      row.role === "admin"
+        ? "admin"
+        : row.role === "employee"
+          ? "employee"
+          : "owner",
     orgId: row.org_id ?? null,
     parentUserId: row.parent_user_id ?? null,
     active: row.active,
@@ -106,25 +117,72 @@ export async function countUsers(): Promise<number> {
   return Number(r.rows[0].c);
 }
 
-export async function listUsers(): Promise<User[]> {
+/**
+ * Lista usuarios respetando el scope del actor:
+ *  - admin   → ve a todos (incluye admins y owners de otras orgs)
+ *  - owner   → ve a los miembros de SU org (a sí mismo y a sus empleados)
+ *  - employee → ve solo a sí mismo (es un solo registro, pero la UI puede
+ *               usar esto para consultas como "mi perfil" sin tocar otra API).
+ */
+export async function listUsersFor(actor: User): Promise<User[]> {
+  if (actor.role === "admin") {
+    const r = await query<UserRow>(
+      "SELECT * FROM users ORDER BY created_at ASC",
+    );
+    return r.rows.map(rowToUser);
+  }
+  if (actor.role === "owner") {
+    const r = await query<UserRow>(
+      `SELECT * FROM users
+       WHERE org_id = $1
+       ORDER BY created_at ASC`,
+      [actor.orgId],
+    );
+    return r.rows.map(rowToUser);
+  }
+  // employee: solo a sí mismo.
+  const r = await query<UserRow>(
+    "SELECT * FROM users WHERE id = $1",
+    [actor.id],
+  );
+  return r.rows.map(rowToUser);
+}
+
+/** Versión legacy sin scope — solo para callers internos que ya filtraron
+ *  o que son inherentemente admin (p.ej. migraciones, scripts). NO usar
+ *  desde APIs HTTP sin un check de rol explícito. */
+export async function listUsersUnscoped(): Promise<User[]> {
   const r = await query<UserRow>(
     "SELECT * FROM users ORDER BY created_at ASC",
   );
   return r.rows.map(rowToUser);
 }
 
+// Compat: el código existente importa `listUsers`. Mantenemos el nombre pero
+// ahora exige el actor, así nadie puede llamarlo sin pensar en el scope.
+export const listUsers = listUsersFor;
+
 /**
- * Lista de teléfonos WhatsApp del equipo activo. Usado para fan-out de
- * notificaciones internas (intake nuevo, firma completada). Devuelve solo
- * usuarios activos con `wa_phone` configurado.
+ * Lista de teléfonos WhatsApp del equipo activo dentro de una org. Usado
+ * para fan-out de notificaciones internas (intake nuevo, firma completada).
+ * Devuelve solo usuarios activos con `wa_phone` configurado dentro de la
+ * org dada. El admin (org_id=NULL) NO se incluye — los avisos del equipo
+ * van al dueño y sus empleados, no a Vestel.
  */
-export async function listTeamWhatsAppPhones(): Promise<
-  Array<{ id: string; fullName: string; waPhone: string }>
-> {
+export async function listTeamWhatsAppPhones(
+  orgId: string | null,
+): Promise<Array<{ id: string; fullName: string; waPhone: string }>> {
+  // Sin org → no hay equipo a notificar. Devolvemos array vacío para que el
+  // caller no se rompa pero tampoco mande mensajes raros a admins.
+  if (!orgId) return [];
   const r = await query<{ id: string; full_name: string; wa_phone: string }>(
     `SELECT id, full_name, wa_phone
      FROM users
-     WHERE active = TRUE AND wa_phone IS NOT NULL AND wa_phone <> ''`,
+     WHERE org_id = $1
+       AND active = TRUE
+       AND wa_phone IS NOT NULL
+       AND wa_phone <> ''`,
+    [orgId],
   );
   return r.rows.map((row) => ({
     id: row.id,
@@ -155,6 +213,11 @@ export type CreateUserInput = {
   fullName: string;
   email?: string | null;
   role?: UserRole;
+  /** Org del nuevo usuario. Si el rol es admin, debe ser null. */
+  orgId?: string | null;
+  /** Quién está dando de alta este usuario. Útil para audit (owner que crea
+   *  employee → parent_user_id apunta al owner). */
+  parentUserId?: string | null;
 };
 
 export async function createUser(input: CreateUserInput): Promise<User> {
@@ -171,6 +234,17 @@ export async function createUser(input: CreateUserInput): Promise<User> {
     throw new Error("El nombre completo es requerido.");
   }
 
+  const role = input.role ?? "owner";
+  // Reglas de consistencia rol ↔ org:
+  //  - admin SIEMPRE va sin org_id (es global).
+  //  - employee SIEMPRE va con org_id (el del owner que lo crea).
+  //  - owner puede ir sin org_id de entrada porque el caller (API) suele
+  //    crear la org en un paso siguiente y luego asociarla via setUserOrg.
+  const orgId = role === "admin" ? null : input.orgId ?? null;
+  if (role === "employee" && !orgId) {
+    throw new Error("Un empleado debe estar asociado a una organización.");
+  }
+
   const existing = await getUserByUsername(username);
   if (existing) {
     throw new Error("Ese usuario ya existe.");
@@ -180,22 +254,44 @@ export async function createUser(input: CreateUserInput): Promise<User> {
   const hash = await hashPassword(input.password);
 
   await query(
-    `INSERT INTO users (id, username, password_hash, full_name, email, role, active)
-     VALUES ($1, $2, $3, $4, $5, $6, TRUE)`,
+    `INSERT INTO users (id, username, password_hash, full_name, email, role, org_id, parent_user_id, active)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, TRUE)`,
     [
       id,
       username,
       hash,
       input.fullName.trim(),
       input.email?.trim() || null,
-      input.role ?? "owner",
+      role,
+      orgId,
+      input.parentUserId ?? null,
     ],
   );
 
   const created = await getUserById(id);
   if (!created) throw new Error("No se pudo crear el usuario.");
-  await logAudit(id, "user.created", JSON.stringify({ username, role: input.role }));
+  await logAudit(
+    input.parentUserId ?? id,
+    "user.created",
+    JSON.stringify({ username, role, orgId }),
+  );
   return created;
+}
+
+/** Cambia la org de un usuario. Usado para asociar un owner recién creado a
+ *  su org auto-creada. No tocar manualmente desde una API sin un caso de
+ *  uso muy claro — la membresía suele heredarse al crear el usuario. */
+export async function setUserOrg(
+  userId: string,
+  orgId: string | null,
+  changedBy: string | null,
+): Promise<void> {
+  await query("UPDATE users SET org_id = $1 WHERE id = $2", [orgId, userId]);
+  await logAudit(
+    changedBy,
+    "user.org_changed",
+    JSON.stringify({ userId, orgId }),
+  );
 }
 
 export async function setUserActive(id: string, active: boolean): Promise<void> {

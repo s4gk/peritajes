@@ -22,7 +22,7 @@ export default async function AuditoriaPage() {
 
   const [initialPage, users, actions] = await Promise.all([
     listAuditLog({ limit: 100 }),
-    listUsers(),
+    listUsers(user),
     listAuditActions(),
   ]);
 

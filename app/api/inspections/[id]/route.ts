@@ -178,7 +178,7 @@ export async function PUT(
  */
 async function sendCompletionNotifications(
   inspection: StoredInspection,
-  user: { id: string; role: string },
+  user: { id: string; role: string; orgId: string | null },
   req: Request,
 ): Promise<void> {
   const data = inspection.data;
@@ -188,6 +188,7 @@ async function sendCompletionNotifications(
     inspectionId: inspection.id,
     plate: vehicle?.plate ?? "",
     owner: vehicle?.owner ?? "",
+    orgId: inspection.orgId ?? user.orgId,
   }).catch((err) => {
     console.error("[wa] team-signed failed:", (err as Error).message);
   });

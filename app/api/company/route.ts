@@ -34,6 +34,13 @@ export async function PUT(req: Request) {
   } catch (e) {
     return unauth(e);
   }
+  // Employees no configuran el negocio — esa decisión es del owner.
+  if (user.role === "employee") {
+    return NextResponse.json(
+      { error: "Solo el dueño puede editar la empresa." },
+      { status: 403 },
+    );
+  }
   try {
     const body = await req.json();
     const updated = await updateCompanyConfig(body);

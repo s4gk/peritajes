@@ -78,7 +78,7 @@ type Appointment = {
 
 type Props = {
   initialAppointments: Appointment[];
-  currentUser: { id: string; role: "admin" | "owner" };
+  currentUser: { id: string; role: "admin" | "owner" | "employee" };
 };
 
 type FormState = {

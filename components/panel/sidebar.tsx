@@ -25,6 +25,9 @@ type NavItem = {
   label: string;
   icon: React.ComponentType<{ className?: string }>;
   adminOnly?: boolean;
+  /** Si está marcado, lo ocultamos a employees (solo lo ven owner+admin).
+   *  Empresa, Usuarios, WhatsApp, Backup son cosa del dueño. */
+  ownerOnly?: boolean;
 };
 
 const NAV: NavItem[] = [
@@ -32,23 +35,27 @@ const NAV: NavItem[] = [
   { href: "/agenda", label: "Agenda", icon: Calendar },
   { href: "/peritajes", label: "Peritajes", icon: ClipboardList },
   { href: "/vehiculos", label: "Vehículos", icon: Car },
-  { href: "/empresa", label: "Empresa", icon: Building2 },
-  { href: "/usuarios", label: "Usuarios", icon: Users },
-  { href: "/whatsapp", label: "WhatsApp", icon: MessageCircle },
+  { href: "/empresa", label: "Empresa", icon: Building2, ownerOnly: true },
+  { href: "/usuarios", label: "Usuarios", icon: Users, ownerOnly: true },
+  { href: "/whatsapp", label: "WhatsApp", icon: MessageCircle, ownerOnly: true },
   { href: "/auditoria", label: "Auditoría", icon: ScrollText, adminOnly: true },
-  { href: "/backup", label: "Backup", icon: DatabaseBackup },
+  { href: "/backup", label: "Backup", icon: DatabaseBackup, ownerOnly: true },
   { href: "/cuenta", label: "Mi cuenta", icon: UserCircle },
 ];
 
 export type SidebarProps = {
-  user: { fullName: string; username: string; role: "admin" | "owner" };
+  user: { fullName: string; username: string; role: "admin" | "owner" | "employee" };
   open: boolean;
   onClose: () => void;
 };
 
 export function Sidebar({ user, open, onClose }: SidebarProps) {
   const pathname = usePathname();
-  const items = NAV.filter((i) => !i.adminOnly || user.role === "admin");
+  const items = NAV.filter((i) => {
+    if (i.adminOnly && user.role !== "admin") return false;
+    if (i.ownerOnly && user.role === "employee") return false;
+    return true;
+  });
 
   return (
     <>
@@ -125,7 +132,11 @@ export function Sidebar({ user, open, onClose }: SidebarProps) {
             </div>
             <div className="truncate text-muted-foreground">
               @{user.username} ·{" "}
-              {user.role === "admin" ? "Administrador" : "Dueño"}
+              {user.role === "admin"
+                ? "Administrador"
+                : user.role === "owner"
+                  ? "Dueño"
+                  : "Empleado"}
             </div>
           </div>
         </div>

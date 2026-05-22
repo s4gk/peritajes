@@ -16,6 +16,7 @@ import {
 type InspectionRow = {
   id: string;
   user_id: string | null;
+  org_id: string | null;
   status: string;
   plate: string | null;
   data: InspectionData;
@@ -28,6 +29,31 @@ type InspectionRow = {
   updated_at: Date | string;
 };
 
+/**
+ * Scope de visibilidad por rol:
+ *   admin    → todo
+ *   owner    → cualquier peritaje de su org (propios + de empleados)
+ *   employee → solo peritajes cuyo `user_id` es él mismo
+ *
+ * Lo expongo como helper para usar consistente en todas las queries y no
+ * repetir el if/else en cada función.
+ */
+type Actor = { id: string; role: string; orgId: string | null };
+function scopeWhere(
+  actor: Actor,
+  alias = "",
+): { sql: string; params: unknown[]; nextIdx: number } {
+  const p = alias ? `${alias}.` : "";
+  if (actor.role === "admin") {
+    return { sql: "TRUE", params: [], nextIdx: 1 };
+  }
+  if (actor.role === "owner") {
+    return { sql: `${p}org_id = $1`, params: [actor.orgId], nextIdx: 2 };
+  }
+  // employee
+  return { sql: `${p}user_id = $1`, params: [actor.id], nextIdx: 2 };
+}
+
 function tsToISO(v: Date | string): string {
   return typeof v === "string" ? v : v.toISOString();
 }
@@ -35,6 +61,8 @@ function tsToISO(v: Date | string): string {
 function rowToStored(row: InspectionRow): StoredInspection {
   return {
     id: row.id,
+    userId: row.user_id ?? undefined,
+    orgId: row.org_id ?? undefined,
     createdAt: tsToISO(row.created_at),
     updatedAt: tsToISO(row.updated_at),
     reportNumber: row.report_number ?? undefined,
@@ -72,9 +100,26 @@ function platefromData(data: InspectionData): string | null {
   return plate ? plate.toUpperCase() : null;
 }
 
+/** Listado global (admin-only / scripts). Para el panel usar `listInspectionsFor`. */
 export async function listInspectionsServer(): Promise<StoredInspection[]> {
   const r = await query<InspectionRow>(
     "SELECT * FROM inspections ORDER BY updated_at DESC",
+  );
+  return r.rows.map(rowToStored);
+}
+
+/**
+ * Listado scoped por rol del actor. Es lo que consume `/api/inspections` GET.
+ * Aplica el filtro de visibilidad de una vez para que ningún caller pueda
+ * "olvidarse" de scopear.
+ */
+export async function listInspectionsFor(
+  actor: Actor,
+): Promise<StoredInspection[]> {
+  const scope = scopeWhere(actor);
+  const r = await query<InspectionRow>(
+    `SELECT * FROM inspections WHERE ${scope.sql} ORDER BY updated_at DESC`,
+    scope.params,
   );
   return r.rows.map(rowToStored);
 }
@@ -96,12 +141,12 @@ export async function getInspectionServer(
  */
 export async function getInspectionForUser(
   id: string,
-  user: { id: string; role: string },
+  user: Actor,
 ): Promise<StoredInspection | null> {
-  if (user.role === "admin") return getInspectionServer(id);
+  const scope = scopeWhere(user);
   const r = await query<InspectionRow>(
-    "SELECT * FROM inspections WHERE id = $1 AND user_id = $2",
-    [id, user.id],
+    `SELECT * FROM inspections WHERE id = $${scope.nextIdx} AND ${scope.sql}`,
+    [...scope.params, id],
   );
   return r.rows[0] ? rowToStored(r.rows[0]) : null;
 }
@@ -117,22 +162,27 @@ export type InspectionAccess =
  */
 export async function checkInspectionAccess(
   id: string,
-  user: { id: string; role: string },
+  user: Actor,
 ): Promise<InspectionAccess> {
-  const r = await query<{ user_id: string | null }>(
-    "SELECT user_id FROM inspections WHERE id = $1",
+  const r = await query<{ user_id: string | null; org_id: string | null }>(
+    "SELECT user_id, org_id FROM inspections WHERE id = $1",
     [id],
   );
   if (r.rowCount === 0) return { kind: "not_found" };
   if (user.role === "admin") return { kind: "ok" };
-  if (r.rows[0].user_id === user.id) return { kind: "ok" };
-  return { kind: "forbidden" };
+  const row = r.rows[0];
+  if (user.role === "owner") {
+    return row.org_id === user.orgId ? { kind: "ok" } : { kind: "forbidden" };
+  }
+  // employee
+  return row.user_id === user.id ? { kind: "ok" } : { kind: "forbidden" };
 }
 
 export async function createInspectionServer(
   data: InspectionData,
   userId: string | null,
   preferredId?: string,
+  orgId: string | null = null,
 ): Promise<StoredInspection> {
   // Accept a client-supplied ID for optimistic UI flows. The store generates
   // an ID locally and posts it so the wizard can navigate immediately without
@@ -142,12 +192,13 @@ export async function createInspectionServer(
     : makeId();
   try {
     const r = await query<InspectionRow>(
-      `INSERT INTO inspections (id, user_id, status, plate, data)
-       VALUES ($1, $2, $3, $4, $5::jsonb)
+      `INSERT INTO inspections (id, user_id, org_id, status, plate, data)
+       VALUES ($1, $2, $3, $4, $5, $6::jsonb)
        RETURNING *`,
       [
         id,
         userId,
+        orgId,
         data.status === "completed" ? "completed" : "draft",
         platefromData(data),
         JSON.stringify(data),
@@ -158,7 +209,7 @@ export async function createInspectionServer(
   } catch (e) {
     if (preferredId && (e as { code?: string }).code === "23505") {
       // Unique violation — generate a server-side ID and retry once.
-      return createInspectionServer(data, userId);
+      return createInspectionServer(data, userId, undefined, orgId);
     }
     throw e;
   }
@@ -245,16 +296,11 @@ export type UpdateInspectionForUserResult =
 export async function updateInspectionForUser(
   id: string,
   data: InspectionData,
-  user: { id: string; role: string },
+  user: Actor,
 ): Promise<UpdateInspectionForUserResult> {
-  if (user.role !== "admin") {
-    const owner = await query<{ user_id: string | null }>(
-      "SELECT user_id FROM inspections WHERE id = $1",
-      [id],
-    );
-    if (owner.rowCount === 0) return { kind: "not_found" };
-    if (owner.rows[0].user_id !== user.id) return { kind: "forbidden" };
-  }
+  const access = await checkInspectionAccess(id, user);
+  if (access.kind === "not_found") return { kind: "not_found" };
+  if (access.kind === "forbidden") return { kind: "forbidden" };
   return updateInspectionServer(id, data, user.id);
 }
 
@@ -289,17 +335,31 @@ export type DeleteInspectionResult =
  */
 export async function deleteInspectionForUser(
   id: string,
-  user: { id: string; role: string },
+  user: Actor,
 ): Promise<DeleteInspectionResult> {
-  const row = await query<{ user_id: string | null; locked_at: Date | string | null; status: string }>(
-    "SELECT user_id, locked_at, status FROM inspections WHERE id = $1",
+  const row = await query<{
+    user_id: string | null;
+    org_id: string | null;
+    locked_at: Date | string | null;
+    status: string;
+  }>(
+    "SELECT user_id, org_id, locked_at, status FROM inspections WHERE id = $1",
     [id],
   );
   if (row.rowCount === 0) return { kind: "not_found" };
   const r = row.rows[0];
   const isLocked = r.locked_at !== null || r.status === "completed";
 
-  if (user.role !== "admin") {
+  // Reglas:
+  //  - admin: borra cualquier cosa (incluso finalizado).
+  //  - owner: borra borradores de su org. NO borra finalizados (intocables).
+  //  - employee: borra SUS borradores. NO borra de otros, ni finalizados.
+  if (user.role === "admin") {
+    // ok
+  } else if (user.role === "owner") {
+    if (r.org_id !== user.orgId) return { kind: "forbidden" };
+    if (isLocked) return { kind: "locked" };
+  } else {
     if (r.user_id !== user.id) return { kind: "forbidden" };
     if (isLocked) return { kind: "locked" };
   }
@@ -323,7 +383,7 @@ export async function deleteInspectionForUser(
  */
 export async function ensureCompletedPdf(opts: {
   inspectionId: string;
-  user: { id: string; role: string };
+  user: Actor;
   /** URL base del request para armar el verificationUrl del QR del PDF. */
   baseUrl: string;
 }): Promise<StoredInspection> {

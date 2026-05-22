@@ -269,5 +269,13 @@ export type StoredInspection = {
   pdfSha256?: string;
   /** Bytes del PDF stored, para mostrar tamaño en UI sin leer el archivo. */
   pdfSize?: number;
+  /** Usuario que creó (y "es dueño") del peritaje. Lo expone el server para
+   *  que el owner pueda decidir reasignar en su panel sin tener que hacer
+   *  otra llamada para resolver quién es el creador. undefined en filas
+   *  legacy donde el user fue borrado. */
+  userId?: string;
+  /** Organización a la que pertenece el peritaje. Filtro principal de
+   *  autorización: owner ve todo lo de su org, employee solo lo suyo. */
+  orgId?: string;
   data: InspectionData;
 };

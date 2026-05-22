@@ -30,6 +30,12 @@ export async function POST(req: Request) {
   } catch (e) {
     return unauth(e);
   }
+  if (user.role === "employee") {
+    return NextResponse.json(
+      { error: "Solo el dueño puede importar peritajes." },
+      { status: 403 },
+    );
+  }
 
   let body: BackupPayload;
   try {

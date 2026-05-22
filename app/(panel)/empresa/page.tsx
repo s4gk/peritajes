@@ -10,6 +10,8 @@ export const dynamic = "force-dynamic";
 export default async function EmpresaPage() {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
+  // /empresa es solo para admin y owner — el empleado no configura el negocio.
+  if (user.role === "employee") redirect("/dashboard");
 
   const company = await getCompanyConfig();
   return (

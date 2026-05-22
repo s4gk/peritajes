@@ -5,7 +5,7 @@ import { InspectionDataSchema } from "@/lib/inspection-schema";
 import { requireUser } from "@/lib/server/auth";
 import {
   createInspectionServer,
-  listInspectionsServer,
+  listInspectionsFor,
 } from "@/lib/server/inspections";
 import { notifyTeamNewIntake } from "@/lib/server/whatsapp-notifications";
 import type { InspectionData } from "@/lib/types";
@@ -34,8 +34,8 @@ function unauth(e: unknown) {
 
 export async function GET() {
   try {
-    await requireUser();
-    const items = await listInspectionsServer();
+    const user = await requireUser();
+    const items = await listInspectionsFor(user);
     return NextResponse.json({ inspections: items });
   } catch (e) {
     return unauth(e);
@@ -89,6 +89,10 @@ export async function POST(req: Request) {
     parsed.data.data as unknown as InspectionData,
     user.id,
     parsed.data.id,
+    // Admin sin org_id crea peritajes "sueltos" (sin tenant). En la práctica
+    // admin no debería crear peritajes — está para soporte/auditoría — pero
+    // si lo hace, queda como cross-org y solo lo ve admin.
+    user.orgId,
   );
   // Fire-and-forget: notificar al equipo por WhatsApp. Si WA no está
   // conectado, la cola interna se encarga; si falla, solo logueamos.
@@ -101,6 +105,7 @@ export async function POST(req: Request) {
       .join(" "),
     owner: vehicle?.owner ?? "",
     inspectorName: user.fullName,
+    orgId: created.orgId ?? user.orgId,
   }).catch((err) => {
     console.error("[inspections] notify team failed:", (err as Error).message);
   });

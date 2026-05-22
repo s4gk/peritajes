@@ -26,7 +26,7 @@ type Profile = {
   licenseId: string | null;
   signatureDataUrl: string | null;
   waPhone: string | null;
-  role: "admin" | "owner";
+  role: "admin" | "owner" | "employee";
   createdAt: string;
   lastLoginAt: string | null;
 };
