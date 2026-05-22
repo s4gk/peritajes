@@ -26,6 +26,15 @@
   .icon{font-size:42px;line-height:1;margin-bottom:12px}
   h1{margin:0 0 8px;font-size:22px;letter-spacing:-0.2px}
   p{margin:0 0 6px;color:#475569;font-size:14.5px;line-height:1.5}
+  .status{
+    display:inline-flex;align-items:center;gap:6px;
+    margin-top:14px;padding:6px 10px;border-radius:999px;
+    background:#f1f5f9;font-size:12px;color:#64748b;
+  }
+  .dot{width:8px;height:8px;border-radius:50%;background:#94a3b8;display:inline-block}
+  .dot.online{background:#22c55e}
+  .dot.checking{background:#3b82f6;animation:pulse 1.2s ease-in-out infinite}
+  @keyframes pulse{50%{opacity:.4}}
   .muted{color:#94a3b8;font-size:12.5px;margin-top:14px}
   button{
     margin-top:20px;
@@ -34,16 +43,112 @@
     font-size:14px;font-weight:600;cursor:pointer;
   }
   button:hover{background:#1e293b}
+  button:disabled{opacity:.55;cursor:wait}
 </style>
 </head>
 <body>
   <div class="card">
-    <div class="icon">📡</div>
-    <h1>Sin conexión</h1>
-    <p>Esta página todavía no está cacheada. Si acabás de instalar la app, abrí primero las páginas que usás con red.</p>
-    <p>Las que ya visitaste siguen funcionando offline — los datos del peritaje se guardan local y se sincronizan cuando vuelva la red.</p>
-    <button onclick="location.reload()">Reintentar</button>
+    <div class="icon" id="icon">📡</div>
+    <h1 id="title">Sin conexión estable</h1>
+    <p id="body">Hubo un problema cargando esta página. Si tu celular tiene señal débil, puede ser un blip de red — intentamos volver solos en unos segundos.</p>
+    <p id="body2">Las páginas que ya visitaste siguen funcionando offline; los datos del peritaje se guardan local y se sincronizan cuando vuelva la red.</p>
+    <div class="status">
+      <span class="dot" id="dot"></span>
+      <span id="statusText">Comprobando red…</span>
+    </div>
+    <br>
+    <button id="retryBtn" onclick="manualRetry()">Reintentar ahora</button>
     <div class="muted">Peritajes del Llano · peritaje vehicular</div>
   </div>
+
+<script>
+  // Auto-recovery: si volvemos a tener red mientras el perito está en esta
+  // página, recargamos solos. Combina varios mecanismos porque ninguno es
+  // 100% confiable en mobile:
+  //   1) Evento 'online' del browser — falla en Safari iOS a veces.
+  //   2) Polling cada 4s a /api/health — sondea de verdad si hay red.
+  //   3) visibilitychange — cuando el perito vuelve a la app después de
+  //      cambiar de Wi-Fi a datos, gatillamos un check inmediato.
+
+  let probing = false;
+  let probesSinceManual = 0;
+
+  function setStatus(label, kind) {
+    var dot = document.getElementById('dot');
+    var st  = document.getElementById('statusText');
+    dot.className = 'dot ' + (kind || '');
+    st.textContent = label;
+  }
+
+  function setTitle(online) {
+    if (online) {
+      document.getElementById('icon').textContent = '🔄';
+      document.getElementById('title').textContent = 'Reconectando…';
+    } else {
+      document.getElementById('icon').textContent = '📡';
+      document.getElementById('title').textContent = 'Sin conexión estable';
+    }
+  }
+
+  async function probeNetwork() {
+    if (probing) return;
+    probing = true;
+    setStatus('Comprobando red…', 'checking');
+    document.getElementById('retryBtn').disabled = true;
+    try {
+      // /api/health es el endpoint más liviano del server. cache:'no-store'
+      // evita que un SW intermediario nos devuelva un 200 cacheado falso.
+      var ctrl = new AbortController();
+      setTimeout(function(){ ctrl.abort(); }, 6000);
+      var r = await fetch('/api/health', {
+        cache: 'no-store',
+        signal: ctrl.signal,
+      });
+      if (r.ok) {
+        setStatus('Conexión OK — recargando', 'online');
+        location.reload();
+        return;
+      }
+      setStatus('El server respondió ' + r.status, '');
+    } catch (e) {
+      setStatus(navigator.onLine ? 'Red inestable' : 'Sin red', '');
+    } finally {
+      probing = false;
+      document.getElementById('retryBtn').disabled = false;
+      probesSinceManual++;
+    }
+  }
+
+  function manualRetry() {
+    probesSinceManual = 0;
+    probeNetwork();
+  }
+
+  // Primer probe inmediato — cubre el caso muy común "el SW sirvió offline
+  // por un blip pero la red ya volvió cuando la página termina de pintar".
+  window.addEventListener('load', function () {
+    setTitle(navigator.onLine);
+    probeNetwork();
+  });
+
+  // Eventos del browser. 'online' a veces no dispara en iOS standalone PWA;
+  // por eso también pollemos.
+  window.addEventListener('online',  function(){ setTitle(true);  probeNetwork(); });
+  window.addEventListener('offline', function(){ setTitle(false); setStatus('Sin red', ''); });
+
+  // Cuando el perito vuelve a la app (cambió de tab, cambió de red Wi-Fi
+  // → datos, etc.), probamos al toque.
+  document.addEventListener('visibilitychange', function(){
+    if (!document.hidden) probeNetwork();
+  });
+
+  // Polling: cada 4 segundos. Si pasaron 5 probes seguidos sin éxito
+  // bajamos a cada 15s para no quemar batería.
+  setInterval(function(){
+    if (document.hidden) return;
+    if (probesSinceManual >= 5 && (probesSinceManual % 4) !== 0) return;
+    probeNetwork();
+  }, 4000);
+</script>
 </body>
 </html>

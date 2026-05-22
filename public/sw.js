@@ -18,7 +18,7 @@
 // dispositivos (después de cambios grandes en el bundle, p.ej. reemplazo de
 // Gemini OCR por Tesseract). En `activate` borramos los caches que no estén
 // en la versión actual, así los chunks viejos se botan.
-const VERSION = "v5";
+const VERSION = "v6";
 const STATIC_CACHE = `perito-static-${VERSION}`;
 const RUNTIME_CACHE = `perito-runtime-${VERSION}`;
 const API_CACHE = `perito-api-${VERSION}`;
@@ -111,52 +111,69 @@ function isApiGet(req, url) {
   return req.method === "GET" && url.pathname.startsWith("/api/");
 }
 
+/**
+ * Hace un fetch con timeout duro. El default de fetch no tiene timeout y un
+ * celular con señal débil puede quedar 30s "pensando" antes de fallar — lo
+ * que el perito ve como "se trabó". 12s es suficiente para una página SSR
+ * con red flaky y corto enough para no parecer congelado.
+ */
+function fetchWithTimeout(req, ms) {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), ms);
+  return fetch(req, { signal: ctrl.signal }).finally(() => clearTimeout(t));
+}
+
 async function networkFirstNavigation(event) {
   const req = event.request;
+  const cache = await caches.open(RUNTIME_CACHE);
+
+  // Primer intento de red con timeout corto.
+  let lastErr;
   try {
-    const fresh = await fetch(req);
-    // Cacheamos la última versión de la página para servirla offline.
-    if (fresh.ok) {
-      const cache = await caches.open(RUNTIME_CACHE);
-      cache.put(req, fresh.clone()).catch(() => {});
-    }
+    const fresh = await fetchWithTimeout(req, 12_000);
+    if (fresh.ok) cache.put(req, fresh.clone()).catch(() => {});
     return fresh;
   } catch (err) {
-    const cache = await caches.open(RUNTIME_CACHE);
-
-    // 1) Match exacto del request (incluye query).
-    let cached = await cache.match(req);
-    if (cached) return cached;
-
-    // 2) Mismo URL pero ignorando query — la start_url de la PWA viene con
-    //    `?source=pwa` y cuando el perito la visitó con red probablemente fue
-    //    sin esa query. Sin esto, iOS abre la PWA offline y siempre tira
-    //    offline.html.
-    cached = await cache.match(req, { ignoreSearch: true });
-    if (cached) return cached;
-
-    // 3) Si el browser pidió la raíz ("/" o "/?...") y no la tenemos cacheada,
-    //    servir el primer entry point del panel que sí esté en cache. Esto
-    //    cubre el caso clásico de iOS PWA: el launcher abre start_url y el
-    //    perito ya tenía /dashboard cacheado de la sesión anterior.
-    const url = new URL(req.url);
-    if (url.pathname === "/" || url.pathname === "") {
-      for (const fallback of NAVIGATION_FALLBACKS) {
-        cached = await cache.match(fallback);
-        if (cached) return cached;
-      }
-    }
-
-    // 4) Último intento: match por path ignorando query y diferencias de
-    //    casing en hash params. Útil si el perito navega a /inspection/abc?x=1
-    //    pero solo tenemos /inspection/abc cacheado.
-    cached = await cache.match(url.pathname);
-    if (cached) return cached;
-
-    const offline = await caches.match(OFFLINE_URL);
-    if (offline) return offline;
-    throw err;
+    lastErr = err;
   }
+
+  // Segundo intento: si tenemos cache, lo servimos AHORA mientras la red
+  // pelea en background. Si no hay cache, reintentamos la red una vez más
+  // antes de tirar offline.html — los blips de celular son cortos y un
+  // segundo intento con ~600ms de espera resuelve la mayoría de casos.
+  let cached = await cache.match(req);
+  if (cached) return cached;
+
+  cached = await cache.match(req, { ignoreSearch: true });
+  if (cached) return cached;
+
+  const url = new URL(req.url);
+  if (url.pathname === "/" || url.pathname === "") {
+    for (const fallback of NAVIGATION_FALLBACKS) {
+      cached = await cache.match(fallback);
+      if (cached) return cached;
+    }
+  }
+
+  cached = await cache.match(url.pathname);
+  if (cached) return cached;
+
+  // Sin cache, segundo intento de red — un mini-retry barato. Esto es lo que
+  // resuelve el caso típico "celular con señal débil tira el primer fetch":
+  // un retry de 8s con 500ms de buffer suele entregar la página real en vez
+  // de mandar al perito a la pantalla "Sin conexión".
+  try {
+    await new Promise((r) => setTimeout(r, 500));
+    const fresh = await fetchWithTimeout(req, 8_000);
+    if (fresh.ok) cache.put(req, fresh.clone()).catch(() => {});
+    return fresh;
+  } catch {
+    /* cae al offline */
+  }
+
+  const offline = await caches.match(OFFLINE_URL);
+  if (offline) return offline;
+  throw lastErr;
 }
 
 async function cacheFirst(event) {
