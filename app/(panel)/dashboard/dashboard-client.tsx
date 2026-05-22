@@ -31,7 +31,7 @@ import { cn, formatDate } from "@/lib/utils";
 
 type FindingTotal = { label: string; count: number; tone: "warning" | "critical" | "info" };
 type MakeTotal = { make: string; count: number };
-type MonthBucket = { key: string; label: string; total: number; completed: number };
+type MonthBucket = { key: string; label: string; total: number };
 type ShareStats = {
   totalLinks: number;
   totalAccesses: number;
@@ -45,13 +45,9 @@ type Stats = {
   thisMonth: number;
   lastMonth: number;
   delta: number;
-  completed: number;
-  drafts: number;
   riskLow: number;
   riskMedium: number;
   riskHigh: number;
-  avgCompletionHours: number | null;
-  completionRate: number; // 0..1
   topFindings: FindingTotal[];
   topMakes: MakeTotal[];
   monthly: MonthBucket[];
@@ -86,7 +82,6 @@ function lastNMonths(n: number): MonthBucket[] {
       key: monthKey(d),
       label: MONTH_NAMES_ES[d.getMonth()],
       total: 0,
-      completed: 0,
     });
   }
   return out;
@@ -100,8 +95,6 @@ function compute(items: StoredInspection[]): Stats {
 
   let thisMonth = 0;
   let lastMonth = 0;
-  let completed = 0;
-  let drafts = 0;
   let riskLow = 0;
   let riskMedium = 0;
   let riskHigh = 0;
@@ -110,7 +103,6 @@ function compute(items: StoredInspection[]): Stats {
   const makesAcc = new Map<string, number>();
   const monthly = lastNMonths(6);
   const monthlyByKey = new Map(monthly.map((m) => [m.key, m]));
-  const completionMs: number[] = [];
 
   for (const it of items) {
     const created = it.createdAt?.slice(0, 7);
@@ -118,19 +110,7 @@ function compute(items: StoredInspection[]): Stats {
     if (created === lastKey) lastMonth += 1;
     if (created) {
       const bucket = monthlyByKey.get(created);
-      if (bucket) {
-        bucket.total += 1;
-        if (it.data.status === "completed") bucket.completed += 1;
-      }
-    }
-    if (it.data.status === "completed") {
-      completed += 1;
-      if (it.data.completedAt && it.createdAt) {
-        const ms = new Date(it.data.completedAt).getTime() - new Date(it.createdAt).getTime();
-        if (ms > 0 && ms < 1000 * 60 * 60 * 24 * 30) completionMs.push(ms);
-      }
-    } else {
-      drafts += 1;
+      if (bucket) bucket.total += 1;
     }
 
     const r = analyze(it.data);
@@ -162,25 +142,16 @@ function compute(items: StoredInspection[]): Stats {
     .sort((a, b) => b.count - a.count)
     .slice(0, 5);
 
-  const avgCompletionHours =
-    completionMs.length > 0
-      ? completionMs.reduce((a, b) => a + b, 0) / completionMs.length / (1000 * 60 * 60)
-      : null;
   const delta = lastMonth === 0 ? (thisMonth > 0 ? 1 : 0) : (thisMonth - lastMonth) / lastMonth;
-  const completionRate = items.length === 0 ? 0 : completed / items.length;
 
   return {
     total: items.length,
     thisMonth,
     lastMonth,
     delta,
-    completed,
-    drafts,
     riskLow,
     riskMedium,
     riskHigh,
-    avgCompletionHours,
-    completionRate,
     topFindings,
     topMakes,
     monthly,
@@ -245,7 +216,7 @@ export function DashboardClient() {
         </Button>
       </div>
 
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
         <HeroStat
           label="Este mes"
           value={stats.thisMonth}
@@ -260,37 +231,25 @@ export function DashboardClient() {
           tone="primary"
         />
         <HeroStat
-          label="Finalizados"
-          value={stats.completed}
-          icon={CheckCircle2}
-          tone="success"
-          subtitle={`${Math.round(stats.completionRate * 100)}% del total`}
-        />
-        <HeroStat
-          label="En borrador"
-          value={stats.drafts}
-          icon={Clock}
-          tone="muted"
+          label="Riesgo alto"
+          value={stats.riskHigh}
+          icon={AlertTriangle}
+          tone={stats.riskHigh > 0 ? "danger" : "muted"}
           subtitle={
-            stats.avgCompletionHours !== null
-              ? `Cierre promedio ${formatHours(stats.avgCompletionHours)}`
+            stats.total > 0
+              ? `${Math.round((stats.riskHigh / stats.total) * 100)}% del total`
               : undefined
           }
         />
       </div>
 
       <Card>
-        <CardHeader className="flex flex-row items-center justify-between space-y-0">
-          <div>
-            <CardTitle className="text-base">Tendencia mensual</CardTitle>
-            <CardDescription>Últimos 6 meses · finalizados vs borrador.</CardDescription>
-          </div>
-          <span className="text-xs text-muted-foreground">
-            {stats.monthly.reduce((a, m) => a + m.total, 0)} peritajes
-          </span>
+        <CardHeader className="space-y-1">
+          <CardTitle className="text-base">Tendencia mensual</CardTitle>
+          <CardDescription>Últimos 6 meses.</CardDescription>
         </CardHeader>
         <CardContent>
-          <MonthlyBars data={stats.monthly} />
+          <MonthlyTrend data={stats.monthly} />
         </CardContent>
       </Card>
 
@@ -455,12 +414,6 @@ export function DashboardClient() {
   );
 }
 
-function formatHours(hours: number): string {
-  if (hours < 1) return `${Math.round(hours * 60)}m`;
-  if (hours < 24) return `${hours.toFixed(1)}h`;
-  return `${(hours / 24).toFixed(1)}d`;
-}
-
 function HeroStat({
   label,
   value,
@@ -546,49 +499,201 @@ function MiniStat({
   );
 }
 
-function MonthlyBars({ data }: { data: MonthBucket[] }) {
-  const max = Math.max(1, ...data.map((d) => d.total));
+function MonthlyTrend({ data }: { data: MonthBucket[] }) {
+  const [hover, setHover] = React.useState<number | null>(null);
+  if (data.length === 0) return null;
+
+  const totalSeisMeses = data.reduce((a, m) => a + m.total, 0);
+
+  // Escala mínima: nunca menos de 5, redondeado hacia arriba al siguiente
+  // múltiplo de 5. Así un peritaje suelto en un mes no spike-ea al tope del
+  // chart cuando los demás están en 0.
+  const rawMax = Math.max(0, ...data.map((d) => d.total));
+  const max = Math.max(5, Math.ceil(rawMax / 5) * 5);
+  const W = 100;
+  const H = 40;
+  const padTop = 4;
+  const padBottom = 2;
+  const usable = H - padTop - padBottom;
+  const stepX = data.length > 1 ? W / (data.length - 1) : 0;
+
+  const points: [number, number][] = data.map((m, i) => [
+    i * stepX,
+    H - padBottom - (m.total / max) * usable,
+  ]);
+
+  const linePath = smoothPath(points);
+  const areaPath = `${linePath} L ${W} ${H} L 0 ${H} Z`;
+
+  const activeIdx = hover ?? data.length - 1;
+  const active = data[activeIdx];
+  const activeLeftPct = data.length > 1 ? (activeIdx / (data.length - 1)) * 100 : 50;
+  const activeYPct = ((H - padBottom - (active.total / max) * usable) / H) * 100;
+
+  // Delta vs mes anterior — se recalcula contra el mes activo (hovered o
+  // actual). Si el mes anterior tiene 0, no calculamos % (división por cero),
+  // pero igual reservamos el espacio para evitar saltos de layout al hover.
+  const prevOfActive = activeIdx > 0 ? data[activeIdx - 1] : null;
+  const activeDelta =
+    prevOfActive && prevOfActive.total > 0
+      ? (active.total - prevOfActive.total) / prevOfActive.total
+      : prevOfActive && prevOfActive.total === 0 && active.total > 0
+        ? 1
+        : null;
+  const positive = (activeDelta ?? 0) > 0;
+  const neutral = activeDelta === null || Math.abs(activeDelta) < 0.001;
+  const showDelta = !neutral && prevOfActive !== null;
+
   return (
-    <div className="space-y-3">
-      <div className="flex items-end gap-2 sm:gap-3">
-        {data.map((m) => {
-          const pct = (m.total / max) * 100;
-          const completedPct = m.total === 0 ? 0 : (m.completed / m.total) * 100;
-          return (
-            <div key={m.key} className="flex flex-1 flex-col items-center gap-1.5">
-              <div className="text-[10px] font-mono tabular-nums text-muted-foreground">
-                {m.total}
-              </div>
-              <div className="relative h-32 w-full overflow-hidden rounded-md bg-muted">
-                <div
-                  className="absolute bottom-0 left-0 right-0 bg-primary/30 transition-all"
-                  style={{ height: `${pct}%` }}
-                />
-                <div
-                  className="absolute bottom-0 left-0 right-0 bg-primary transition-all"
-                  style={{ height: `${(pct * completedPct) / 100}%` }}
-                  title={`${m.completed} finalizados`}
-                />
-              </div>
-              <div className="text-[11px] uppercase tracking-wide text-muted-foreground">
-                {m.label}
-              </div>
-            </div>
-          );
-        })}
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div className="flex items-baseline gap-3">
+          <span className="text-4xl font-semibold tabular-nums leading-none">
+            {active.total}
+          </span>
+          <div className="flex flex-col">
+            <span className="text-xs text-muted-foreground">
+              peritajes · {active.label.toLowerCase()}
+              {hover === null ? " (actual)" : ""}
+            </span>
+            <span
+              aria-hidden={!showDelta}
+              className={cn(
+                "mt-0.5 inline-flex items-center gap-0.5 text-xs font-semibold",
+                showDelta
+                  ? positive
+                    ? "text-success"
+                    : "text-danger"
+                  : "invisible text-muted-foreground",
+              )}
+            >
+              {showDelta ? (
+                positive ? (
+                  <ArrowUpRight className="h-3 w-3" />
+                ) : (
+                  <ArrowDownRight className="h-3 w-3" />
+                )
+              ) : (
+                <ArrowUpRight className="h-3 w-3" />
+              )}
+              {showDelta
+                ? `${Math.abs(Math.round((activeDelta ?? 0) * 100))}% vs ${prevOfActive!.label.toLowerCase()}`
+                : "—"}
+            </span>
+          </div>
+        </div>
+        <div className="text-[11px] text-muted-foreground">
+          <span className="font-mono tabular-nums">{totalSeisMeses}</span> peritajes en
+          los últimos 6 meses
+        </div>
       </div>
-      <div className="flex items-center gap-4 text-[11px] text-muted-foreground">
-        <span className="flex items-center gap-1.5">
-          <span className="inline-block h-2 w-2 rounded-sm bg-primary" />
-          Finalizados
-        </span>
-        <span className="flex items-center gap-1.5">
-          <span className="inline-block h-2 w-2 rounded-sm bg-primary/30" />
-          En borrador
-        </span>
+
+      <div className="relative">
+        <svg
+          viewBox={`0 0 ${W} ${H}`}
+          preserveAspectRatio="none"
+          className="h-32 w-full"
+          aria-hidden
+        >
+          <defs>
+            <linearGradient id="monthlyTrendArea" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="currentColor" stopOpacity="0.28" />
+              <stop offset="100%" stopColor="currentColor" stopOpacity="0" />
+            </linearGradient>
+          </defs>
+          <path d={areaPath} fill="url(#monthlyTrendArea)" className="text-primary" />
+          <path
+            d={linePath}
+            fill="none"
+            stroke="currentColor"
+            strokeWidth={0.8}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            vectorEffect="non-scaling-stroke"
+            className="text-primary"
+          />
+        </svg>
+
+        <div
+          className="pointer-events-none absolute h-2.5 w-2.5 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-background bg-primary shadow-sm transition-[left,top]"
+          style={{ left: `${activeLeftPct}%`, top: `${activeYPct}%` }}
+        />
+
+        <div className="absolute inset-0 flex" onMouseLeave={() => setHover(null)}>
+          {data.map((m, i) => (
+            <button
+              key={m.key}
+              type="button"
+              onMouseEnter={() => setHover(i)}
+              onFocus={() => setHover(i)}
+              onBlur={(e) => {
+                if (!e.currentTarget.parentElement?.contains(e.relatedTarget as Node | null)) {
+                  setHover(null);
+                }
+              }}
+              className="flex-1 cursor-default focus:outline-none"
+              aria-label={`${m.label}: ${m.total} peritajes`}
+            />
+          ))}
+        </div>
+      </div>
+
+      <div className="flex text-[11px] uppercase tracking-wide text-muted-foreground">
+        {data.map((m, i) => (
+          <span
+            key={m.key}
+            className={cn(
+              "flex-1 text-center",
+              i === activeIdx && "font-semibold text-foreground",
+            )}
+          >
+            {m.label}
+          </span>
+        ))}
       </div>
     </div>
   );
+}
+
+/**
+ * Interpolación cúbica monotónica (Fritsch-Carlson). A diferencia de
+ * Catmull-Rom, garantiza que la curva no haga overshoot: si un punto es un
+ * mínimo local (típicamente 0 entre dos valores altos), la tangente ahí es 0
+ * y la curva no se mete por debajo. Esencial para sparkines de meses con
+ * muchos ceros — antes la curva se dibujaba fuera del área y se veía maluco.
+ */
+function smoothPath(points: [number, number][]): string {
+  const n = points.length;
+  if (n === 0) return "";
+  if (n === 1) return `M ${points[0][0]} ${points[0][1]}`;
+
+  const dx: number[] = new Array(n - 1);
+  const slope: number[] = new Array(n - 1);
+  for (let i = 0; i < n - 1; i++) {
+    dx[i] = points[i + 1][0] - points[i][0];
+    slope[i] = (points[i + 1][1] - points[i][1]) / dx[i];
+  }
+
+  const tangent: number[] = new Array(n);
+  tangent[0] = slope[0];
+  tangent[n - 1] = slope[n - 2];
+  for (let i = 1; i < n - 1; i++) {
+    if (slope[i - 1] * slope[i] <= 0) {
+      tangent[i] = 0;
+    } else {
+      tangent[i] = (slope[i - 1] + slope[i]) / 2;
+    }
+  }
+
+  let d = `M ${points[0][0]} ${points[0][1]}`;
+  for (let i = 0; i < n - 1; i++) {
+    const cp1x = points[i][0] + dx[i] / 3;
+    const cp1y = points[i][1] + (tangent[i] * dx[i]) / 3;
+    const cp2x = points[i + 1][0] - dx[i] / 3;
+    const cp2y = points[i + 1][1] - (tangent[i + 1] * dx[i]) / 3;
+    d += ` C ${cp1x} ${cp1y}, ${cp2x} ${cp2y}, ${points[i + 1][0]} ${points[i + 1][1]}`;
+  }
+  return d;
 }
 
 function RiskDistribution({
