@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { Loader2, PenLine } from "lucide-react";
+import { Loader2, PenLine, Upload } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -26,10 +26,47 @@ type Profile = {
   licenseId: string | null;
   signatureDataUrl: string | null;
   waPhone: string | null;
-  role: "admin" | "perito";
+  role: "admin" | "owner";
   createdAt: string;
   lastLoginAt: string | null;
 };
+
+/**
+ * Carga un File a un canvas, lo redimensiona a `maxWidth` preservando aspect
+ * ratio y lo devuelve como PNG dataURL con fondo blanco. El fondo blanco evita
+ * que JPGs translúcidos o PNGs transparentes se vean raros sobre el papel del
+ * PDF, y nos asegura un PNG bien chico (~30-100 KB para una firma escaneada).
+ */
+async function resizeSignatureFile(file: File, maxWidth: number): Promise<string> {
+  const objectUrl = URL.createObjectURL(file);
+  try {
+    const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const i = new Image();
+      i.onload = () => resolve(i);
+      i.onerror = () => reject(new Error("No se pudo decodificar la imagen."));
+      i.src = objectUrl;
+    });
+    const naturalW = img.naturalWidth || img.width;
+    const naturalH = img.naturalHeight || img.height;
+    if (naturalW === 0 || naturalH === 0) {
+      throw new Error("Imagen vacía.");
+    }
+    const ratio = Math.min(1, maxWidth / naturalW);
+    const w = Math.max(1, Math.round(naturalW * ratio));
+    const h = Math.max(1, Math.round(naturalH * ratio));
+    const canvas = document.createElement("canvas");
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) throw new Error("Canvas no disponible.");
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, w, h);
+    ctx.drawImage(img, 0, 0, w, h);
+    return canvas.toDataURL("image/png");
+  } finally {
+    URL.revokeObjectURL(objectUrl);
+  }
+}
 
 export function CuentaClient({ user }: { user: Profile }) {
   const toast = useToast();
@@ -44,6 +81,39 @@ export function CuentaClient({ user }: { user: Profile }) {
   );
   const [savingSignature, setSavingSignature] = React.useState(false);
   const signatureDirty = (signature ?? null) !== (user.signatureDataUrl ?? null);
+
+  // El SignaturePad solo dibuja `value` en el canvas durante el mount (su
+  // useEffect tiene deps vacías). Cuando el perito sube una imagen, forzamos
+  // un remount via `key` para que el pad se inicialice con el dataURL nuevo.
+  // Dibujar a mano no cambia esta key — sólo upload.
+  const [padReloadKey, setPadReloadKey] = React.useState(0);
+  const signatureFileRef = React.useRef<HTMLInputElement>(null);
+  const [uploadBusy, setUploadBusy] = React.useState(false);
+
+  async function handleSignatureUpload(file: File) {
+    if (!file.type.startsWith("image/")) {
+      toast.show({
+        title: "Archivo inválido",
+        description: "Subí una imagen (PNG o JPG).",
+        variant: "warning",
+      });
+      return;
+    }
+    setUploadBusy(true);
+    try {
+      const dataUrl = await resizeSignatureFile(file, 1000);
+      setSignature(dataUrl);
+      setPadReloadKey((k) => k + 1);
+    } catch (err) {
+      toast.show({
+        title: "No se pudo cargar la imagen",
+        description: err instanceof Error ? err.message : undefined,
+        variant: "danger",
+      });
+    } finally {
+      setUploadBusy(false);
+    }
+  }
 
   const [password, setPassword] = React.useState("");
   const [confirm, setConfirm] = React.useState("");
@@ -232,7 +302,7 @@ export function CuentaClient({ user }: { user: Profile }) {
               <div className="space-y-1.5">
                 <Label>Rol</Label>
                 <Input
-                  value={user.role === "admin" ? "Administrador" : "Perito"}
+                  value={user.role === "admin" ? "Administrador" : "Dueño"}
                   disabled
                 />
               </div>
@@ -263,23 +333,49 @@ export function CuentaClient({ user }: { user: Profile }) {
             Firma del perito
           </CardTitle>
           <CardDescription>
-            Si la guardás aquí, se va a usar como firma por defecto en cada peritaje
-            que crees. Igual podés sobreescribirla en cada peritaje al finalizar.
+            Si la guardas aquí, se va a usar como firma por defecto en cada peritaje
+            que crees. Igual puedes sobreescribirla en cada peritaje al finalizar.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
           <SignaturePad
+            key={padReloadKey}
             label={`Firma de ${user.fullName}`}
             hint={
               user.licenseId
                 ? `Identificación profesional: ${user.licenseId}`
-                : "Firmá una sola vez y se reusa en todos tus peritajes."
+                : "Dibujala con el dedo o subí una imagen escaneada."
             }
             value={signature}
             onChange={setSignature}
           />
-          <div className="flex justify-end">
-            <Button onClick={saveSignature} disabled={!signatureDirty || savingSignature}>
+          <input
+            ref={signatureFileRef}
+            type="file"
+            accept="image/png,image/jpeg,image/webp"
+            className="sr-only"
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              e.target.value = "";
+              if (f) void handleSignatureUpload(f);
+            }}
+          />
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => signatureFileRef.current?.click()}
+              disabled={uploadBusy || savingSignature}
+            >
+              {uploadBusy ? (
+                <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+              ) : (
+                <Upload className="mr-1.5 h-4 w-4" />
+              )}{" "}
+              {uploadBusy ? "Procesando…" : "Subir imagen"}
+            </Button>
+            <Button onClick={saveSignature} disabled={!signatureDirty || savingSignature || uploadBusy}>
               {savingSignature ? (
                 <>
                   <Loader2 className="mr-1 h-4 w-4 animate-spin" /> Guardando...
@@ -291,6 +387,10 @@ export function CuentaClient({ user }: { user: Profile }) {
               )}
             </Button>
           </div>
+          <p className="text-xs text-muted-foreground">
+            PNG, JPG o WEBP — idealmente firma escaneada con fondo blanco. La
+            imagen se redimensiona automáticamente a 1000px de ancho.
+          </p>
         </CardContent>
       </Card>
 
