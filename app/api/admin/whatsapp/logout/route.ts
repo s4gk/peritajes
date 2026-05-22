@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { requireAdmin } from "@/lib/server/auth";
+import { requireUser } from "@/lib/server/auth";
 import { logAudit } from "@/lib/server/db";
 import { getWhatsAppStatus, logoutWhatsApp } from "@/lib/server/whatsapp";
 
@@ -19,11 +19,23 @@ function unauth(e: unknown) {
 export async function POST() {
   let user;
   try {
-    user = await requireAdmin();
+    user = await requireUser();
   } catch (e) {
     return unauth(e);
   }
-  await logoutWhatsApp();
-  await logAudit(user.id, "whatsapp.logout");
-  return NextResponse.json(getWhatsAppStatus());
+  if (user.role === "employee") {
+    return NextResponse.json(
+      { error: "Solo el dueño puede desconectar WhatsApp." },
+      { status: 403 },
+    );
+  }
+  if (!user.orgId) {
+    return NextResponse.json(
+      { error: "Sin org seleccionada." },
+      { status: 400 },
+    );
+  }
+  await logoutWhatsApp(user.orgId);
+  await logAudit(user.id, "whatsapp.logout", user.orgId);
+  return NextResponse.json(getWhatsAppStatus(user.orgId));
 }

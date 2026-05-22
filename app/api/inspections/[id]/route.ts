@@ -230,6 +230,7 @@ async function sendCompletionNotifications(
     plate: vehicle.plate ?? "",
     reportNumber: inspection.reportNumber ?? null,
     pdfBuffer,
+    orgId: inspection.orgId ?? user.orgId,
   });
 }
 

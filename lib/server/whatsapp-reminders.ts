@@ -31,6 +31,7 @@ type DueRow = {
   plate: string;
   location: string;
   scheduled_at: Date | string;
+  org_id: string | null;
 };
 
 const globalScope = globalThis as unknown as {
@@ -44,7 +45,7 @@ async function pickDue(key: ReminderKey): Promise<DueRow[]> {
   //   2h  → [+1.5h, +2.5h] (1h de tolerancia)
   const [lowerHours, upperHours] = key === "24h" ? [22, 25] : [1.5, 2.5];
   const r = await query<DueRow>(
-    `SELECT id, owner_name, owner_phone, plate, location, scheduled_at
+    `SELECT id, owner_name, owner_phone, plate, location, scheduled_at, org_id
        FROM appointments
       WHERE status = 'scheduled'
         AND owner_phone <> ''
@@ -80,6 +81,7 @@ async function processOne(row: DueRow, key: ReminderKey): Promise<void> {
         ? row.scheduled_at
         : row.scheduled_at.toISOString(),
     when: key,
+    orgId: row.org_id,
   });
   await markSent(row.id, key);
 }

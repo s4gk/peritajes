@@ -1,21 +1,22 @@
 import "server-only";
 
 /**
- * Servicio WhatsApp basado en Baileys (no oficial — emula WhatsApp Web).
+ * Servicio WhatsApp multi-tenant basado en Baileys (no oficial — emula
+ * WhatsApp Web).
  *
- * El módulo expone un singleton (persistido en globalThis para sobrevivir
- * los hot-reloads de Next dev) que mantiene:
- *  - estado de conexión (disconnected | connecting | qr | connected)
- *  - último QR generado (data URL PNG) hasta que el cliente se loguea
- *  - cola FIFO de envíos con delay aleatorio 2-5s entre mensajes
+ * Cada organización tiene SU PROPIO socket + auth dir. El estado vive en
+ * un `Map<orgId, WhatsAppState>` persistido en globalThis para sobrevivir
+ * hot-reloads de Next dev. Cada socket es independiente: el cliente del
+ * owner A recibe mensajes desde el número del owner A; el ban de Meta a un
+ * número afecta solo a esa org.
  *
- * Las credenciales viven en `./.wa-auth/` (gitignored). Si se borra esa
- * carpeta hay que re-escanear QR. Si el server reinicia, Baileys recupera
- * la sesión automáticamente sin pedir QR de nuevo.
+ * Auth dirs:
+ *   .wa-auth/<orgId>/      → creds + app-state-sync-keys de esa org
  *
- * IMPORTANTE: Baileys NO es oficial — Meta puede banear el número usado
- * si detecta patrones de spam. Por eso metemos delays entre envíos y no
- * mandamos a destinatarios que no tienen el número en agenda.
+ * IMPORTANTE: Baileys NO es oficial — Meta puede banear el número si detecta
+ * patrones de spam. Por eso metemos delays entre envíos y, ahora con
+ * multi-tenant, AISLAMOS el blast radius — un cliente quemado no afecta a
+ * los demás.
  */
 
 import fs from "node:fs/promises";
@@ -36,6 +37,7 @@ type QueuedTask = {
 };
 
 type WhatsAppState = {
+  orgId: string;
   status: Status;
   qrText: string | null;
   qrDataUrl: string | null;
@@ -53,11 +55,31 @@ type WhatsAppState = {
   recentDedup: Map<string, number>;
 };
 
-const globalScope = globalThis as unknown as { __peritoWa?: WhatsAppState };
+type WhatsAppGlobalState = {
+  /** Map<orgId, state>. Una entrada por org que alguna vez se conectó. */
+  byOrg: Map<string, WhatsAppState>;
+};
 
-function getState(): WhatsAppState {
-  if (!globalScope.__peritoWa) {
-    globalScope.__peritoWa = {
+const globalScope = globalThis as unknown as {
+  __peritoWaMulti?: WhatsAppGlobalState;
+  // Legado fase 3 — un solo state global. Lo conservamos por si quedaron
+  // referencias colgadas en hot-reload de dev; en prod es ignorado.
+  __peritoWa?: unknown;
+};
+
+function getGlobalState(): WhatsAppGlobalState {
+  if (!globalScope.__peritoWaMulti) {
+    globalScope.__peritoWaMulti = { byOrg: new Map() };
+  }
+  return globalScope.__peritoWaMulti;
+}
+
+function getOrCreateState(orgId: string): WhatsAppState {
+  const g = getGlobalState();
+  let s = g.byOrg.get(orgId);
+  if (!s) {
+    s = {
+      orgId,
       status: "disconnected",
       qrText: null,
       qrDataUrl: null,
@@ -70,8 +92,21 @@ function getState(): WhatsAppState {
       reconnectAttempts: 0,
       recentDedup: new Map(),
     };
+    g.byOrg.set(orgId, s);
   }
-  return globalScope.__peritoWa;
+  return s;
+}
+
+const AUTH_ROOT = path.resolve(process.cwd(), ".wa-auth");
+
+function authDirFor(orgId: string): string {
+  // Sanitizamos el orgId — solo alfanuméricos + guiones. Defense in depth
+  // contra path traversal (los IDs salen de createOrganization, que usa
+  // base64url, así que esto realmente no debería rechazar nada legítimo).
+  if (!/^[A-Za-z0-9_-]+$/.test(orgId)) {
+    throw new Error("orgId inválido para auth dir.");
+  }
+  return path.join(AUTH_ROOT, orgId);
 }
 
 // Ventana en la que dos enqueue con la misma dedupKey se colapsan en uno solo.
@@ -80,8 +115,6 @@ function getState(): WhatsAppState {
 // el cliente no reciba el PDF dos veces. Pasada esa ventana, si vuelve a
 // dispararse, asumimos que fue intencional (p.ej. el admin reenvió a mano).
 const DEDUP_TTL_MS = 10 * 60_000;
-
-const AUTH_DIR = path.resolve(process.cwd(), ".wa-auth");
 
 /**
  * Logger silencioso para Baileys — la librería es muy verbosa por defecto y
@@ -98,20 +131,24 @@ async function makeSilentLogger(): Promise<pino.Logger> {
 }
 
 /**
- * Conecta (o reconecta) el cliente WA. Si ya hay credenciales en disco, no
- * pide QR; si no, emite un QR que el admin debe escanear.
+ * Conecta (o reconecta) el cliente WA de una org específica. Si ya hay
+ * credenciales en `.wa-auth/<orgId>/`, no pide QR; si no, emite uno para
+ * que el owner de esa org lo escanee.
  *
- * Es idempotente: llamar dos veces seguidas no abre dos sockets.
+ * Es idempotente por org: llamar dos veces no abre dos sockets de la misma.
  */
-export async function connectWhatsApp(): Promise<{ status: Status; qrDataUrl: string | null }> {
-  const state = getState();
+export async function connectWhatsApp(
+  orgId: string,
+): Promise<{ status: Status; qrDataUrl: string | null }> {
+  const state = getOrCreateState(orgId);
   if (state.status === "connecting" || state.status === "connected") {
     return { status: state.status, qrDataUrl: state.qrDataUrl };
   }
   state.status = "connecting";
   state.lastError = null;
 
-  await fs.mkdir(AUTH_DIR, { recursive: true });
+  const authDir = authDirFor(orgId);
+  await fs.mkdir(authDir, { recursive: true });
 
   // Cargamos Baileys via dynamic import — la librería es ESM-only (no se
   // puede `require`) y además es pesada (~5MB), así que solo la traemos
@@ -125,14 +162,14 @@ export async function connectWhatsApp(): Promise<{ status: Status; qrDataUrl: st
   // ESLint piensa que `useMultiFileAuthState` es un React Hook por su prefijo
   // — pero es una función pura de Baileys que carga creds desde disco.
   // eslint-disable-next-line react-hooks/rules-of-hooks
-  const { state: authState, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
+  const { state: authState, saveCreds } = await useMultiFileAuthState(authDir);
   const { version } = await fetchLatestBaileysVersion().catch(() => ({ version: undefined }));
   const logger = await makeSilentLogger();
 
   const sock = makeWASocket({
     auth: authState,
     logger,
-    browser: Browsers.appropriate("Perito"),
+    browser: Browsers.appropriate(`Perito-${orgId.slice(0, 8)}`),
     printQRInTerminal: false,
     syncFullHistory: false,
     markOnlineOnConnect: false,
@@ -146,8 +183,6 @@ export async function connectWhatsApp(): Promise<{ status: Status; qrDataUrl: st
   sock.ev.on("connection.update", async (update) => {
     const { connection, lastDisconnect, qr } = update;
     if (qr) {
-      // Generamos el PNG data URL una sola vez por QR — el cliente admin lo
-      // pollea y nosotros lo servimos cacheado.
       try {
         const qrcodeLib = await import("qrcode");
         state.qrText = qr;
@@ -163,13 +198,11 @@ export async function connectWhatsApp(): Promise<{ status: Status; qrDataUrl: st
       state.qrDataUrl = null;
       state.connectedAt = Date.now();
       state.reconnectAttempts = 0;
-      // El JID del socket trae el número conectado (formato 573001234567:NN@s.whatsapp.net).
       const me = (sock as unknown as { user?: { id?: string } }).user;
       if (me?.id) {
         state.phone = me.id.split("@")[0]?.split(":")[0] ?? null;
       }
-      // Si había mensajes encolados antes de conectar, bombea la cola.
-      void pumpQueue();
+      void pumpQueue(orgId);
     }
     if (connection === "close") {
       const code = (lastDisconnect?.error as { output?: { statusCode?: number } } | undefined)
@@ -177,21 +210,17 @@ export async function connectWhatsApp(): Promise<{ status: Status; qrDataUrl: st
       const loggedOut = code === DisconnectReason.loggedOut;
       state.socket = null;
       if (loggedOut) {
-        // Sesión inválida: borramos credenciales para que la próxima vez
-        // se pida un QR nuevo en vez de loopear contra el mismo error.
         state.status = "disconnected";
         state.phone = null;
         state.lastError = "logged-out";
-        await fs.rm(AUTH_DIR, { recursive: true, force: true }).catch(() => {});
+        await fs.rm(authDir, { recursive: true, force: true }).catch(() => {});
       } else {
-        // Cualquier otra desconexión (red, restart, etc.): reintentamos con
-        // backoff. Capeamos en 5 intentos para no quemar CPU si Meta nos cerró.
         state.status = "disconnected";
         state.reconnectAttempts += 1;
         if (state.reconnectAttempts <= 5) {
           const delay = Math.min(30_000, 2_000 * 2 ** (state.reconnectAttempts - 1));
           setTimeout(() => {
-            void connectWhatsApp().catch((err) => {
+            void connectWhatsApp(orgId).catch((err) => {
               state.lastError = (err as Error).message;
             });
           }, delay);
@@ -205,8 +234,8 @@ export async function connectWhatsApp(): Promise<{ status: Status; qrDataUrl: st
   return { status: state.status, qrDataUrl: state.qrDataUrl };
 }
 
-export async function logoutWhatsApp(): Promise<void> {
-  const state = getState();
+export async function logoutWhatsApp(orgId: string): Promise<void> {
+  const state = getOrCreateState(orgId);
   const sock = state.socket as
     | { logout?: () => Promise<void>; end?: (err?: Error) => void }
     | null;
@@ -222,11 +251,11 @@ export async function logoutWhatsApp(): Promise<void> {
   state.phone = null;
   state.connectedAt = null;
   state.reconnectAttempts = 0;
-  await fs.rm(AUTH_DIR, { recursive: true, force: true }).catch(() => {});
+  await fs.rm(authDirFor(orgId), { recursive: true, force: true }).catch(() => {});
 }
 
-export function getWhatsAppStatus() {
-  const state = getState();
+export function getWhatsAppStatus(orgId: string) {
+  const state = getOrCreateState(orgId);
   return {
     status: state.status,
     phone: state.phone,
@@ -253,20 +282,14 @@ function jidFor(phone: string): string {
 }
 
 /**
- * Bombea la cola con delay aleatorio entre 2 y 5 segundos por mensaje. Los
- * delays son la principal defensa contra el detector anti-spam de Meta —
- * mandar 50 mensajes en 5 segundos es la receta para ban.
- *
- * Si no hay socket conectado, los mensajes quedan en cola hasta que
- * `connection === "open"` y se reinicia el pump.
- *
- * Cada task se desencola ANTES de ejecutarse, así que una reconexión durante
- * la ejecución no puede re-ejecutarla. Si el envío falla con el socket en
- * un estado intermedio, dejamos el log y seguimos — la dedupKey protege
- * contra duplicados si el llamador vuelve a encolarlo.
+ * Bombea la cola de UNA org con delay aleatorio entre 2 y 5 segundos por
+ * mensaje. Los delays son la principal defensa contra el detector
+ * anti-spam de Meta. Si no hay socket conectado para esta org, los
+ * mensajes quedan en cola hasta que `connection === "open"` y se reinicia
+ * el pump.
  */
-async function pumpQueue(): Promise<void> {
-  const state = getState();
+async function pumpQueue(orgId: string): Promise<void> {
+  const state = getOrCreateState(orgId);
   if (state.pumping) return;
   state.pumping = true;
   try {
@@ -277,7 +300,7 @@ async function pumpQueue(): Promise<void> {
         await task.run();
       } catch (err) {
         console.error(
-          `[wa] envío "${task.label}" falló:`,
+          `[wa:${orgId}] envío "${task.label}" falló:`,
           (err as Error).message,
         );
       }
@@ -289,10 +312,10 @@ async function pumpQueue(): Promise<void> {
   }
 }
 
-function ensureReady(): { socket: WaSocket } {
-  const state = getState();
+function ensureReady(orgId: string): { socket: WaSocket } {
+  const state = getOrCreateState(orgId);
   if (state.status !== "connected" || !state.socket) {
-    throw new Error("WhatsApp no está conectado");
+    throw new Error(`WhatsApp no está conectado para org ${orgId}`);
   }
   return { socket: state.socket as WaSocket };
 }
@@ -305,23 +328,22 @@ type WaSocket = {
 };
 
 /**
- * Encola un envío. La función se ejecuta cuando le toca el turno respetando
- * el delay anti-spam. Si WA no está conectado, encolamos igual y se procesará
- * cuando reconecte.
+ * Encola un envío en la cola de la org dada. La función se ejecuta cuando le
+ * toca el turno respetando el delay anti-spam. Si WA no está conectado,
+ * encolamos igual y se procesará cuando reconecte.
  *
  * `dedupKey` (opcional): si dentro de DEDUP_TTL_MS llega otro enqueue con
- * la misma key, se descarta. Evita avisos duplicados cuando una acción se
- * dispara dos veces (doble-click, reintento del cliente, reconexión).
+ * la misma key (en esta org), se descarta. La dedup es POR ORG — el mismo
+ * key en orgs distintas son envíos independientes.
  */
 function enqueue(
+  orgId: string,
   run: () => Promise<void>,
   opts: { label: string; dedupKey?: string },
 ): { accepted: boolean; reason?: string } {
-  const state = getState();
+  const state = getOrCreateState(orgId);
   const now = Date.now();
 
-  // GC perezoso del mapa de dedup: limpiamos entradas vencidas en cada
-  // enqueue. Mantenerlo pequeño (típico <50 entries) no justifica un timer.
   if (state.recentDedup.size > 0) {
     for (const [k, exp] of state.recentDedup) {
       if (exp <= now) state.recentDedup.delete(k);
@@ -332,7 +354,7 @@ function enqueue(
     const exp = state.recentDedup.get(opts.dedupKey);
     if (exp && exp > now) {
       console.warn(
-        `[wa] descartado por dedup: ${opts.label} (key=${opts.dedupKey})`,
+        `[wa:${orgId}] descartado por dedup: ${opts.label} (key=${opts.dedupKey})`,
       );
       return { accepted: false, reason: "dedup" };
     }
@@ -344,19 +366,21 @@ function enqueue(
     dedupKey: opts.dedupKey ?? null,
     run,
   });
-  void pumpQueue();
+  void pumpQueue(orgId);
   return { accepted: true };
 }
 
 export function sendText(
+  orgId: string,
   phone: string,
   text: string,
   opts: { dedupKey?: string; label?: string } = {},
 ): { accepted: boolean; reason?: string } {
   const jid = jidFor(phone);
   return enqueue(
+    orgId,
     async () => {
-      const { socket } = ensureReady();
+      const { socket } = ensureReady(orgId);
       await socket.sendMessage(jid, { text });
     },
     { label: opts.label ?? `text to ${phone}`, dedupKey: opts.dedupKey },
@@ -364,6 +388,7 @@ export function sendText(
 }
 
 export function sendDocument(
+  orgId: string,
   phone: string,
   buffer: Buffer,
   filename: string,
@@ -377,8 +402,9 @@ export function sendDocument(
   const jid = jidFor(phone);
   const mimetype = options.mimetype ?? "application/pdf";
   return enqueue(
+    orgId,
     async () => {
-      const { socket } = ensureReady();
+      const { socket } = ensureReady(orgId);
       await socket.sendMessage(jid, {
         document: buffer,
         fileName: filename,
@@ -394,12 +420,12 @@ export function sendDocument(
 }
 
 /**
- * Auto-conecta si hay credenciales en disco pero el módulo aún no levantó.
- * Útil para que después de un reinicio de pm2 el server vuelva a estar
- * online sin que el admin tenga que entrar a la UI.
+ * Auto-conecta TODAS las orgs que tengan credenciales en disco. Recorre
+ * `.wa-auth/*` y por cada subdir con `creds.json` lanza una reconexión.
+ * Útil para que tras un reinicio de pm2 todos los sockets vuelvan online
+ * sin que ningún owner tenga que entrar a su panel.
  */
 export async function autoConnectIfPersisted(): Promise<void> {
-  const state = getState();
   // Aprovechamos esta llamada (hit del panel /whatsapp, fire-and-forget) para
   // arrancar también el loop de recordatorios de cita. Es idempotente, así
   // que llamarlo en cada hit del status endpoint no duplica timers.
@@ -409,13 +435,25 @@ export async function autoConnectIfPersisted(): Promise<void> {
       console.error("[wa] no se pudo arrancar reminder loop:", (err as Error).message),
     );
 
-  if (state.status !== "disconnected") return;
+  let entries: string[];
   try {
-    await fs.access(path.join(AUTH_DIR, "creds.json"));
+    entries = await fs.readdir(AUTH_ROOT);
   } catch {
-    return; // no hay credenciales — esperamos que el admin escanee QR.
+    return; // no hay carpeta — install nueva o nadie conectó nunca.
   }
-  await connectWhatsApp().catch((err) => {
-    state.lastError = (err as Error).message;
-  });
+
+  for (const entry of entries) {
+    const orgId = entry;
+    if (!/^[A-Za-z0-9_-]+$/.test(orgId)) continue;
+    try {
+      await fs.access(path.join(AUTH_ROOT, orgId, "creds.json"));
+    } catch {
+      continue; // sin creds → nada que reconectar.
+    }
+    const state = getOrCreateState(orgId);
+    if (state.status !== "disconnected") continue;
+    await connectWhatsApp(orgId).catch((err) => {
+      state.lastError = (err as Error).message;
+    });
+  }
 }

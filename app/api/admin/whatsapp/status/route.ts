@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { requireAdmin } from "@/lib/server/auth";
+import { requireUser } from "@/lib/server/auth";
 import { autoConnectIfPersisted, getWhatsAppStatus } from "@/lib/server/whatsapp";
 
 export const runtime = "nodejs";
@@ -15,14 +15,39 @@ function unauth(e: unknown) {
   return NextResponse.json({ error: msg }, { status: 400 });
 }
 
+/**
+ * Status del socket WA de la org del actor. Cada owner ve el estado de su
+ * propio número (no del de otros clientes). Admin sin org ve un placeholder
+ * "sin org seleccionada" — el panel /whatsapp es para que cada dueño conecte
+ * su número, no para que Vestel administre cuentas ajenas.
+ */
 export async function GET() {
+  let user;
   try {
-    await requireAdmin();
+    user = await requireUser();
   } catch (e) {
     return unauth(e);
   }
-  // Si tras un restart de pm2 quedaron credenciales en `.wa-auth/`, la primera
-  // visita del admin al panel dispara la reconexión sin necesidad de QR.
+  if (user.role === "employee") {
+    return NextResponse.json(
+      { error: "Solo el dueño administra el WhatsApp del negocio." },
+      { status: 403 },
+    );
+  }
+  // Si tras un restart de pm2 quedaron credenciales en `.wa-auth/<orgId>/`,
+  // la primera visita del owner al panel dispara la reconexión de TODAS las
+  // orgs sin necesidad de QR. No bloqueamos: corre en background.
   await autoConnectIfPersisted().catch(() => {});
-  return NextResponse.json(getWhatsAppStatus());
+
+  if (!user.orgId) {
+    return NextResponse.json({
+      status: "disconnected",
+      phone: null,
+      qrDataUrl: null,
+      connectedAt: null,
+      lastError: "admin sin org seleccionada",
+      queueSize: 0,
+    });
+  }
+  return NextResponse.json(getWhatsAppStatus(user.orgId));
 }

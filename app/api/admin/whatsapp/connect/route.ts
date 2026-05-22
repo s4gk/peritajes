@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { requireAdmin } from "@/lib/server/auth";
+import { requireUser } from "@/lib/server/auth";
 import { logAudit } from "@/lib/server/db";
 import { connectWhatsApp, getWhatsAppStatus } from "@/lib/server/whatsapp";
 
@@ -16,19 +16,38 @@ function unauth(e: unknown) {
   return NextResponse.json({ error: msg }, { status: 400 });
 }
 
+/**
+ * Conecta el socket WA de la org del actor. Cada owner conecta SU PROPIO
+ * número desde su panel — Vestel (admin) no maneja cuentas de clientes.
+ */
 export async function POST() {
   let user;
   try {
-    user = await requireAdmin();
+    user = await requireUser();
   } catch (e) {
     return unauth(e);
   }
-  await connectWhatsApp().catch((err) => {
+  if (user.role === "employee") {
+    return NextResponse.json(
+      { error: "Solo el dueño puede conectar WhatsApp." },
+      { status: 403 },
+    );
+  }
+  if (!user.orgId) {
+    return NextResponse.json(
+      {
+        error:
+          "Necesitás una organización para conectar WhatsApp. Como admin, hacelo desde la cuenta del cliente.",
+      },
+      { status: 400 },
+    );
+  }
+  await connectWhatsApp(user.orgId).catch((err) => {
     return NextResponse.json(
       { error: (err as Error).message },
       { status: 500 },
     );
   });
-  await logAudit(user.id, "whatsapp.connect_requested");
-  return NextResponse.json(getWhatsAppStatus());
+  await logAudit(user.id, "whatsapp.connect_requested", user.orgId);
+  return NextResponse.json(getWhatsAppStatus(user.orgId));
 }

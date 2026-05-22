@@ -81,6 +81,7 @@ export async function POST(req: Request) {
         vehicleLabel: appt.vehicleLabel,
         scheduledAtISO: appt.scheduledAt,
         location: appt.location,
+        orgId: appt.orgId,
       });
     }
     notifyClientAppointmentConfirmed({
@@ -90,6 +91,7 @@ export async function POST(req: Request) {
       vehicleLabel: appt.vehicleLabel,
       scheduledAtISO: appt.scheduledAt,
       location: appt.location,
+      orgId: appt.orgId,
     });
     return NextResponse.json({ appointment: appt });
   } catch (e) {

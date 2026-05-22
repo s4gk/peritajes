@@ -40,11 +40,13 @@ function fmtScheduledAt(iso: string): string {
   return FMT_DATE_TIME.format(d);
 }
 
-function isReady(): boolean {
+function isReady(orgId: string | null): boolean {
   // No es bloqueante: aunque WA no esté listo, encolar es válido (se procesa
   // cuando reconecte). Esta función sirve solo para skip rápido cuando ni
-  // siquiera vale la pena hacer la query de teléfonos del equipo.
-  const s = getWhatsAppStatus();
+  // siquiera vale la pena hacer la query de teléfonos del equipo. Sin orgId
+  // (admin) no hay socket — devolvemos false para skip total.
+  if (!orgId) return false;
+  const s = getWhatsAppStatus(orgId);
   return s.status === "connected" || s.queueSize < 50; // cap defensivo de cola
 }
 
@@ -108,7 +110,7 @@ export async function notifyTeamNewIntake(input: {
   /** Org del peritaje. El fan-out solo va a usuarios de esta org. */
   orgId: string | null;
 }): Promise<void> {
-  if (!isReady()) return;
+  if (!isReady(input.orgId)) return;
   const team = await loadTeamPhones("team-intake", input.orgId);
   if (team.length === 0) return;
   const lines = [
@@ -121,12 +123,13 @@ export async function notifyTeamNewIntake(input: {
     `Ver: ${appUrl()}/inspection/${input.inspectionId}`,
   ];
   const text = lines.join("\n");
+  const orgId = input.orgId!; // isReady() ya descartó null
   for (const member of team) {
     // dedupKey por miembro + evento + peritaje: si el intake se procesa dos
     // veces (reintento del cliente, doble click), cada perito del equipo
     // recibe el aviso una sola vez.
     safe(`team-intake to ${member.fullName}`, () =>
-      sendText(member.waPhone, text, {
+      sendText(orgId, member.waPhone, text, {
         dedupKey: `team-intake:${input.inspectionId}:${member.waPhone}`,
         label: `team-intake to ${member.fullName}`,
       }),
@@ -143,7 +146,7 @@ export async function notifyTeamSignatureCompleted(input: {
   owner: string;
   orgId: string | null;
 }): Promise<void> {
-  if (!isReady()) return;
+  if (!isReady(input.orgId)) return;
   const team = await loadTeamPhones("team-signed", input.orgId);
   if (team.length === 0) return;
   const text = [
@@ -153,9 +156,10 @@ export async function notifyTeamSignatureCompleted(input: {
     "",
     `Ver: ${appUrl()}/inspection/${input.inspectionId}`,
   ].join("\n");
+  const orgId = input.orgId!;
   for (const member of team) {
     safe(`team-signed to ${member.fullName}`, () =>
-      sendText(member.waPhone, text, {
+      sendText(orgId, member.waPhone, text, {
         dedupKey: `team-signed:${input.inspectionId}:${member.waPhone}`,
         label: `team-signed to ${member.fullName}`,
       }),
@@ -175,8 +179,11 @@ export function notifyClientSignLink(input: {
   ownerName: string;
   plate: string;
   signToken: string;
+  /** Org del peritaje. El mensaje sale del socket WA de esta org — el
+   *  cliente recibe la firma desde el número del perito. */
+  orgId: string | null;
 }): void {
-  if (!isReady()) return;
+  if (!isReady(input.orgId)) return;
   if (!input.clientPhone?.trim()) return;
   const greeting = input.ownerName?.trim() ? `Hola ${input.ownerName},` : "Hola,";
   const text = [
@@ -187,8 +194,9 @@ export function notifyClientSignLink(input: {
     "",
     "El link expira en 10 minutos. Si no alcanzas, el perito puede generarte uno nuevo.",
   ].join("\n");
+  const orgId = input.orgId!;
   safe(`client-sign to ${input.clientPhone}`, () =>
-    sendText(input.clientPhone!, text, {
+    sendText(orgId, input.clientPhone!, text, {
       dedupKey: `client-sign:${input.signToken}`,
       label: `client-sign to ${input.clientPhone}`,
     }),
@@ -206,8 +214,9 @@ export function notifyClientFinalPdf(input: {
   plate: string;
   reportNumber: string | null;
   pdfBuffer: Buffer;
+  orgId: string | null;
 }): void {
-  if (!isReady()) return;
+  if (!isReady(input.orgId)) return;
   if (!input.clientPhone?.trim()) return;
   const filename = input.reportNumber
     ? `Peritaje-${input.reportNumber}.pdf`
@@ -221,13 +230,12 @@ export function notifyClientFinalPdf(input: {
   ]
     .filter(Boolean)
     .join("\n");
-  // dedupKey usa reportNumber si existe — es el identificador "oficial" del
-  // peritaje finalizado. Fallback al teléfono+plate por si todavía no llegó.
   const dedupKey = input.reportNumber
     ? `client-pdf:${input.reportNumber}`
     : `client-pdf:${input.clientPhone}:${input.plate || "x"}`;
+  const orgId = input.orgId!;
   safe(`client-pdf to ${input.clientPhone}`, () =>
-    sendDocument(input.clientPhone!, input.pdfBuffer, filename, {
+    sendDocument(orgId, input.clientPhone!, input.pdfBuffer, filename, {
       caption,
       dedupKey,
       label: `client-pdf to ${input.clientPhone}`,
@@ -248,8 +256,12 @@ export async function notifyAssignedPerito(input: {
   vehicleLabel: string;
   scheduledAtISO: string;
   location: string;
+  /** Org de la cita. El aviso sale del socket WA de la org. Si el perito
+   *  está en otra org (no debería), igual usamos el de la cita — la cita
+   *  manda. */
+  orgId: string | null;
 }): Promise<void> {
-  if (!isReady()) return;
+  if (!isReady(input.orgId)) return;
   const perito = await getUserById(input.peritoUserId).catch(() => null);
   if (!perito?.waPhone?.trim()) return;
   const text = [
@@ -263,8 +275,9 @@ export async function notifyAssignedPerito(input: {
   ]
     .filter(Boolean)
     .join("\n");
+  const orgId = input.orgId!;
   safe(`perito-assigned to ${perito.fullName}`, () =>
-    sendText(perito.waPhone!, text, {
+    sendText(orgId, perito.waPhone!, text, {
       // Una asignación cambia si se reasigna a otro perito o se reprograma —
       // por eso incluimos peritoUserId + scheduledAt en la key.
       dedupKey: `perito-assigned:${input.peritoUserId}:${input.scheduledAtISO}`,
@@ -286,8 +299,9 @@ export function notifyClientAppointmentConfirmed(input: {
   vehicleLabel: string;
   scheduledAtISO: string;
   location: string;
+  orgId: string | null;
 }): void {
-  if (!isReady()) return;
+  if (!isReady(input.orgId)) return;
   if (!input.clientPhone?.trim()) return;
   const greeting = input.ownerName?.trim() ? `Hola ${input.ownerName},` : "Hola,";
   const text = [
@@ -302,8 +316,9 @@ export function notifyClientAppointmentConfirmed(input: {
   ]
     .filter(Boolean)
     .join("\n");
+  const orgId = input.orgId!;
   safe(`client-appt-confirm to ${input.clientPhone}`, () =>
-    sendText(input.clientPhone!, text, {
+    sendText(orgId, input.clientPhone!, text, {
       dedupKey: `client-appt-confirm:${input.clientPhone}:${input.scheduledAtISO}`,
       label: `client-appt-confirm to ${input.clientPhone}`,
     }),
@@ -322,8 +337,9 @@ export function notifyClientAppointmentReminder(input: {
   scheduledAtISO: string;
   location: string;
   when: "24h" | "2h";
+  orgId: string | null;
 }): void {
-  if (!isReady()) return;
+  if (!isReady(input.orgId)) return;
   if (!input.clientPhone?.trim()) return;
   const greeting = input.ownerName?.trim() ? `Hola ${input.ownerName},` : "Hola,";
   const lead =
@@ -342,8 +358,9 @@ export function notifyClientAppointmentReminder(input: {
   ]
     .filter(Boolean)
     .join("\n");
+  const orgId = input.orgId!;
   safe(`client-appt-reminder-${input.when} to ${input.clientPhone}`, () =>
-    sendText(input.clientPhone!, text, {
+    sendText(orgId, input.clientPhone!, text, {
       // Un cliente solo debe recibir un único reminder 24h y un único 2h por
       // cita; si el loop se dispara más veces (restart, race) la dedup key
       // colapsa el duplicado.
