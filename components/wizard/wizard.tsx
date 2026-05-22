@@ -9,7 +9,6 @@ import {
   ChevronLeft,
   Download,
   Keyboard,
-  Unlock,
 } from "lucide-react";
 
 import { ErrorBoundary } from "@/components/shared/error-boundary";
@@ -76,6 +75,20 @@ type ValidateResult = {
   scrollItemId?: string;
 };
 
+/** Considera una imagen "legible" si su data URL pesa al menos ~3KB de payload
+ *  binario. Una foto JPEG válida del celular pesa ≥30KB; menos de 3KB indica
+ *  que el slot se llenó con un pixel/placeholder o que la captura quedó
+ *  corrupta. No es una validación de nitidez, pero atrapa el caso de "tomé
+ *  foto pero la cámara no devolvió frame". */
+function isImageEntryUsable(img: { dataUrl?: string } | undefined): boolean {
+  if (!img?.dataUrl) return false;
+  if (!img.dataUrl.startsWith("data:")) return false;
+  const idx = img.dataUrl.indexOf(",");
+  if (idx < 0) return false;
+  // Base64 inflate ~33% → 4KB de payload base64 = ~3KB binarios.
+  return img.dataUrl.length - idx - 1 >= 4000;
+}
+
 function validateStep(step: StepId, data: InspectionData): ValidateResult {
   if (step === "vehicle") {
     const v = data.vehicle;
@@ -84,8 +97,26 @@ function validateStep(step: StepId, data: InspectionData): ValidateResult {
     if (!v.model) return { ok: false, message: "Falta el modelo.", focusId: "model" };
     if (!/^\d{4}$/u.test(v.year))
       return { ok: false, message: "Año inválido.", focusId: "year" };
+    const yearNum = Number(v.year);
+    const currentYear = new Date().getFullYear();
+    if (yearNum < 1950 || yearNum > currentYear + 1) {
+      return {
+        ok: false,
+        message: `Año fuera de rango (debe estar entre 1950 y ${currentYear + 1}).`,
+        focusId: "year",
+      };
+    }
     if (!/^\d+$/u.test(v.mileage))
       return { ok: false, message: "Kilometraje inválido.", focusId: "mileage" };
+    const mileageNum = Number(v.mileage);
+    if (mileageNum > 2_000_000) {
+      return {
+        ok: false,
+        message:
+          "Kilometraje sospechoso (> 2.000.000 km). Revisá el dato antes de continuar.",
+        focusId: "mileage",
+      };
+    }
     if (!v.inspector) return { ok: false, message: "Falta el nombre del perito.", focusId: "inspector" };
     if (!v.date) return { ok: false, message: "Falta la fecha.", focusId: "date" };
     const docs = data.documents;
@@ -93,6 +124,36 @@ function validateStep(step: StepId, data: InspectionData): ValidateResult {
       return { ok: false, message: "Falta foto del frente de la tarjeta de propiedad." };
     if (!docs?.ownershipCardBack?.length)
       return { ok: false, message: "Falta foto del reverso de la tarjeta de propiedad." };
+    // Chequeo de payload de las fotos: si la "foto" del frente/reverso quedó
+    // como un dataURL trivial (cámara congelada, archivo corrupto), bloqueamos
+    // antes de que el peritaje siga con evidencia inútil.
+    if (!docs.ownershipCardFront.some(isImageEntryUsable)) {
+      return {
+        ok: false,
+        message:
+          "La foto del frente de la tarjeta parece corrupta o muy pequeña. Tomala de nuevo.",
+      };
+    }
+    if (!docs.ownershipCardBack.some(isImageEntryUsable)) {
+      return {
+        ok: false,
+        message:
+          "La foto del reverso de la tarjeta parece corrupta o muy pequeña. Tomala de nuevo.",
+      };
+    }
+    // Warning suave: si el VIN está llenado pero no tiene 17 chars válidos,
+    // avisamos sin bloquear (puede ser un VIN parcial legítimo en algunas
+    // motos viejas, así que no lo hacemos hard-fail).
+    if (v.vin) {
+      const vinClean = v.vin.replace(/\s+/g, "").toUpperCase();
+      if (vinClean.length !== 17 || /[IOQ]/u.test(vinClean)) {
+        return {
+          ok: true,
+          warning:
+            "El VIN no parece estar completo (deben ser 17 caracteres alfanuméricos sin I/O/Q). Revisalo cuando puedas.",
+        };
+      }
+    }
     return { ok: true };
   }
 
@@ -292,16 +353,6 @@ function WizardInner() {
       setCurrent(activeSteps[0]?.id ?? "vehicle");
     }
   }, [activeStepSet, activeSteps, current]);
-
-  const handleReopen = React.useCallback(() => {
-    if (typeof window !== "undefined" && !window.confirm(
-      "¿Reabrir este peritaje? Quedará en estado borrador y podrás volver a editarlo.",
-    )) {
-      return;
-    }
-    setData((prev) => ({ ...prev, status: "draft", completedAt: undefined }));
-    toast.show({ title: "Peritaje reabierto", description: "Volvés al modo edición.", variant: "default" });
-  }, [setData, toast]);
 
   const handleDownloadPdf = React.useCallback(async () => {
     setPdfBusy(true);
@@ -527,11 +578,11 @@ function WizardInner() {
             <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" />
             <div>
               <div className="font-semibold">Peritaje finalizado</div>
-              {data.completedAt && (
-                <div className="text-xs text-muted-foreground">
-                  Cerrado el {formatDate(data.completedAt.slice(0, 10))} · solo lectura
-                </div>
-              )}
+              <div className="text-xs text-muted-foreground">
+                {data.completedAt
+                  ? `Cerrado el ${formatDate(data.completedAt.slice(0, 10))} · inmutable`
+                  : "Inmutable — sólo lectura"}
+              </div>
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-2">
@@ -545,16 +596,6 @@ function WizardInner() {
             >
               <Download className="mr-1.5 h-4 w-4" />
               {pdfBusy ? "Generando…" : "Descargar PDF"}
-            </Button>
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              onClick={handleReopen}
-              className="h-9"
-            >
-              <Unlock className="mr-1.5 h-4 w-4" />
-              Reabrir
             </Button>
           </div>
         </div>
@@ -642,7 +683,7 @@ export function Wizard({ id }: { id: string }) {
     <UIPreferencesProvider>
       <ErrorBoundary
         title="No se pudo cargar el peritaje"
-        description="Hubo un error al hidratar esta inspección. Si pasa seguido, copiá el detalle y avisanos."
+        description="Hubo un error al hidratar esta inspección. Si pasa seguido, copia el detalle y avísanos."
       >
         <InspectionProvider id={id}>
           <WizardInner />
