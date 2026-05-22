@@ -15,6 +15,12 @@ export const dynamic = "force-dynamic";
 const OcrSchema = z.object({
   imageDataUrl: z.string().min(20).max(16 * 1024 * 1024),
 });
+
+// MIME types que aceptamos. Excluimos explícitamente svg/xml por superficie
+// de ataque (XML/XSS embebidos) y heic/heif porque el server-side Tesseract
+// no los puede decodificar sin un paso extra. El cliente ya convierte todo
+// a jpeg/png antes de subir.
+const ALLOWED_MIME = new Set(["image/jpeg", "image/png", "image/webp"]);
 // 60s para cubrir el primer warmup de Tesseract (descarga de 'spa.traineddata'
 // del CDN de tessdata, ~1.5MB). Después de eso queda cacheado en disco y los
 // requests siguientes resuelven en 1-3s.
@@ -73,12 +79,33 @@ export async function POST(req: Request) {
   if (!match) {
     return NextResponse.json({ error: "invalid_image_format" }, { status: 400 });
   }
-  const mimeType = match[1];
+  const mimeType = match[1].toLowerCase();
   const base64 = match[2];
+
+  if (!ALLOWED_MIME.has(mimeType)) {
+    // Rechazamos cualquier MIME fuera de la whitelist (típicamente svg, gif,
+    // bmp) antes de que llegue a Tesseract. Sin esto el endpoint aceptaba un
+    // SVG con XML arbitrario embebido — superficie de ataque innecesaria.
+    return NextResponse.json(
+      {
+        error: "unsupported_image_type",
+        detail: `Solo aceptamos JPEG, PNG o WebP. Recibido: ${mimeType}.`,
+      },
+      { status: 415 },
+    );
+  }
 
   // Tope defensivo: base64 inflate ~33%, así que 8MB de payload son ~6MB binarios.
   if (base64.length > Math.ceil((MAX_BYTES * 4) / 3)) {
     return NextResponse.json({ error: "image_too_large" }, { status: 413 });
+  }
+  // Validamos que el base64 sea decodificable. Tesseract es estricto y
+  // devuelve mensajes oscuros con payloads truncados — preferimos atajar acá.
+  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(base64)) {
+    return NextResponse.json(
+      { error: "invalid_base64" },
+      { status: 400 },
+    );
   }
 
   try {

@@ -52,13 +52,29 @@ export async function POST(req: Request) {
   let raw: unknown;
   try {
     raw = await req.json();
-  } catch {
-    return NextResponse.json({ error: "JSON inválido" }, { status: 400 });
+  } catch (err) {
+    // Diferenciamos entre JSON mal formado (cliente buggy) y body vacío
+    // (request truncado / abortado por el cliente). Saber qué pasó ayuda en
+    // diagnóstico — antes devolvíamos "JSON inválido" para todo.
+    const message = err instanceof Error ? err.message : "unknown";
+    return NextResponse.json(
+      { error: "JSON inválido", detail: message.slice(0, 200) },
+      { status: 400 },
+    );
   }
   const parsed = InspectionPostSchema.safeParse(raw);
   if (!parsed.success) {
+    // Exponemos la primera issue del schema en `detail` para que el cliente
+    // sepa qué campo tiene problema (sin filtrar info sensible — los issues
+    // son sobre nuestro propio schema).
+    const firstIssue = parsed.error.issues[0];
     return NextResponse.json(
-      { error: "Cuerpo inválido: falta data u id mal formado." },
+      {
+        error: "Cuerpo inválido: falta data u id mal formado.",
+        detail: firstIssue
+          ? `${firstIssue.path.join(".") || "(root)"}: ${firstIssue.message}`
+          : undefined,
+      },
       { status: 400 },
     );
   }
