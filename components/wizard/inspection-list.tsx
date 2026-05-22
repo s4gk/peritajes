@@ -14,6 +14,7 @@ import {
   Plus,
   Search,
   Trash2,
+  UserCog,
   X,
 } from "lucide-react";
 
@@ -50,17 +51,110 @@ import { formatDate } from "@/lib/utils";
 
 import { useToast } from "@/components/ui/toast";
 
-import { useIsAdmin } from "@/components/panel/current-user";
+import { useCanManage, useIsAdmin } from "@/components/panel/current-user";
+import { apiFetch } from "@/lib/client/api-client";
 
 import { BackupControls } from "./backup-controls";
 import { UIPreferencesProvider } from "./ui-preferences";
 
+type TeamMember = { id: string; fullName: string; active: boolean };
+
+function useTeamMembers(enabled: boolean): TeamMember[] {
+  // Hook simple: trae la lista de usuarios del equipo (scope owner-side) una
+  // vez al montar el panel y la guarda. Solo se activa para owner/admin —
+  // employee no necesita conocer la lista.
+  const [members, setMembers] = React.useState<TeamMember[]>([]);
+  React.useEffect(() => {
+    if (!enabled) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await apiFetch("/api/users", { credentials: "same-origin" });
+        if (!res.ok) return;
+        const json = (await res.json()) as {
+          users?: Array<{ id: string; fullName: string; active: boolean }>;
+        };
+        if (!cancelled && Array.isArray(json.users)) {
+          setMembers(
+            json.users.map((u) => ({
+              id: u.id,
+              fullName: u.fullName,
+              active: u.active,
+            })),
+          );
+        }
+      } catch {
+        /* sin team list — la UI muestra "Reasignar" sin opciones */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [enabled]);
+  return members;
+}
+
 function InspectionsInner() {
   const router = useRouter();
   const isAdmin = useIsAdmin();
+  const canManage = useCanManage();
+  const teamMembers = useTeamMembers(canManage);
+  const memberById = React.useMemo(() => {
+    const m = new Map<string, TeamMember>();
+    for (const t of teamMembers) m.set(t.id, t);
+    return m;
+  }, [teamMembers]);
   const [items, setItems] = React.useState<StoredInspection[]>([]);
   const [hydrated, setHydrated] = React.useState(false);
   const [pendingDelete, setPendingDelete] = React.useState<StoredInspection | null>(null);
+  const [pendingReassign, setPendingReassign] =
+    React.useState<StoredInspection | null>(null);
+  const [reassignTarget, setReassignTarget] = React.useState<string>("");
+  const [reassignBusy, setReassignBusy] = React.useState(false);
+  const toastReassign = useToast();
+
+  async function doReassign() {
+    if (!pendingReassign || !reassignTarget) return;
+    setReassignBusy(true);
+    try {
+      const res = await apiFetch(
+        `/api/inspections/${encodeURIComponent(pendingReassign.id)}/reassign`,
+        {
+          method: "POST",
+          credentials: "same-origin",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ newUserId: reassignTarget }),
+        },
+      );
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        toastReassign.show({
+          title: "No se pudo reasignar",
+          description:
+            (body as { error?: string }).error ??
+            `${res.status} ${res.statusText}`,
+          variant: "danger",
+        });
+      } else {
+        toastReassign.show({
+          title: "Peritaje reasignado",
+          variant: "success",
+        });
+        setPendingReassign(null);
+        setReassignTarget("");
+        // Recargamos el listado para reflejar el nuevo asignado.
+        window.dispatchEvent(new CustomEvent("perito:store-refreshed"));
+      }
+    } catch (err) {
+      toastReassign.show({
+        title: "Error de red",
+        description: err instanceof Error ? err.message : undefined,
+        variant: "danger",
+      });
+    } finally {
+      setReassignBusy(false);
+    }
+  }
 
   const [query, setQuery] = React.useState("");
   const [debouncedQuery, setDebouncedQuery] = React.useState("");
@@ -291,9 +385,17 @@ function InspectionsInner() {
               key={item.id}
               item={item}
               canDelete={isAdmin}
+              canReassign={canManage}
+              assigneeName={
+                item.userId ? memberById.get(item.userId)?.fullName ?? null : null
+              }
               onOpen={() => router.push(`/inspection/${item.id}`)}
               onDuplicate={() => handleDuplicate(item.id)}
               onDelete={() => requestDelete(item)}
+              onReassign={() => {
+                setPendingReassign(item);
+                setReassignTarget(item.userId ?? "");
+              }}
             />
           ))}
         </div>
@@ -310,6 +412,76 @@ function InspectionsInner() {
         <Plus className="h-5 w-5" />
         Nuevo peritaje
       </button>
+
+      <Dialog
+        open={pendingReassign !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            setPendingReassign(null);
+            setReassignTarget("");
+          }
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Reasignar peritaje</DialogTitle>
+            <DialogDescription>
+              {pendingReassign?.data.vehicle.plate
+                ? `Placa ${pendingReassign.data.vehicle.plate}. `
+                : ""}
+              Elegí a quién querés transferirle este peritaje. El nuevo
+              dueño podrá editarlo desde su sesión.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2 py-2">
+            <label className="block text-xs font-medium uppercase tracking-wide text-muted-foreground">
+              Asignado a
+            </label>
+            <select
+              value={reassignTarget}
+              onChange={(e) => setReassignTarget(e.target.value)}
+              className="h-10 w-full rounded-md border bg-background px-3 text-sm"
+            >
+              <option value="">Sin asignar</option>
+              {teamMembers
+                .filter((m) => m.active)
+                .map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.fullName}
+                  </option>
+                ))}
+            </select>
+          </div>
+          <DialogFooter className="gap-2 sm:gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => {
+                setPendingReassign(null);
+                setReassignTarget("");
+              }}
+            >
+              Cancelar
+            </Button>
+            <Button
+              type="button"
+              onClick={doReassign}
+              disabled={
+                reassignBusy ||
+                !reassignTarget ||
+                reassignTarget === pendingReassign?.userId
+              }
+            >
+              {reassignBusy ? (
+                <Loader2 className="mr-1 h-4 w-4 animate-spin" />
+              ) : (
+                <UserCog className="mr-1 h-4 w-4" />
+              )}
+              Reasignar
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog
         open={pendingDelete !== null}
@@ -360,15 +532,21 @@ function InspectionsInner() {
 function InspectionCard({
   item,
   canDelete,
+  canReassign,
+  assigneeName,
   onOpen,
   onDuplicate,
   onDelete,
+  onReassign,
 }: {
   item: StoredInspection;
   canDelete: boolean;
+  canReassign: boolean;
+  assigneeName: string | null;
   onOpen: () => void;
   onDuplicate: () => void;
   onDelete: () => void;
+  onReassign: () => void;
 }) {
   const report = React.useMemo(() => analyze(item.data), [item.data]);
   const v = item.data.vehicle;
@@ -460,7 +638,13 @@ function InspectionCard({
             <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
               Perito
             </div>
-            <div className="truncate font-medium">{v.inspector || "—"}</div>
+            <div className="truncate font-medium">
+              {/* Si el owner ve un peritaje de otro perito de su org, mostramos
+                  el nombre real del asignado (no el "v.inspector" que es solo
+                  texto que el perito escribió en su data y puede estar
+                  desactualizado). Caemos a v.inspector como fallback. */}
+              {assigneeName ?? (v.inspector || "—")}
+            </div>
           </div>
           <div>
             <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
@@ -514,6 +698,22 @@ function InspectionCard({
             >
               <Copy className="h-4 w-4" />
             </Button>
+            {canReassign && !isLocked ? (
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="h-10 w-10"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onReassign();
+                }}
+                aria-label="Reasignar peritaje"
+                title="Reasignar a otro empleado"
+              >
+                <UserCog className="h-4 w-4" />
+              </Button>
+            ) : null}
             {canDelete ? (
               <Button
                 type="button"

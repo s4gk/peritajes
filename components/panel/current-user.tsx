@@ -9,6 +9,7 @@ export type PanelUser = {
   licenseId: string | null;
   signatureDataUrl: string | null;
   role: "admin" | "owner" | "employee";
+  orgId: string | null;
 };
 
 const CurrentUserContext = React.createContext<PanelUser | null>(null);
@@ -38,4 +39,12 @@ export function useCurrentUser(): PanelUser | null {
 
 export function useIsAdmin(): boolean {
   return useCurrentUser()?.role === "admin";
+}
+
+/** True para admin u owner — los roles que pueden administrar el negocio:
+ *  reasignar peritajes, ver hallazgos del equipo, configurar empresa, etc.
+ *  No incluye employee (que solo gestiona lo suyo). */
+export function useCanManage(): boolean {
+  const r = useCurrentUser()?.role;
+  return r === "admin" || r === "owner";
 }

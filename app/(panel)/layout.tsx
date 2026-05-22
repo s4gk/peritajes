@@ -27,6 +27,7 @@ export default async function PanelLayout({
         licenseId: user.licenseId,
         signatureDataUrl: user.signatureDataUrl,
         role: user.role,
+        orgId: user.orgId,
       }}
     >
       {children}
