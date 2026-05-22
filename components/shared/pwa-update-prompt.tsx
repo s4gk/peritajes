@@ -1,9 +1,10 @@
 "use client";
 
 import * as React from "react";
-import { RefreshCw, X } from "lucide-react";
+import { AlertTriangle, RefreshCw, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { subscribeSync, type SyncState } from "@/lib/client/sync-queue";
 import { cn } from "@/lib/utils";
 
 /**
@@ -31,6 +32,12 @@ export function PWAUpdatePrompt() {
   const [waitingWorker, setWaitingWorker] = React.useState<ServiceWorker | null>(null);
   const [dismissed, setDismissed] = React.useState(false);
   const reloadingRef = React.useRef(false);
+  // Estado de la sync queue. Si hay mutations pendientes (sobre todo
+  // failed > 0), aplicar update implica reload — y aunque IDB persiste, el
+  // perito debería decidir conscientemente que está OK con eso.
+  const [sync, setSync] = React.useState<SyncState | null>(null);
+
+  React.useEffect(() => subscribeSync(setSync), []);
 
   React.useEffect(() => {
     if (typeof window === "undefined") return;
@@ -87,13 +94,31 @@ export function PWAUpdatePrompt() {
 
   if (!waitingWorker || dismissed) return null;
 
+  // Si hay cambios pendientes de subir al server, mostramos un warning antes
+  // de aplicar el update — el reload sigue siendo seguro (IDB persiste), pero
+  // el perito debería saber que va a recargar con cambios todavía en cola.
+  const hasPending = !!sync && sync.pending > 0;
+  const hasFailed = !!sync && sync.failed > 0;
+
   function applyUpdate() {
     if (!waitingWorker) return;
+    if (hasFailed) {
+      // Cambios fallidos son la situación más arriesgada: el server NO los
+      // tiene, y un reload no los va a sincronizar mágicamente. Pedimos
+      // confirmación explícita en vez de aplicar silenciosamente.
+      const ok = window.confirm(
+        `Hay ${sync!.failed} cambio(s) sin subir al server. ` +
+          "El reload mantiene los datos en este dispositivo, pero seguirán pendientes. ¿Actualizar igual?",
+      );
+      if (!ok) return;
+    }
     try {
       waitingWorker.postMessage({ type: "SKIP_WAITING" });
     } catch {
       // Si por algún motivo postMessage falla, hacemos reload duro — el SW
-      // nuevo se va a activar en el próximo load igual.
+      // nuevo se va a activar en el próximo load igual. IDB persiste el
+      // estado del wizard, así que se pierden a lo sumo los últimos 400ms
+      // del debounce de autosave.
       window.location.reload();
     }
   }
@@ -125,8 +150,23 @@ export function PWAUpdatePrompt() {
           <div className="text-sm font-semibold">Nueva versión disponible</div>
           <p className="mt-0.5 text-xs text-muted-foreground">
             Hay una actualización de Perito lista. Aplicala para usar la versión
-            más reciente — tus borradores en curso quedan guardados.
+            más reciente — tu trabajo en curso queda guardado.
           </p>
+          {hasFailed && (
+            <div className="mt-2 flex items-start gap-1.5 rounded-md border border-danger/40 bg-danger/5 p-2 text-[11px] text-danger">
+              <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
+              <span>
+                Tenés {sync!.failed} cambio(s) sin subir al server. Te
+                pediremos confirmación antes de recargar.
+              </span>
+            </div>
+          )}
+          {!hasFailed && hasPending && (
+            <div className="mt-2 text-[11px] text-warning">
+              {sync!.pending} cambio(s) pendientes de subir — quedarán en cola
+              después del reload.
+            </div>
+          )}
           <div className="mt-2 flex gap-2">
             <Button size="sm" onClick={applyUpdate} className="gap-1.5">
               <RefreshCw className="h-3.5 w-3.5" />
