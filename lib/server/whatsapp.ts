@@ -25,6 +25,16 @@ import type pino from "pino";
 
 type Status = "disconnected" | "connecting" | "qr" | "connected";
 
+type QueuedTask = {
+  /** Tag corto para logs (p.ej. "client-pdf to 573001234567"). */
+  label: string;
+  /** Llave de deduplicación. Si dos enqueue() llegan con la misma key dentro
+   *  de la ventana DEDUP_TTL_MS, el segundo se descarta. Sirve para evitar
+   *  duplicados por reintentos de UI o reconexión del socket. */
+  dedupKey: string | null;
+  run: () => Promise<void>;
+};
+
 type WhatsAppState = {
   status: Status;
   qrText: string | null;
@@ -35,9 +45,12 @@ type WhatsAppState = {
   // Baileys socket — tipo opaco para no atar este archivo a la versión exacta
   // de la librería (los tipos públicos cambian seguido).
   socket: unknown;
-  queue: Array<() => Promise<void>>;
+  queue: QueuedTask[];
   pumping: boolean;
   reconnectAttempts: number;
+  /** Map dedup-key → expiry timestamp (epoch ms). Una vez expira se puede
+   *  reusar la key. Se limpia perezosamente en cada enqueue. */
+  recentDedup: Map<string, number>;
 };
 
 const globalScope = globalThis as unknown as { __peritoWa?: WhatsAppState };
@@ -55,10 +68,18 @@ function getState(): WhatsAppState {
       queue: [],
       pumping: false,
       reconnectAttempts: 0,
+      recentDedup: new Map(),
     };
   }
   return globalScope.__peritoWa;
 }
+
+// Ventana en la que dos enqueue con la misma dedupKey se colapsan en uno solo.
+// 10 minutos cubre el caso típico: el wizard llama dos veces al endpoint de
+// finalización (por reintento de red o doble click) y queremos garantizar que
+// el cliente no reciba el PDF dos veces. Pasada esa ventana, si vuelve a
+// dispararse, asumimos que fue intencional (p.ej. el admin reenvió a mano).
+const DEDUP_TTL_MS = 10 * 60_000;
 
 const AUTH_DIR = path.resolve(process.cwd(), ".wa-auth");
 
@@ -235,6 +256,11 @@ function jidFor(phone: string): string {
  *
  * Si no hay socket conectado, los mensajes quedan en cola hasta que
  * `connection === "open"` y se reinicia el pump.
+ *
+ * Cada task se desencola ANTES de ejecutarse, así que una reconexión durante
+ * la ejecución no puede re-ejecutarla. Si el envío falla con el socket en
+ * un estado intermedio, dejamos el log y seguimos — la dedupKey protege
+ * contra duplicados si el llamador vuelve a encolarlo.
  */
 async function pumpQueue(): Promise<void> {
   const state = getState();
@@ -245,9 +271,12 @@ async function pumpQueue(): Promise<void> {
       const task = state.queue.shift();
       if (!task) break;
       try {
-        await task();
+        await task.run();
       } catch (err) {
-        console.error("[wa] envío falló:", (err as Error).message);
+        console.error(
+          `[wa] envío "${task.label}" falló:`,
+          (err as Error).message,
+        );
       }
       const delay = 2_000 + Math.floor(Math.random() * 3_000);
       await new Promise((r) => setTimeout(r, delay));
@@ -276,38 +305,89 @@ type WaSocket = {
  * Encola un envío. La función se ejecuta cuando le toca el turno respetando
  * el delay anti-spam. Si WA no está conectado, encolamos igual y se procesará
  * cuando reconecte.
+ *
+ * `dedupKey` (opcional): si dentro de DEDUP_TTL_MS llega otro enqueue con
+ * la misma key, se descarta. Evita avisos duplicados cuando una acción se
+ * dispara dos veces (doble-click, reintento del cliente, reconexión).
  */
-function enqueue(task: () => Promise<void>): void {
+function enqueue(
+  run: () => Promise<void>,
+  opts: { label: string; dedupKey?: string },
+): { accepted: boolean; reason?: string } {
   const state = getState();
-  state.queue.push(task);
+  const now = Date.now();
+
+  // GC perezoso del mapa de dedup: limpiamos entradas vencidas en cada
+  // enqueue. Mantenerlo pequeño (típico <50 entries) no justifica un timer.
+  if (state.recentDedup.size > 0) {
+    for (const [k, exp] of state.recentDedup) {
+      if (exp <= now) state.recentDedup.delete(k);
+    }
+  }
+
+  if (opts.dedupKey) {
+    const exp = state.recentDedup.get(opts.dedupKey);
+    if (exp && exp > now) {
+      console.warn(
+        `[wa] descartado por dedup: ${opts.label} (key=${opts.dedupKey})`,
+      );
+      return { accepted: false, reason: "dedup" };
+    }
+    state.recentDedup.set(opts.dedupKey, now + DEDUP_TTL_MS);
+  }
+
+  state.queue.push({
+    label: opts.label,
+    dedupKey: opts.dedupKey ?? null,
+    run,
+  });
   void pumpQueue();
+  return { accepted: true };
 }
 
-export function sendText(phone: string, text: string): void {
+export function sendText(
+  phone: string,
+  text: string,
+  opts: { dedupKey?: string; label?: string } = {},
+): { accepted: boolean; reason?: string } {
   const jid = jidFor(phone);
-  enqueue(async () => {
-    const { socket } = ensureReady();
-    await socket.sendMessage(jid, { text });
-  });
+  return enqueue(
+    async () => {
+      const { socket } = ensureReady();
+      await socket.sendMessage(jid, { text });
+    },
+    { label: opts.label ?? `text to ${phone}`, dedupKey: opts.dedupKey },
+  );
 }
 
 export function sendDocument(
   phone: string,
   buffer: Buffer,
   filename: string,
-  options: { caption?: string; mimetype?: string } = {},
-): void {
+  options: {
+    caption?: string;
+    mimetype?: string;
+    dedupKey?: string;
+    label?: string;
+  } = {},
+): { accepted: boolean; reason?: string } {
   const jid = jidFor(phone);
   const mimetype = options.mimetype ?? "application/pdf";
-  enqueue(async () => {
-    const { socket } = ensureReady();
-    await socket.sendMessage(jid, {
-      document: buffer,
-      fileName: filename,
-      mimetype,
-      caption: options.caption,
-    });
-  });
+  return enqueue(
+    async () => {
+      const { socket } = ensureReady();
+      await socket.sendMessage(jid, {
+        document: buffer,
+        fileName: filename,
+        mimetype,
+        caption: options.caption,
+      });
+    },
+    {
+      label: options.label ?? `doc ${filename} to ${phone}`,
+      dedupKey: options.dedupKey,
+    },
+  );
 }
 
 /**
@@ -317,6 +397,15 @@ export function sendDocument(
  */
 export async function autoConnectIfPersisted(): Promise<void> {
   const state = getState();
+  // Aprovechamos esta llamada (hit del panel /whatsapp, fire-and-forget) para
+  // arrancar también el loop de recordatorios de cita. Es idempotente, así
+  // que llamarlo en cada hit del status endpoint no duplica timers.
+  void import("./whatsapp-reminders")
+    .then((m) => m.startReminderLoop())
+    .catch((err) =>
+      console.error("[wa] no se pudo arrancar reminder loop:", (err as Error).message),
+    );
+
   if (state.status !== "disconnected") return;
   try {
     await fs.access(path.join(AUTH_DIR, "creds.json"));
