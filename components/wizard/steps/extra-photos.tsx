@@ -126,7 +126,7 @@ export function ExtraPhotosStep() {
             <div className="min-w-0">
               <CardTitle>Fotografías adicionales</CardTitle>
               <CardDescription>
-                Subí acá cualquier foto extra que no pertenezca a un ítem específico —
+                Sube aquí cualquier foto extra que no pertenezca a un ítem específico —
                 detalles del compartimento, anexos, capturas de pantalla, comprobantes,
                 vistas panorámicas. Es opcional y aparecerá en la sección de evidencia
                 del PDF.

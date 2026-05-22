@@ -10,6 +10,7 @@ import {
   FileSpreadsheet,
   FileText,
   Loader2,
+  Lock,
   Plus,
   Search,
   Trash2,
@@ -34,13 +35,6 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { FALLBACK_VEHICLE_TYPE, PERITAJE_KINDS, VEHICLE_TYPES } from "@/lib/constants";
 import { downloadCsv, inspectionsToCsv } from "@/lib/csv";
 import {
@@ -61,8 +55,6 @@ import { useIsAdmin } from "@/components/panel/current-user";
 import { BackupControls } from "./backup-controls";
 import { UIPreferencesProvider } from "./ui-preferences";
 
-type StatusFilter = "all" | "draft" | "completed";
-
 function InspectionsInner() {
   const router = useRouter();
   const isAdmin = useIsAdmin();
@@ -72,7 +64,6 @@ function InspectionsInner() {
 
   const [query, setQuery] = React.useState("");
   const [debouncedQuery, setDebouncedQuery] = React.useState("");
-  const [statusFilter, setStatusFilter] = React.useState<StatusFilter>("all");
   const [fromDate, setFromDate] = React.useState("");
   const [toDate, setToDate] = React.useState("");
 
@@ -137,7 +128,6 @@ function InspectionsInner() {
     const fromMs = fromDate ? Date.parse(`${fromDate}T00:00:00`) : null;
     const toMs = toDate ? Date.parse(`${toDate}T23:59:59`) : null;
     return items.filter((item) => {
-      if (statusFilter !== "all" && item.data.status !== statusFilter) return false;
       if (fromMs !== null) {
         const d = item.data.vehicle.date
           ? Date.parse(item.data.vehicle.date)
@@ -171,7 +161,7 @@ function InspectionsInner() {
       }
       return true;
     });
-  }, [items, statusFilter, debouncedQuery, fromDate, toDate]);
+  }, [items, debouncedQuery, fromDate, toDate]);
 
   if (!hydrated) {
     return (
@@ -181,12 +171,10 @@ function InspectionsInner() {
     );
   }
 
-  const hasActiveFilters =
-    !!debouncedQuery || statusFilter !== "all" || !!fromDate || !!toDate;
+  const hasActiveFilters = !!debouncedQuery || !!fromDate || !!toDate;
 
   function clearFilters() {
     setQuery("");
-    setStatusFilter("all");
     setFromDate("");
     setToDate("");
   }
@@ -232,7 +220,7 @@ function InspectionsInner() {
       {items.length > 0 && (
         <Card>
           <CardContent className="space-y-3 p-3 sm:p-4">
-            <div className="grid gap-2 sm:grid-cols-[1fr_140px_140px_140px]">
+            <div className="grid gap-2 sm:grid-cols-[1fr_140px_140px]">
               <div className="relative">
                 <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                 <Input
@@ -242,19 +230,6 @@ function InspectionsInner() {
                   className="pl-9"
                 />
               </div>
-              <Select
-                value={statusFilter}
-                onValueChange={(v) => setStatusFilter(v as StatusFilter)}
-              >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">Todos los estados</SelectItem>
-                  <SelectItem value="draft">Borradores</SelectItem>
-                  <SelectItem value="completed">Finalizados</SelectItem>
-                </SelectContent>
-              </Select>
               <Input
                 type="date"
                 value={fromDate}
@@ -350,6 +325,14 @@ function InspectionsInner() {
                 ? `Se eliminará el peritaje de la placa ${pendingDelete.data.vehicle.plate}. `
                 : "Se eliminará este peritaje sin placa. "}
               Esta acción no se puede deshacer.
+              {(pendingDelete?.lockedAt ||
+                pendingDelete?.data.status === "completed") && (
+                <span className="mt-2 block rounded border border-warning/40 bg-warning/10 p-2 text-xs text-warning">
+                  Este peritaje está finalizado. Al borrarlo se elimina también
+                  el PDF oficial entregado al cliente y se invalida cualquier
+                  enlace compartido.
+                </span>
+              )}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter className="gap-2 sm:gap-2">
@@ -391,7 +374,7 @@ function InspectionCard({
   const v = item.data.vehicle;
   const tone = riskTone(report.level);
   const hasPlate = !!v.plate;
-  const isCompleted = item.data.status === "completed";
+  const isLocked = !!item.lockedAt || item.data.status === "completed";
   const toast = useToast();
   const [pdfBusy, setPdfBusy] = React.useState(false);
 
@@ -444,9 +427,12 @@ function InspectionCard({
             <span className="inline-flex items-center rounded-full border bg-muted/40 px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
               {(PERITAJE_KINDS[item.data.kind] ?? PERITAJE_KINDS.complete).short}
             </span>
-            {isCompleted ? (
-              <span className="inline-flex items-center gap-1 rounded-full border border-success/40 bg-success/10 px-2 py-0.5 text-[10px] font-medium text-success">
-                <CheckCircle2 className="h-3 w-3" /> Finalizado
+            {isLocked ? (
+              <span
+                className="inline-flex items-center gap-1 rounded-full border border-success/40 bg-success/10 px-2 py-0.5 text-[10px] font-medium text-success"
+                title="Peritaje finalizado e inmutable"
+              >
+                <Lock className="h-3 w-3" /> Finalizado
               </span>
             ) : (
               <span className="inline-flex items-center gap-1 rounded-full border border-muted-foreground/30 bg-muted/40 px-2 py-0.5 text-[10px] font-medium text-muted-foreground">

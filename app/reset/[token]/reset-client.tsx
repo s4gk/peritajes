@@ -60,7 +60,7 @@ export function ResetClient({ token, fullName, username }: Props) {
           </div>
           <h1 className="text-lg font-semibold">Contraseña restablecida</h1>
           <p className="mt-2 text-sm text-muted-foreground">
-            Ya podés ingresar con tu nueva contraseña.
+            Ya puedes ingresar con tu nueva contraseña.
           </p>
           <Button asChild className="mt-4 w-full">
             <a href="/login">Ir al login</a>

@@ -146,9 +146,14 @@ export function InspectionProvider({ id, children }: Props) {
     return () => window.removeEventListener("perito:inspection-synced", onSynced);
   }, [id]);
 
-  // Debounced persist with save-status indicator
+  const isReadOnly = data.status === "completed";
+
+  // Debounced persist with save-status indicator. Si el peritaje ya está
+  // finalizado no encolamos nada — el server rechazaría con 423 y solo
+  // generaríamos ruido en la sync queue.
   React.useEffect(() => {
     if (!isHydrated || notFound) return;
+    if (isReadOnly) return;
     if (!dirtyRef.current) {
       // Initial render after hydration — no save needed
       dirtyRef.current = true;
@@ -167,13 +172,11 @@ export function InspectionProvider({ id, children }: Props) {
       }
     }, SAVE_DEBOUNCE_MS);
     return () => window.clearTimeout(timer);
-  }, [id, data, isHydrated, notFound]);
+  }, [id, data, isHydrated, notFound, isReadOnly]);
 
   const setData = React.useCallback((updater: Updater<InspectionData>) => {
     setDataState((prev) => updater(prev));
   }, []);
-
-  const isReadOnly = data.status === "completed";
 
   const value = React.useMemo<ContextValue>(
     () => ({

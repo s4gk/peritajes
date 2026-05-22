@@ -56,7 +56,6 @@ export function downloadCsv(content: string, filename: string): void {
 export function inspectionsToCsv(rows: StoredInspection[]): string {
   const headers = [
     "Consecutivo",
-    "Estado",
     "Placa",
     "VIN",
     "Marca",
@@ -85,7 +84,6 @@ export function inspectionsToCsv(rows: StoredInspection[]): string {
     }
     return [
       r.reportNumber ?? "",
-      r.data.status === "completed" ? "Finalizado" : "Borrador",
       v.plate,
       v.vin,
       v.make,

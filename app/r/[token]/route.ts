@@ -78,7 +78,7 @@ export async function GET(req: Request, ctx: { params: { token: string } }) {
   if (!tokenLimit.allowed) {
     return htmlError(
       "Enlace muy solicitado",
-      "Este peritaje recibió demasiados accesos seguidos. Esperá un minuto y volvé a intentar.",
+      "Este peritaje recibió demasiados accesos seguidos. Espera un minuto y vuelve a intentar.",
       429,
     );
   }
@@ -87,21 +87,21 @@ export async function GET(req: Request, ctx: { params: { token: string } }) {
   if (!share) {
     return htmlError(
       "Enlace no encontrado",
-      "Este enlace no existe o fue eliminado. Pedile al perito un enlace actualizado.",
+      "Este enlace no existe o fue eliminado. Pídele al perito un enlace actualizado.",
       404,
     );
   }
   if (share.revokedAt) {
     return htmlError(
       "Enlace revocado",
-      "El perito revocó este enlace. Pedile uno nuevo si necesitás el peritaje.",
+      "El perito revocó este enlace. Pídele uno nuevo si necesitas el peritaje.",
       410,
     );
   }
   if (!isShareTokenLive(share)) {
     return htmlError(
       "Enlace expirado",
-      "Este peritaje quedó inaccesible por antigüedad. Pedile al perito un enlace nuevo.",
+      "Este peritaje quedó inaccesible por antigüedad. Pídele al perito un enlace nuevo.",
       410,
     );
   }

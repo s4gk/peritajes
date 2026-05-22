@@ -43,7 +43,19 @@ const TX_OPTIONS: { value: VehicleInfo["transmission"]; label: string }[] = [
 // TODAS las opciones en MAYÚSCULA — así matchean con cómo viene impreso en la
 // tarjeta de propiedad (que es texto en caps por el RUNT) y con lo que devuelve
 // el OCR. Cambiar también acá si cambiás algo en `toVehicleFormFields`.
-const BODY_TYPES = ["SEDÁN", "HATCHBACK", "SUV", "PICKUP", "VAN", "COUPÉ", "CONVERTIBLE"];
+const BODY_TYPES = [
+  "SEDÁN",
+  "HATCHBACK",
+  "SUV",
+  "WAGON",
+  "STATION WAGON",
+  "PICKUP",
+  "PICKUP SENCILLA",
+  "PICKUP DOBLE CABINA",
+  "VAN",
+  "COUPÉ",
+  "CONVERTIBLE",
+];
 
 const VEHICLE_CLASSES = [
   "AUTOMÓVIL",

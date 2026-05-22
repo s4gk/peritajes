@@ -30,8 +30,8 @@ export function RoadTestStep() {
         <CardHeader>
           <CardTitle className="text-base">¿Aplica prueba de ruta?</CardTitle>
           <CardDescription>
-            Indicá si vas a hacer recorrido con el vehículo. Si no aplica (no enciende,
-            cliente no autoriza, sólo avalúo estático…) podés saltarte la etapa.
+            Indica si vas a hacer recorrido con el vehículo. Si no aplica (no enciende,
+            cliente no autoriza, sólo avalúo estático…) puedes saltarte la etapa.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">

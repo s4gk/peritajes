@@ -181,10 +181,10 @@ export function PWAInstallPrompt() {
             <Share2 className="h-5 w-5" />
           </div>
           <div className="flex-1">
-            <div className="text-sm font-semibold">Instalá Peritajes del Llano en tu iPhone</div>
+            <div className="text-sm font-semibold">Instala Peritajes del Llano en tu iPhone</div>
             <p className="mt-0.5 text-xs text-muted-foreground">
-              Tocá el botón <span className="font-semibold">Compartir</span> en
-              Safari y elegí <span className="font-semibold">Agregar a inicio</span>.
+              Toca el botón <span className="font-semibold">Compartir</span> en
+              Safari y elige <span className="font-semibold">Agregar a inicio</span>.
             </p>
             <div className="mt-2">
               <Button size="sm" variant="ghost" onClick={handleDismiss}>
