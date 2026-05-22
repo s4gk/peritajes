@@ -156,7 +156,7 @@ export function PWAUpdatePrompt() {
             <div className="mt-2 flex items-start gap-1.5 rounded-md border border-danger/40 bg-danger/5 p-2 text-[11px] text-danger">
               <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
               <span>
-                Tenés {sync!.failed} cambio(s) sin subir al server. Te
+                Tienes {sync!.failed} cambio(s) sin subir al server. Te
                 pediremos confirmación antes de recargar.
               </span>
             </div>

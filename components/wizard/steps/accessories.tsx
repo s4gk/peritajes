@@ -104,7 +104,7 @@ export function AccessoriesStep() {
           ))}
           {data.accessories.length === 0 && (
             <div className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">
-              Sin accesorios. Agregá usando los botones de abajo.
+              Sin accesorios. Agrega usando los botones de abajo.
             </div>
           )}
         </div>

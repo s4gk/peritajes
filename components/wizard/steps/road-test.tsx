@@ -60,7 +60,7 @@ export function RoadTestStep() {
               <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" />
               <span>
                 La etapa quedará marcada como <span className="font-medium text-foreground">No aplica</span> en el PDF
-                y en las métricas. Podés cambiarla de opinión en cualquier momento — los datos no se borran.
+                y en las métricas. Puedes cambiar de opinión en cualquier momento — los datos no se borran.
               </span>
             </div>
           )}

@@ -283,7 +283,7 @@ export function VehicleInfoStep() {
         <CardHeader>
           <CardTitle>Tarjeta de propiedad / Licencia de tránsito *</CardTitle>
           <CardDescription>
-            Escaneá las dos caras. El frente extrae datos por OCR y rellena el formulario;
+            Escanea las dos caras. El frente extrae datos por OCR y rellena el formulario;
             el reverso solo se guarda como evidencia. Las dos caras son obligatorias y
             cuentan como las dos primeras fotos del peritaje.
           </CardDescription>

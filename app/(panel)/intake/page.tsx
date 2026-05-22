@@ -78,7 +78,7 @@ export default function IntakePage() {
           <CardHeader>
             <CardTitle>Nuevo peritaje</CardTitle>
             <CardDescription>
-              Elegí el tipo de vehículo a inspeccionar y el tipo de peritaje. Cada
+              Elige el tipo de vehículo a inspeccionar y el tipo de peritaje. Cada
               combinación define el inventario de carrocería y los pasos del
               wizard.
             </CardDescription>
@@ -96,7 +96,7 @@ export default function IntakePage() {
                 onValueChange={(v) => setVehicleType(v as VehicleType)}
               >
                 <SelectTrigger className="h-11 w-full sm:max-w-md">
-                  <SelectValue placeholder="Elegí el tipo de vehículo…" />
+                  <SelectValue placeholder="Elige el tipo de vehículo…" />
                 </SelectTrigger>
                 <SelectContent>
                   {VEHICLE_TYPE_ORDER.map((vt) => (
@@ -188,8 +188,8 @@ export default function IntakePage() {
             <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
               <p className="text-xs text-muted-foreground">
                 {canStart
-                  ? "Listo. Después de iniciar llenás los datos del vehículo dentro del peritaje."
-                  : "Elegí tipo de vehículo y tipo de peritaje para continuar."}
+                  ? "Listo. Después de iniciar llenas los datos del vehículo dentro del peritaje."
+                  : "Elige tipo de vehículo y tipo de peritaje para continuar."}
               </p>
               <Button
                 type="button"

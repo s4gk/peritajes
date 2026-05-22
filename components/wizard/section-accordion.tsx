@@ -164,7 +164,7 @@ export function SectionAccordion({ section }: Props) {
                 <div className="space-y-2">
                   {cylinders.length === 0 && (
                     <div className="rounded-lg border border-dashed p-4 text-center text-sm text-muted-foreground">
-                      Sin cilindros. Agregá uno con el botón de abajo para
+                      Sin cilindros. Agrega uno con el botón de abajo para
                       registrar la compresión por cilindro.
                     </div>
                   )}

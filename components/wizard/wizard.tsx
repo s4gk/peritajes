@@ -113,7 +113,7 @@ function validateStep(step: StepId, data: InspectionData): ValidateResult {
       return {
         ok: false,
         message:
-          "Kilometraje sospechoso (> 2.000.000 km). Revisá el dato antes de continuar.",
+          "Kilometraje sospechoso (> 2.000.000 km). Revisa el dato antes de continuar.",
         focusId: "mileage",
       };
     }
@@ -150,7 +150,7 @@ function validateStep(step: StepId, data: InspectionData): ValidateResult {
         return {
           ok: true,
           warning:
-            "El VIN no parece estar completo (deben ser 17 caracteres alfanuméricos sin I/O/Q). Revisalo cuando puedas.",
+            "El VIN no parece estar completo (deben ser 17 caracteres alfanuméricos sin I/O/Q). Revísalo cuando puedas.",
         };
       }
     }
@@ -203,8 +203,8 @@ function validateStep(step: StepId, data: InspectionData): ValidateResult {
         ok: true,
         warning:
           missingPhotos === 1
-            ? "Falta 1 foto en esta etapa. Podés subirla al final."
-            : `Faltan ${missingPhotos} fotos en esta etapa. Podés subirlas al final.`,
+            ? "Falta 1 foto en esta etapa. Puedes subirla al final."
+            : `Faltan ${missingPhotos} fotos en esta etapa. Puedes subirlas al final.`,
       };
     }
     return { ok: true };
@@ -249,8 +249,8 @@ function validateStep(step: StepId, data: InspectionData): ValidateResult {
         ok: true,
         warning:
           missingPhotos === 1
-            ? "Falta 1 foto en líquidos del motor. Podés subirla al final."
-            : `Faltan ${missingPhotos} fotos en líquidos del motor. Podés subirlas al final.`,
+            ? "Falta 1 foto en líquidos del motor. Puedes subirla al final."
+            : `Faltan ${missingPhotos} fotos en líquidos del motor. Puedes subirlas al final.`,
       };
     }
     return { ok: true };
@@ -273,8 +273,8 @@ function validateStep(step: StepId, data: InspectionData): ValidateResult {
         ok: true,
         warning:
           missingPhotos === 1
-            ? "Falta 1 foto en la prueba de ruta. Podés subirla al final."
-            : `Faltan ${missingPhotos} fotos en la prueba de ruta. Podés subirlas al final.`,
+            ? "Falta 1 foto en la prueba de ruta. Puedes subirla al final."
+            : `Faltan ${missingPhotos} fotos en la prueba de ruta. Puedes subirlas al final.`,
       };
     }
     return { ok: true };

@@ -70,7 +70,7 @@ export async function GET(req: Request, ctx: { params: { token: string } }) {
   if (!ipLimit.allowed) {
     return htmlError(
       "Demasiadas solicitudes",
-      `Esperá unos segundos antes de volver a intentar (reintento en ${Math.ceil(ipLimit.retryAfterSec)}s).`,
+      `Espera unos segundos antes de volver a intentar (reintento en ${Math.ceil(ipLimit.retryAfterSec)}s).`,
       429,
     );
   }

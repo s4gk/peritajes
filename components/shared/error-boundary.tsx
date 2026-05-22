@@ -58,7 +58,7 @@ export class ErrorBoundary extends React.Component<Props, State> {
         </h2>
         <p className="mt-1 text-sm text-muted-foreground">
           {this.props.description ??
-            "Ocurrió un error al cargar esta vista. Probá reintentar; si persiste, recargá la página."}
+            "Ocurrió un error al cargar esta vista. Prueba reintentar; si persiste, recarga la página."}
         </p>
         <pre className="mt-3 max-h-32 overflow-auto rounded bg-card p-2 text-left text-[11px] leading-snug text-foreground">
           {message}

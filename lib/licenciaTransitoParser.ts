@@ -232,7 +232,7 @@ function fixPlaca(s: string): string {
   return chars.slice(0, 6).join("");
 }
 
-/** Strippea prefijos típicos del documento ("C.C.", "C C", "NIT") y dejá
+/** Strippea prefijos típicos del documento ("C.C.", "C C", "NIT") y deja
  *  solo los dígitos (con correcciones de OCR). */
 function fixIdentificacion(s: string): string {
   const stripped = s
@@ -954,7 +954,7 @@ export function parseLicenciaTransitoFromOcr(
  * Convierte el `LicenciaTransito` parseado a la forma que consume el formulario
  * de vehículo de la app (claves en inglés, enums en minúsculas, selects con
  * value en castellano con tildes). Campos sin equivalencia en el formulario
- * (regMotor, regSerie, regChasis) se descartan acá; si los necesitás, leelos
+ * (regMotor, regSerie, regChasis) se descartan acá; si los necesitas, léelos
  * directo del `data` del parser.
  *
  * VIN `null` (tarjeta con `******`) se traduce a `undefined` porque el form

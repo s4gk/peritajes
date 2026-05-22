@@ -9,7 +9,7 @@ import type { CylinderEntry, InspectionData, InspectionEntry } from "./types";
  * el perito pueda recorrer el wizard rápido mientras revisa la app.
  *
  * En prod queremos peritajes en blanco. Lo controlamos por env var pública
- * (NEXT_PUBLIC_DEMO_MODE) — en dev local podés ponerla en "true" para que el
+ * (NEXT_PUBLIC_DEMO_MODE) — en dev local puedes ponerla en "true" para que el
  * wizard arranque sembrado y vaya rápido al hacer pruebas.
  */
 const DEMO_MODE = process.env.NEXT_PUBLIC_DEMO_MODE === "true";

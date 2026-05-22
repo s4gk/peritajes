@@ -617,7 +617,7 @@ export function OwnershipCardScanner({
 
   function openScanner() {
     setOpen(true);
-    // Pre-cargá Tesseract en background mientras el perito elige la foto: así
+    // Pre-carga Tesseract en background mientras el perito elige la foto: así
     // cuando dispare el recognize, el wasm y el lang pack ya están listos.
     if (runOcr) warmUpOcr();
   }
@@ -693,7 +693,7 @@ export function OwnershipCardScanner({
         setErrorDetail({
           title: "No detecté datos en la imagen",
           detail:
-            "Probá con una foto más nítida, mejor iluminada o más cerca de la tarjeta. Asegurate que toda la tarjeta esté visible.",
+            "Prueba con una foto más nítida, mejor iluminada o más cerca de la tarjeta. Asegúrate que toda la tarjeta esté visible.",
         });
       }
     } catch (err) {
@@ -889,10 +889,10 @@ export function OwnershipCardScanner({
               <div className="space-y-3">
                 <div className="rounded-md border border-dashed bg-muted/30 p-5 text-center">
                   <ScanLine className="mx-auto mb-2 h-8 w-8 text-muted-foreground" />
-                  <p className="text-sm font-medium">Escaneá la tarjeta</p>
+                  <p className="text-sm font-medium">Escanea la tarjeta</p>
                   <p className="mt-1 text-xs leading-snug text-muted-foreground">
-                    Tomá la foto con el celular en horizontal, buena luz y sin
-                    reflejos. Encuadrá la tarjeta dentro del marco blanco.
+                    Toma la foto con el celular en horizontal, buena luz y sin
+                    reflejos. Encuadra la tarjeta dentro del marco blanco.
                   </p>
                 </div>
                 <Button
@@ -938,7 +938,7 @@ export function OwnershipCardScanner({
                   <div className="flex items-center gap-2 rounded-md border border-warning/40 bg-warning/10 p-2.5 text-xs text-warning">
                     <RotateCw className="h-3.5 w-3.5 shrink-0" />
                     <span>
-                      <strong>Rotá el teléfono en horizontal</strong> — la
+                      <strong>Rota el teléfono en horizontal</strong> — la
                       tarjeta cabe completa y el OCR funciona mejor.
                     </span>
                   </div>
@@ -1075,7 +1075,7 @@ export function OwnershipCardScanner({
                         onApply({}, previewUrl);
                         toast.show({
                           title: "Foto guardada como evidencia",
-                          description: "Completá los datos del vehículo a mano.",
+                          description: "Completa los datos del vehículo a mano.",
                           variant: "success",
                         });
                         close();
@@ -1149,7 +1149,7 @@ export function OwnershipCardScanner({
                       {renderKeys.length === 1 ? "" : "s"}
                     </div>
                     <div className="mt-0.5 normal-case tracking-normal">
-                      Revisá y corregí lo que el OCR haya leído mal antes de aplicar.
+                      Revisa y corrige lo que el OCR haya leído mal antes de aplicar.
                     </div>
                   </div>
                   <ul className="divide-y">

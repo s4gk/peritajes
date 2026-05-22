@@ -354,7 +354,7 @@ export function DashboardClient() {
               <div className="text-sm text-muted-foreground">Cargando...</div>
             ) : shareStats.totalLinks === 0 ? (
               <div className="py-6 text-center text-sm text-muted-foreground">
-                Aún no compartiste ningún peritaje. Generá un link en el resumen.
+                Aún no has compartido ningún peritaje. Genera un link en el resumen.
               </div>
             ) : (
               <div className="space-y-3">

@@ -88,7 +88,7 @@ export async function extractOwnershipCard(opts: {
           worker.terminate().catch(() => {
             /* el worker quedó en un estado raro — lo soltamos */
           });
-          reject(new Error("OCR tardó demasiado. Probá con otra foto."));
+          reject(new Error("OCR tardó demasiado. Prueba con otra foto."));
         }, OCR_TIMEOUT_MS);
       }),
     ]);

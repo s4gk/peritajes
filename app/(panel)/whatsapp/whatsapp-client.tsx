@@ -181,7 +181,7 @@ export function WhatsAppClient() {
             <strong>Mi cuenta</strong> para recibir avisos internos.
           </li>
           <li>
-            Cargá el teléfono del cliente en el peritaje (paso{" "}
+            Carga el teléfono del cliente en el peritaje (paso{" "}
             <em>Vehículo / Propietario</em>) para que reciba el link de firma y
             el PDF.
           </li>

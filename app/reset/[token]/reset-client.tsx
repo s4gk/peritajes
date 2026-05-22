@@ -45,7 +45,7 @@ export function ResetClient({ token, fullName, username }: Props) {
       }
       setDone(true);
     } catch {
-      setError("Error de red. Volvé a intentarlo.");
+      setError("Error de red. Vuelve a intentarlo.");
     } finally {
       setBusy(false);
     }
@@ -83,7 +83,7 @@ export function ResetClient({ token, fullName, username }: Props) {
           <h1 className="text-lg font-semibold">Restablecer contraseña</h1>
           <p className="mt-1 text-sm text-muted-foreground">
             Hola <span className="font-medium text-foreground">{fullName}</span> (
-            <span className="font-mono">@{username}</span>). Elegí una nueva
+            <span className="font-mono">@{username}</span>). Elige una nueva
             contraseña para tu cuenta.
           </p>
         </div>

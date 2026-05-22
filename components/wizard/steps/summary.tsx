@@ -126,7 +126,7 @@ export function SummaryStep() {
       toast.show({
         title: "Sin conexión",
         description:
-          err instanceof Error ? err.message : "Reintentá en unos segundos.",
+          err instanceof Error ? err.message : "Reintenta en unos segundos.",
         variant: "warning",
       });
     } finally {
@@ -183,7 +183,7 @@ export function SummaryStep() {
     if (!data.conclusion.inspectorSignature) {
       toast.show({
         title: "Falta tu firma de perito",
-        description: "Cargala una vez en Mi cuenta → Firma del perito y volvé.",
+        description: "Cárgala una vez en Mi cuenta → Firma del perito y vuelve.",
         variant: "warning",
       });
       return;
@@ -191,7 +191,7 @@ export function SummaryStep() {
     if (!data.conclusion.clientSignature) {
       toast.show({
         title: "Falta la firma del cliente",
-        description: "Capturá la firma del cliente (QR o en pantalla) antes de cerrar el peritaje.",
+        description: "Captura la firma del cliente (QR o en pantalla) antes de cerrar el peritaje.",
         variant: "warning",
       });
       return;
@@ -218,7 +218,7 @@ export function SummaryStep() {
     }));
     toast.show({
       title: "Peritaje finalizado",
-      description: "Quedó cerrado en solo lectura. Podés descargar el PDF cuando quieras.",
+      description: "Quedó cerrado en solo lectura. Puedes descargar el PDF cuando quieras.",
       variant: "success",
     });
     if (typeof window !== "undefined") window.scrollTo({ top: 0, behavior: "smooth" });
@@ -247,7 +247,7 @@ export function SummaryStep() {
               <div className="font-semibold">PDF aún no disponible</div>
               <div className="text-xs text-warning/90">
                 El peritaje quedó cerrado, pero el render del PDF falló. El
-                cliente lo recibirá apenas se regenere — podés reintentar
+                cliente lo recibirá apenas se regenere — puedes reintentar
                 ahora.
                 {pdfPending.error ? (
                   <span className="mt-1 block font-mono text-[10px] opacity-70">
@@ -485,7 +485,7 @@ export function SummaryStep() {
                   />
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  Cargada desde tu perfil. Para cambiarla, andá a{" "}
+                  Cargada desde tu perfil. Para cambiarla, ve a{" "}
                   <a href="/cuenta" className="underline underline-offset-2">
                     Mi cuenta → Firma del perito
                   </a>
@@ -497,7 +497,7 @@ export function SummaryStep() {
                 <div className="flex items-start gap-2 text-warning">
                   <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
                   <div>
-                    <div className="font-semibold">No tenés firma cargada</div>
+                    <div className="font-semibold">No tienes firma cargada</div>
                     <div className="text-xs text-warning/90">
                       Subila o dibujala una vez en tu perfil y se va a usar en
                       todos tus peritajes.
@@ -788,7 +788,7 @@ function ShareCard({
           <CardTitle>Compartir con cliente</CardTitle>
         </div>
         <CardDescription>
-          Generá un enlace público que abre el PDF del peritaje. El cliente no necesita iniciar sesión.
+          Genera un enlace público que abre el PDF del peritaje. El cliente no necesita iniciar sesión.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">

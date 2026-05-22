@@ -47,7 +47,7 @@ export async function POST(
   const ipLimit = rateLimitTake(`reset:ip:${ip}`, LIMIT_PER_IP);
   if (!ipLimit.allowed) {
     return NextResponse.json(
-      { error: "Demasiados intentos. Esperá un minuto." },
+      { error: "Demasiados intentos. Espera un minuto." },
       { status: 429 },
     );
   }

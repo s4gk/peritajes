@@ -94,7 +94,7 @@ export function CuentaClient({ user }: { user: Profile }) {
     if (!file.type.startsWith("image/")) {
       toast.show({
         title: "Archivo inválido",
-        description: "Subí una imagen (PNG o JPG).",
+        description: "Sube una imagen (PNG o JPG).",
         variant: "warning",
       });
       return;
@@ -344,7 +344,7 @@ export function CuentaClient({ user }: { user: Profile }) {
             hint={
               user.licenseId
                 ? `Identificación profesional: ${user.licenseId}`
-                : "Dibujala con el dedo o subí una imagen escaneada."
+                : "Dibújala con el dedo o sube una imagen escaneada."
             }
             value={signature}
             onChange={setSignature}
