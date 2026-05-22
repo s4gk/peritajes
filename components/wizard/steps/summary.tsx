@@ -10,6 +10,7 @@ import {
   Info,
   Link2,
   Lock,
+  PenLine,
   RefreshCw,
   Share2,
   Trash2,
@@ -35,7 +36,6 @@ import {
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { ClientSignatureCapture } from "@/components/shared/client-signature-capture";
-import { SignaturePad } from "@/components/shared/signature-pad";
 import { VoiceDictationButton } from "@/components/shared/voice-dictation-button";
 import { useCurrentUser } from "@/components/panel/current-user";
 import { useToast } from "@/components/ui/toast";
@@ -71,28 +71,85 @@ export function SummaryStep() {
   const tone = riskTone(report.level);
   const toast = useToast();
   const [generating, setGenerating] = React.useState(false);
+  // PDF "pendiente" significa que la finalización corrió OK pero el server no
+  // pudo terminar de renderizar/persistir el PDF inline (Puppeteer o Gemini
+  // fallaron). Lo seteamos cuando el sync-queue recibe pdfStatus="pending" en
+  // la respuesta del PUT, y se limpia tras un download exitoso (que también
+  // dispara un nuevo intento de render del lado del server).
+  const [pdfPending, setPdfPending] = React.useState<{
+    error: string | null;
+  } | null>(null);
+  const [retryingPdf, setRetryingPdf] = React.useState(false);
+
+  React.useEffect(() => {
+    if (typeof window === "undefined") return;
+    function onPdfPending(e: Event) {
+      const ev = e as CustomEvent<{ inspectionId: string; error: string | null }>;
+      if (ev.detail.inspectionId !== inspectionId) return;
+      setPdfPending({ error: ev.detail.error });
+    }
+    window.addEventListener("perito:pdf-pending", onPdfPending);
+    return () => window.removeEventListener("perito:pdf-pending", onPdfPending);
+  }, [inspectionId]);
+
+  async function retryServerPdf() {
+    setRetryingPdf(true);
+    try {
+      // GET /api/inspections/[id]/pdf reintenta ensureCompletedPdf si el
+      // archivo no existe todavía. Si esto resuelve con 200, el render
+      // funcionó y limpiamos el banner.
+      const res = await apiFetch(
+        `/api/inspections/${encodeURIComponent(inspectionId)}/pdf`,
+        { credentials: "same-origin" },
+      );
+      if (res.ok) {
+        // No descargamos el PDF — solo nos importa que se haya generado.
+        // Bot drena el body para que el browser no mantenga el stream abierto.
+        await res.blob();
+        setPdfPending(null);
+        toast.show({
+          title: "PDF generado",
+          description: "Ya quedó listo para enviar.",
+          variant: "success",
+        });
+      } else {
+        const body = await res.json().catch(() => null);
+        toast.show({
+          title: "No se pudo generar el PDF todavía",
+          description:
+            (body as { error?: string } | null)?.error ??
+            `${res.status} ${res.statusText}`,
+          variant: "warning",
+        });
+      }
+    } catch (err) {
+      toast.show({
+        title: "Sin conexión",
+        description:
+          err instanceof Error ? err.message : "Reintentá en unos segundos.",
+        variant: "warning",
+      });
+    } finally {
+      setRetryingPdf(false);
+    }
+  }
 
   function updateConclusion(patch: Partial<typeof data.conclusion>) {
     setData((prev) => ({ ...prev, conclusion: { ...prev.conclusion, ...patch } }));
   }
 
-  // Si el peritaje no tiene firma del perito pero el usuario sí guardó una en
-  // perfil, la inyectamos como default. Se hace una sola vez por peritaje —
-  // si después el perito la borra explícitamente, no la volvemos a meter.
-  const seededSignatureRef = React.useRef(false);
+  // Sincronizamos la firma del perfil hacia el peritaje mientras esté en
+  // borrador. Si el perito actualiza su firma en /cuenta, la nueva versión se
+  // aplica al peritaje en curso. Una vez finalizado, el peritaje queda
+  // congelado con la firma que tenía al cerrar (data inmutable).
   React.useEffect(() => {
-    if (seededSignatureRef.current) return;
     if (data.status === "completed") return;
-    if (data.conclusion.inspectorSignature) {
-      seededSignatureRef.current = true;
-      return;
-    }
     const fromProfile = currentUser?.signatureDataUrl;
     if (!fromProfile) return;
-    seededSignatureRef.current = true;
+    if (data.conclusion.inspectorSignature === fromProfile) return;
     updateConclusion({ inspectorSignature: fromProfile });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentUser?.signatureDataUrl, data.status]);
+  }, [currentUser?.signatureDataUrl, data.status, data.conclusion.inspectorSignature]);
 
   async function generatePdf(mode: "executive" | "detailed") {
     setGenerating(true);
@@ -125,8 +182,8 @@ export function SummaryStep() {
     }
     if (!data.conclusion.inspectorSignature) {
       toast.show({
-        title: "Falta tu firma",
-        description: "El perito responsable debe firmar antes de cerrar el peritaje.",
+        title: "Falta tu firma de perito",
+        description: "Cargala una vez en Mi cuenta → Firma del perito y volvé.",
         variant: "warning",
       });
       return;
@@ -150,7 +207,7 @@ export function SummaryStep() {
       return;
     }
     if (typeof window !== "undefined" && !window.confirm(
-      "¿Finalizar el peritaje? Quedará bloqueado en modo solo lectura. Podrás reabrirlo si necesitás corregir algo.",
+      "¿Finalizar el peritaje? Quedará bloqueado en modo solo lectura. Podrás reabrirlo si necesitas corregir algo.",
     )) {
       return;
     }
@@ -179,6 +236,40 @@ export function SummaryStep() {
           <code className="rounded border bg-background px-2 py-1 font-mono text-sm font-semibold tracking-wide">
             {reportNumber}
           </code>
+        </div>
+      )}
+
+      {pdfPending && (
+        <div className="flex flex-col gap-2 rounded-lg border border-warning/40 bg-warning/10 px-4 py-3 text-sm sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex items-start gap-2 text-warning">
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+            <div>
+              <div className="font-semibold">PDF aún no disponible</div>
+              <div className="text-xs text-warning/90">
+                El peritaje quedó cerrado, pero el render del PDF falló. El
+                cliente lo recibirá apenas se regenere — podés reintentar
+                ahora.
+                {pdfPending.error ? (
+                  <span className="mt-1 block font-mono text-[10px] opacity-70">
+                    {pdfPending.error}
+                  </span>
+                ) : null}
+              </div>
+            </div>
+          </div>
+          <Button
+            type="button"
+            size="sm"
+            variant="secondary"
+            onClick={retryServerPdf}
+            disabled={retryingPdf}
+            className="self-start sm:self-auto"
+          >
+            <RefreshCw
+              className={`mr-1.5 h-3.5 w-3.5 ${retryingPdf ? "animate-spin" : ""}`}
+            />
+            {retryingPdf ? "Reintentando…" : "Reintentar"}
+          </Button>
         </div>
       )}
 
@@ -372,21 +463,53 @@ export function SummaryStep() {
         <CardHeader>
           <CardTitle>Firmas</CardTitle>
           <CardDescription>
-            Las dos firmas son obligatorias para finalizar el peritaje y reemplazan
-            cualquier firma genérica en el PDF.
+            La firma del perito se toma automáticamente de tu perfil. El cliente
+            firma desde esta pantalla o escanea el QR para firmar en su celular.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
-          <SignaturePad
-            label={data.vehicle.inspector ? `Firma de ${data.vehicle.inspector}` : "Firma del perito"}
-            hint={
-              data.vehicle.inspectorId
-                ? `Identificación profesional: ${data.vehicle.inspectorId}`
-                : "Firmá con el dedo o el lápiz óptico en el cuadro."
-            }
-            value={data.conclusion.inspectorSignature}
-            onChange={(signature) => updateConclusion({ inspectorSignature: signature })}
-          />
+          <div className="space-y-2">
+            <div className="flex items-center gap-1.5 text-sm font-medium">
+              <PenLine className="h-4 w-4 text-muted-foreground" />
+              {data.vehicle.inspector
+                ? `Firma de ${data.vehicle.inspector}`
+                : "Firma del perito"}
+            </div>
+            {data.conclusion.inspectorSignature ? (
+              <div className="space-y-1.5">
+                <div className="flex aspect-[3/1] w-full items-center justify-center overflow-hidden rounded-lg border bg-white">
+                  <img
+                    src={data.conclusion.inspectorSignature}
+                    alt="Firma del perito"
+                    className="max-h-full max-w-full object-contain"
+                  />
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Cargada desde tu perfil. Para cambiarla, andá a{" "}
+                  <a href="/cuenta" className="underline underline-offset-2">
+                    Mi cuenta → Firma del perito
+                  </a>
+                  .
+                </p>
+              </div>
+            ) : (
+              <div className="flex flex-col gap-2 rounded-lg border border-warning/40 bg-warning/10 p-3 text-sm sm:flex-row sm:items-center sm:justify-between">
+                <div className="flex items-start gap-2 text-warning">
+                  <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                  <div>
+                    <div className="font-semibold">No tenés firma cargada</div>
+                    <div className="text-xs text-warning/90">
+                      Subila o dibujala una vez en tu perfil y se va a usar en
+                      todos tus peritajes.
+                    </div>
+                  </div>
+                </div>
+                <Button asChild type="button" size="sm" variant="secondary">
+                  <a href="/cuenta">Configurar firma</a>
+                </Button>
+              </div>
+            )}
+          </div>
           <ClientSignatureCapture
             label={data.vehicle.owner ? `Firma de ${data.vehicle.owner}` : "Firma del cliente"}
             hint={

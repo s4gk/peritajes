@@ -2,18 +2,15 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 
 import { InspectionDataSchema } from "@/lib/inspection-schema";
-import { requireAdmin, requireUser } from "@/lib/server/auth";
-import { query } from "@/lib/server/db";
+import { requireUser } from "@/lib/server/auth";
 import {
-  deleteInspectionServer,
+  deleteInspectionForUser,
+  ensureCompletedPdf,
   getInspectionForUser,
   updateInspectionForUser,
 } from "@/lib/server/inspections";
-import { renderInspectionPdf } from "@/lib/server/pdf-render";
-import {
-  createShareToken,
-  getActiveShareTokenForInspection,
-} from "@/lib/server/share-tokens";
+import { readPdf } from "@/lib/server/pdf-storage";
+import { buildPublicBaseUrl } from "@/lib/server/qr";
 import {
   notifyClientFinalPdf,
   notifyTeamSignatureCompleted,
@@ -68,13 +65,25 @@ export async function PUT(
   let raw: unknown;
   try {
     raw = await req.json();
-  } catch {
-    return NextResponse.json({ error: "JSON inválido" }, { status: 400 });
+  } catch (err) {
+    return NextResponse.json(
+      {
+        error: "JSON inválido",
+        detail: err instanceof Error ? err.message.slice(0, 200) : "unknown",
+      },
+      { status: 400 },
+    );
   }
   const parsed = InspectionPutSchema.safeParse(raw);
   if (!parsed.success) {
+    const firstIssue = parsed.error.issues[0];
     return NextResponse.json(
-      { error: "Falta el campo 'data'" },
+      {
+        error: "Falta el campo 'data'",
+        detail: firstIssue
+          ? `${firstIssue.path.join(".") || "(root)"}: ${firstIssue.message}`
+          : undefined,
+      },
       { status: 400 },
     );
   }
@@ -85,43 +94,68 @@ export async function PUT(
       { status: 413 },
     );
   }
-  // Snapshot del estado previo para detectar la transición a "completed".
-  // Necesario para que la notificación WhatsApp dispare solo la primera vez —
-  // sin esto, cada autosave de un peritaje ya completado mandaría el PDF de
-  // nuevo al cliente.
-  let previousStatus: string | null = null;
-  try {
-    const prev = await query<{ status: string }>(
-      "SELECT status FROM inspections WHERE id = $1",
-      [params.id],
-    );
-    previousStatus = prev.rows[0]?.status ?? null;
-  } catch {
-    /* si falla la query, igual seguimos: la notificación se salta */
-  }
-
   const result = await updateInspectionForUser(
     params.id,
     parsed.data.data as unknown as InspectionData,
     user,
   );
-  if (result.forbidden) {
+  if (result.kind === "forbidden") {
     return NextResponse.json({ error: "Sin permisos" }, { status: 403 });
   }
-  if (!result.inspection) {
+  if (result.kind === "not_found") {
     return NextResponse.json({ error: "No encontrado" }, { status: 404 });
   }
+  if (result.kind === "locked") {
+    // 423 Locked: el peritaje ya fue finalizado y es inmutable. Devolvemos la
+    // versión canónica para que el cliente reemplace su copia local y muestre
+    // el modo solo-lectura sin perder los datos.
+    return NextResponse.json(
+      {
+        error: "Peritaje finalizado e inmutable.",
+        inspection: result.inspection,
+      },
+      { status: 423 },
+    );
+  }
 
-  // Fire-and-forget: si el peritaje pasó de no-completed a completed con
-  // firma del cliente presente, mandamos avisos por WhatsApp. Lo hacemos
-  // fuera del ciclo de respuesta para no bloquear al wizard.
-  const inspection = result.inspection;
-  const justCompleted =
-    previousStatus !== "completed" &&
-    inspection.data.status === "completed" &&
-    Boolean(inspection.data.conclusion?.clientSignature);
-  if (justCompleted) {
-    void sendCompletionNotifications(inspection, user.id, req).catch((err) => {
+  // result.kind === "ok"
+  let inspection = result.inspection;
+  // Default: el PDF está OK (no aplica si no acabamos de cerrar). Si el render
+  // inline falla pasamos a "pending" — el cliente lo muestra como banner y
+  // el GET /api/inspections/[id]/pdf intentará re-renderizar bajo demanda.
+  let pdfStatus: "ok" | "not_applicable" | "pending" = result.justLocked
+    ? "ok"
+    : "not_applicable";
+  let pdfError: string | null = null;
+
+  // Si el peritaje acaba de quedar locked, renderizamos y persistimos el PDF
+  // antes de devolver la respuesta. Así el archivo entregable existe en disco
+  // desde el momento en que el wizard cree que finalizó. Si el render falla
+  // (Puppeteer/Gemini), el lock ya está en DB — el PDF se intenta de nuevo
+  // bajo demanda desde GET /api/inspections/[id]/pdf.
+  if (result.justLocked) {
+    try {
+      inspection = await ensureCompletedPdf({
+        inspectionId: inspection.id,
+        user,
+        baseUrl: buildPublicBaseUrl(req) || new URL(req.url).origin,
+      });
+    } catch (err) {
+      pdfStatus = "pending";
+      pdfError = (err as Error).message;
+      console.error("[inspections] ensureCompletedPdf failed:", pdfError);
+    }
+  }
+
+  // Fire-and-forget: si el peritaje acaba de quedar locked y hay firma del
+  // cliente, mandamos avisos por WhatsApp. No bloquea la respuesta. Si el
+  // PDF quedó pendiente, `sendCompletionNotifications` intentará renderizarlo
+  // de nuevo antes de adjuntarlo.
+  if (
+    result.justLocked &&
+    Boolean(inspection.data.conclusion?.clientSignature)
+  ) {
+    void sendCompletionNotifications(inspection, user, req).catch((err) => {
       console.error(
         "[inspections] post-firma notifications failed:",
         (err as Error).message,
@@ -129,24 +163,27 @@ export async function PUT(
     });
   }
 
-  return NextResponse.json({ inspection: result.inspection });
+  return NextResponse.json({
+    inspection,
+    pdfStatus,
+    ...(pdfError ? { pdfError } : {}),
+  });
 }
 
 /**
- * Renderiza el PDF del peritaje y dispara las notificaciones de WhatsApp
- * (equipo + PDF al cliente). Corre fuera del ciclo de respuesta para no
- * bloquear al wizard. Cualquier error se logguea y se traga — la firma del
- * cliente ya quedó persistida y eso es lo importante.
+ * Dispara las notificaciones de WhatsApp post-finalización (aviso al equipo +
+ * PDF al cliente). Asume que el PDF ya está persistido en disco — si no, se
+ * intenta una recuperación lazy. Corre fuera del ciclo de respuesta principal
+ * para no bloquear al wizard; cualquier error se logguea sin afectar el lock.
  */
 async function sendCompletionNotifications(
   inspection: StoredInspection,
-  userId: string,
+  user: { id: string; role: string },
   req: Request,
 ): Promise<void> {
   const data = inspection.data;
   const vehicle = data.vehicle;
 
-  // Aviso al equipo (texto liviano — no espera el render del PDF).
   await notifyTeamSignatureCompleted({
     inspectionId: inspection.id,
     plate: vehicle?.plate ?? "",
@@ -155,41 +192,43 @@ async function sendCompletionNotifications(
     console.error("[wa] team-signed failed:", (err as Error).message);
   });
 
-  // PDF al cliente: solo si tenemos teléfono. Si no, igual el peritaje queda
-  // disponible para descargar manualmente desde el panel.
   if (!vehicle?.ownerPhone?.trim()) return;
 
-  // Reutilizamos un share token activo o creamos uno nuevo para que el QR
-  // del PDF apunte a la versión pública verificable. Si esto falla, el PDF
-  // sale sin QR — preferimos eso a no mandar nada.
-  let verificationUrl: string | null = null;
-  try {
-    let token = await getActiveShareTokenForInspection(inspection.id);
-    if (!token) {
-      token = await createShareToken({
+  // Intentamos leer el PDF; si no existe (el render inline falló en el PUT),
+  // forzamos un nuevo intento aquí. Esto evita que un fallo transitorio de
+  // Puppeteer deje al cliente sin su PDF: la notificación corre fuera del
+  // ciclo de respuesta, así que reintentar es barato.
+  let pdfBuffer = await readPdf(inspection.id);
+  if (!pdfBuffer) {
+    try {
+      await ensureCompletedPdf({
         inspectionId: inspection.id,
-        createdBy: userId,
+        user,
+        baseUrl: buildPublicBaseUrl(req) || new URL(req.url).origin,
       });
+      pdfBuffer = await readPdf(inspection.id);
+    } catch (err) {
+      console.error(
+        "[wa] client-pdf: render retry falló para",
+        inspection.id,
+        (err as Error).message,
+      );
     }
-    const base = process.env.APP_PUBLIC_URL?.trim().replace(/\/$/, "")
-      || new URL(req.url).origin;
-    verificationUrl = `${base}/r/${token.token}`;
-  } catch {
-    verificationUrl = null;
   }
-
-  const { buffer } = await renderInspectionPdf({
-    data,
-    verificationUrl,
-    reportNumber: inspection.reportNumber ?? null,
-  });
+  if (!pdfBuffer) {
+    console.error(
+      "[wa] client-pdf: PDF stored no encontrado para",
+      inspection.id,
+    );
+    return;
+  }
 
   notifyClientFinalPdf({
     clientPhone: vehicle.ownerPhone,
     ownerName: vehicle.owner ?? "",
     plate: vehicle.plate ?? "",
     reportNumber: inspection.reportNumber ?? null,
-    pdfBuffer: buffer,
+    pdfBuffer,
   });
 }
 
@@ -199,13 +238,25 @@ export async function DELETE(
 ) {
   let user;
   try {
-    user = await requireAdmin();
+    user = await requireUser();
   } catch (e) {
     return unauth(e);
   }
-  const ok = await deleteInspectionServer(params.id, user.id);
-  if (!ok) {
+  const result = await deleteInspectionForUser(params.id, user);
+  if (result.kind === "not_found") {
     return NextResponse.json({ error: "No encontrado" }, { status: 404 });
+  }
+  if (result.kind === "forbidden") {
+    return NextResponse.json({ error: "Sin permisos" }, { status: 403 });
+  }
+  if (result.kind === "locked") {
+    return NextResponse.json(
+      {
+        error:
+          "El peritaje está finalizado y no puede ser eliminado. Solicítalo a un administrador.",
+      },
+      { status: 423 },
+    );
   }
   return NextResponse.json({ ok: true });
 }
