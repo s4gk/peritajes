@@ -25,6 +25,9 @@ export type PendingMutation = {
   /** Reintentos. Útil para diagnóstico cuando el server rechaza repetidamente. */
   attempts: number;
   lastError?: string;
+  /** ISO del último intento. Sirve para espaciar reintentos de mutations que
+   *  ya superaron MAX_ATTEMPTS sin sacarlas de la cola (ver sync-queue). */
+  lastAttemptAt?: string;
 };
 
 interface PeritoDB extends DBSchema {

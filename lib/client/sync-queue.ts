@@ -33,17 +33,42 @@ export function setSyncedInspectionHandler(
  */
 
 const RETRY_INTERVAL_MS = 30_000;
+// Soft cap: pasado este número de intentos consideramos la mutación "fallida"
+// para efectos de UI (badge rojo + advertencia en el SaveIndicator). NO la
+// borramos de la queue — la app sigue reintentando, pero a un intervalo más
+// espaciado (FAILED_RETRY_INTERVAL_MS) para no quemar CPU/red ni spamear
+// errores en logs. Si eventualmente el server vuelve a aceptar (p.ej. caída
+// transitoria de DB), la mutación pasa y todo vuelve a verde solo.
 const MAX_ATTEMPTS = 12;
+const FAILED_RETRY_INTERVAL_MS = 5 * 60_000;
 
 let running = false;
 let listeners: Array<(state: SyncState) => void> = [];
 let retryTimer: ReturnType<typeof setInterval> | null = null;
-let lastState: SyncState = { pending: 0, online: true, syncing: false };
+let lastState: SyncState = {
+  pending: 0,
+  online: true,
+  syncing: false,
+  failed: 0,
+  lastErrorMessage: null,
+  oldestPendingAt: null,
+};
 
 export type SyncState = {
+  /** Cantidad total de mutations en cola (incluye las marcadas como failed). */
   pending: number;
+  /** Estado de conectividad reportado por el browser. */
   online: boolean;
+  /** True mientras una corrida de flush está activa. */
   syncing: boolean;
+  /** Cuántas mutations excedieron MAX_ATTEMPTS — disparan el badge rojo. */
+  failed: number;
+  /** Último mensaje de error que devolvió el server. null si nada falló o si
+   *  el último intento fue exitoso. */
+  lastErrorMessage: string | null;
+  /** ISO timestamp de la mutation más vieja pendiente. Permite mostrar
+   *  "pendiente desde hace 5min" en la UI. */
+  oldestPendingAt: string | null;
 };
 
 function notify(partial: Partial<SyncState>) {
@@ -63,11 +88,25 @@ export function getSyncState(): SyncState {
   return lastState;
 }
 
-/** Empuja la cuenta actual de mutations al estado público. */
+/** Empuja la cuenta actual de mutations al estado público, incluyendo
+ *  desglose de fallidas y el timestamp más viejo en cola. */
 export async function refreshPending(): Promise<void> {
   try {
-    const pending = await idbCountMutations();
-    notify({ pending });
+    const list = await idbListMutations();
+    let failed = 0;
+    let oldest: string | null = null;
+    let lastErr: string | null = null;
+    for (const m of list) {
+      if (m.attempts >= MAX_ATTEMPTS) failed += 1;
+      if (!oldest || m.enqueuedAt < oldest) oldest = m.enqueuedAt;
+      if (m.lastError) lastErr = m.lastError;
+    }
+    notify({
+      pending: list.length,
+      failed,
+      oldestPendingAt: oldest,
+      lastErrorMessage: failed > 0 ? lastErr : lastState.lastErrorMessage,
+    });
   } catch {
     /* noop */
   }
@@ -121,6 +160,40 @@ async function applyMutation(m: PendingMutation): Promise<{ ok: boolean; error?:
         // parseo falla seguimos — el dato eventualmente se hidrata desde el
         // GET de boot.
         try {
+          const json = (await res.json()) as {
+            inspection?: StoredInspection;
+            pdfStatus?: "ok" | "not_applicable" | "pending";
+            pdfError?: string;
+          };
+          if (json.inspection && syncedHandler) syncedHandler(json.inspection);
+          // Si el PDF quedó pendiente (Puppeteer/Gemini falló inline),
+          // disparamos un evento para que la UI muestre un banner con la
+          // opción de reintentar la descarga, en lugar de creer que todo
+          // quedó bien.
+          if (
+            json.pdfStatus === "pending" &&
+            typeof window !== "undefined" &&
+            json.inspection?.id
+          ) {
+            window.dispatchEvent(
+              new CustomEvent("perito:pdf-pending", {
+                detail: {
+                  inspectionId: json.inspection.id,
+                  error: json.pdfError ?? null,
+                },
+              }),
+            );
+          }
+        } catch {
+          /* ignore */
+        }
+        return { ok: true };
+      }
+      // 423 Locked: el peritaje ya quedó finalizado en server. Descartamos la
+      // mutación (no tiene sentido reintentar) y aplicamos la versión canónica
+      // del server al cache para que el wizard se reabra en modo solo-lectura.
+      if (res.status === 423) {
+        try {
           const json = (await res.json()) as { inspection?: StoredInspection };
           if (json.inspection && syncedHandler) syncedHandler(json.inspection);
         } catch {
@@ -165,27 +238,41 @@ export async function flushSyncQueue(): Promise<void> {
     let mutations = await idbListMutations();
     // Procesamos en orden de id (FIFO).
     mutations.sort((a, b) => (a.id ?? 0) - (b.id ?? 0));
+    // Soft-skip: si una mutation ya pasó MAX_ATTEMPTS y la última lectura
+    // ocurrió hace menos de FAILED_RETRY_INTERVAL_MS, la dejamos para más
+    // tarde. Así no quemamos el server reintentando cada 30s una mutation
+    // que falla siempre, pero igual le damos una chance periódica de pasar
+    // si la falla fue transitoria.
+    const now = Date.now();
     for (const m of mutations) {
+      if (m.attempts >= MAX_ATTEMPTS) {
+        const lastAttempt = m.lastAttemptAt
+          ? new Date(m.lastAttemptAt).getTime()
+          : 0;
+        if (now - lastAttempt < FAILED_RETRY_INTERVAL_MS) continue;
+      }
       const result = await applyMutation(m);
       if (result.ok) {
         if (m.id !== undefined) await idbRemoveMutation(m.id);
-        await refreshPending();
+        // Limpiamos el último error cuando una mutation pasa — la UI vuelve a
+        // verde si no queda nada en estado failed.
+        notify({ lastErrorMessage: null });
       } else {
         const next: PendingMutation = {
           ...m,
           attempts: m.attempts + 1,
           lastError: result.error,
+          lastAttemptAt: new Date().toISOString(),
         };
-        if (next.attempts >= MAX_ATTEMPTS) {
-          // Damos hasta MAX_ATTEMPTS reintentos. Pasado eso lo dejamos en cola
-          // pero el badge va a quedar amarillo — un humano tiene que mirar.
-        }
         await idbUpdateMutation(next);
         // No spammeamos al server: si una falla, paramos esta corrida y
-        // esperamos al próximo trigger (online/intervalo).
-        break;
+        // esperamos al próximo trigger (online/intervalo). El estado público
+        // se actualiza con la cuenta de failed después del refresh de abajo.
+        await refreshPending();
+        return;
       }
     }
+    await refreshPending();
   } finally {
     running = false;
     notify({ syncing: false });
