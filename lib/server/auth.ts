@@ -32,6 +32,15 @@ export type User = {
    *  firma completada). Formato libre — se normaliza al enviar. */
   waPhone: string | null;
   role: UserRole;
+  /** Organización (tenant) a la que pertenece el usuario.
+   *  - admin       → null
+   *  - owner       → org propia (es `owner_user_id` de esa org)
+   *  - employee    → org del owner que lo dio de alta */
+  orgId: string | null;
+  /** Quién creó este usuario (típicamente el owner que dio de alta a un
+   *  employee). Informativo, audit-friendly — la autorización NO depende de
+   *  este campo, sino de `orgId` + `role`. */
+  parentUserId: string | null;
   active: boolean;
   createdAt: string;
   lastLoginAt: string | null;
@@ -47,6 +56,8 @@ type UserRow = {
   signature_data_url: string | null;
   wa_phone: string | null;
   role: string;
+  org_id: string | null;
+  parent_user_id: string | null;
   active: boolean;
   created_at: Date | string;
   last_login_at: Date | string | null;
@@ -67,6 +78,8 @@ function rowToUser(row: UserRow): User {
     signatureDataUrl: row.signature_data_url ?? null,
     waPhone: row.wa_phone ?? null,
     role: row.role === "admin" ? "admin" : "owner",
+    orgId: row.org_id ?? null,
+    parentUserId: row.parent_user_id ?? null,
     active: row.active,
     createdAt: tsToISO(row.created_at) ?? "",
     lastLoginAt: tsToISO(row.last_login_at),

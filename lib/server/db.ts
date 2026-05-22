@@ -75,6 +75,22 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS wa_phone TEXT;
 UPDATE users SET role = 'owner' WHERE role = 'perito';
 ALTER TABLE users ALTER COLUMN role SET DEFAULT 'owner';
 
+-- 2026-05: multi-tenancy. organizations representa al "cliente" de Vestel:
+--   admin (Vestel)  → no pertenece a ninguna org (org_id NULL)
+--   owner           → dueño del negocio, owner_user_id de SU org
+--   employee        → perito asalariado, miembro de la org del owner
+-- El parent_user_id en users es informativo (audit: quién creó al empleado).
+CREATE TABLE IF NOT EXISTS organizations (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  owner_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+ALTER TABLE users ADD COLUMN IF NOT EXISTS org_id TEXT REFERENCES organizations(id) ON DELETE SET NULL;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS parent_user_id TEXT REFERENCES users(id) ON DELETE SET NULL;
+CREATE INDEX IF NOT EXISTS idx_users_org ON users(org_id);
+
 CREATE TABLE IF NOT EXISTS sessions (
   id TEXT PRIMARY KEY,
   user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -106,6 +122,8 @@ CREATE TABLE IF NOT EXISTS audit_log (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_log(created_at DESC);
+ALTER TABLE audit_log ADD COLUMN IF NOT EXISTS org_id TEXT REFERENCES organizations(id) ON DELETE SET NULL;
+CREATE INDEX IF NOT EXISTS idx_audit_org ON audit_log(org_id);
 
 CREATE TABLE IF NOT EXISTS inspections (
   id TEXT PRIMARY KEY,
@@ -121,9 +139,11 @@ ALTER TABLE inspections ADD COLUMN IF NOT EXISTS locked_at TIMESTAMPTZ;
 ALTER TABLE inspections ADD COLUMN IF NOT EXISTS pdf_path TEXT;
 ALTER TABLE inspections ADD COLUMN IF NOT EXISTS pdf_sha256 TEXT;
 ALTER TABLE inspections ADD COLUMN IF NOT EXISTS pdf_size INTEGER;
+ALTER TABLE inspections ADD COLUMN IF NOT EXISTS org_id TEXT REFERENCES organizations(id) ON DELETE SET NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_inspections_report_number ON inspections(report_number) WHERE report_number IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_inspections_updated ON inspections(updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_inspections_user ON inspections(user_id);
+CREATE INDEX IF NOT EXISTS idx_inspections_org ON inspections(org_id);
 CREATE INDEX IF NOT EXISTS idx_inspections_plate ON inspections(plate) WHERE plate IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS report_counters (
@@ -153,6 +173,8 @@ CREATE INDEX IF NOT EXISTS idx_appointments_scheduled ON appointments(scheduled_
 CREATE INDEX IF NOT EXISTS idx_appointments_assigned ON appointments(assigned_user_id);
 CREATE INDEX IF NOT EXISTS idx_appointments_status ON appointments(status);
 ALTER TABLE appointments ADD COLUMN IF NOT EXISTS reminders_sent JSONB NOT NULL DEFAULT '{}'::jsonb;
+ALTER TABLE appointments ADD COLUMN IF NOT EXISTS org_id TEXT REFERENCES organizations(id) ON DELETE SET NULL;
+CREATE INDEX IF NOT EXISTS idx_appointments_org ON appointments(org_id);
 
 CREATE TABLE IF NOT EXISTS verifik_cache (
   service TEXT NOT NULL,
@@ -232,9 +254,68 @@ async function ensureMigrated(): Promise<void> {
         "Colombia",
       ],
     );
+    await backfillOrganizations();
     globalScope.__peritoMigrationsApplied = true;
   })();
   await globalScope.__peritoMigrationsPromise;
+}
+
+/**
+ * Backfill one-shot del modelo multi-tenant para deployments preexistentes:
+ * detecta usuarios non-admin sin org_id y crea una org "default" con su
+ * nombre tomado de `company_config.name`. Asigna a la org todos los datos
+ * huérfanos (inspections, appointments, audit_log).
+ *
+ * Es idempotente: si no hay nada por backfillear (instalación nueva o ya
+ * migrada), no hace nada. Si hay múltiples owners sin org_id (no debería
+ * pasar nunca con el flujo histórico — siempre hubo 1 dueño), todos caen en
+ * la misma org default y queda como trabajo manual del admin separarlos.
+ */
+async function backfillOrganizations(): Promise<void> {
+  const orphaned = await rawQuery<{ id: string; role: string }>(
+    `SELECT id, role FROM users
+     WHERE role != 'admin' AND org_id IS NULL
+     ORDER BY created_at ASC`,
+  );
+  if (orphaned.rowCount === 0) return;
+
+  const company = await rawQuery<{ name: string }>(
+    "SELECT name FROM company_config WHERE id = 1",
+  );
+  const orgName = company.rows[0]?.name?.trim() || "Peritaje";
+
+  // Buscamos si ya existe una org con ese nombre — si la app crasheó a la
+  // mitad del backfill en un deploy anterior, queremos reutilizar la fila
+  // en lugar de crear duplicados.
+  const existing = await rawQuery<{ id: string }>(
+    "SELECT id FROM organizations WHERE name = $1 LIMIT 1",
+    [orgName],
+  );
+  let orgId = existing.rows[0]?.id ?? null;
+  if (!orgId) {
+    orgId = `org_${Math.random().toString(36).slice(2, 10)}${Date.now().toString(36)}`;
+    const firstOwner = orphaned.rows.find((u) => u.role === "owner")?.id ?? null;
+    await rawQuery(
+      `INSERT INTO organizations (id, name, owner_user_id)
+       VALUES ($1, $2, $3)`,
+      [orgId, orgName, firstOwner],
+    );
+    console.log(
+      `[migrations] backfill: creada org "${orgName}" (${orgId}) con owner=${firstOwner ?? "ninguno"}`,
+    );
+  }
+
+  // Asignamos todos los usuarios no-admin sin org a esta org.
+  await rawQuery(
+    `UPDATE users SET org_id = $1 WHERE org_id IS NULL AND role != 'admin'`,
+    [orgId],
+  );
+  // Todas las inspections huérfanas (sin org) caen acá. Si en el futuro hay
+  // varias orgs, esto no debería volver a correr porque las nuevas filas se
+  // crean con org_id explícito.
+  await rawQuery(`UPDATE inspections SET org_id = $1 WHERE org_id IS NULL`, [orgId]);
+  await rawQuery(`UPDATE appointments SET org_id = $1 WHERE org_id IS NULL`, [orgId]);
+  await rawQuery(`UPDATE audit_log SET org_id = $1 WHERE org_id IS NULL`, [orgId]);
 }
 
 export async function logAudit(
