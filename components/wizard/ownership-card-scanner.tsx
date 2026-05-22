@@ -9,7 +9,9 @@ import {
   ImageIcon,
   Loader2,
   RefreshCcw,
+  RotateCw,
   ScanLine,
+  X,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -37,11 +39,17 @@ import { cn } from "@/lib/utils";
 
 /**
  * Botón "Escanear tarjeta de propiedad" + flow de captura.
- * Dos vías de input:
- *  - "Tomar foto" → `<input type="file" capture="environment">` lanza la
- *    cámara nativa del sistema (mucho más confiable que getUserMedia en móvil).
+ *
+ * Tres vías de input:
+ *  - "Tomar foto" → cámara propia in-browser con `getUserMedia` + overlay
+ *    horizontal proporción tarjeta (~1.585:1). Forzamos landscape para que
+ *    el perito siempre capture la tarjeta con la orientación correcta y el
+ *    OCR funcione mejor. Si `getUserMedia` falla o el permiso se niega,
+ *    caemos al `<input capture>` nativo del sistema.
+ *  - "Cámara del sistema" → `<input type="file" capture="environment">`
+ *    como fallback explícito cuando la cámara propia no anda.
  *  - "Desde galería" → `<input type="file">` (sin capture) → picker normal.
- * Ambas terminan en `handleFile(file)` → `processBlob` → OCR.
+ * Todas las vías terminan en `handleFile(file)` → `processBlob` → OCR.
  */
 
 export type ExtractedFields = {
@@ -457,6 +465,26 @@ export function OwnershipCardScanner({
     status?: number;
   } | null>(null);
 
+  // Cámara propia in-browser. `cameraLive` activa el overlay con video stream;
+  // el stream y el video viven en refs porque setSrcObject del video requiere
+  // referencia directa al DOM (no se puede pasar como prop reactiva).
+  const [cameraLive, setCameraLive] = React.useState(false);
+  const [cameraStarting, setCameraStarting] = React.useState(false);
+  const [isPortrait, setIsPortrait] = React.useState(false);
+  const videoRef = React.useRef<HTMLVideoElement | null>(null);
+  const streamRef = React.useRef<MediaStream | null>(null);
+
+  const stopLiveCamera = React.useCallback(() => {
+    const stream = streamRef.current;
+    if (stream) {
+      for (const track of stream.getTracks()) track.stop();
+      streamRef.current = null;
+    }
+    if (videoRef.current) videoRef.current.srcObject = null;
+    setCameraLive(false);
+    setCameraStarting(false);
+  }, []);
+
   function reset() {
     setPreviewUrl(null);
     setFields(null);
@@ -465,6 +493,7 @@ export function OwnershipCardScanner({
     setDetectedSide(null);
     setBusy(false);
     setErrorDetail(null);
+    stopLiveCamera();
   }
 
   const close = React.useCallback(() => {
@@ -478,8 +507,110 @@ export function OwnershipCardScanner({
     return () => {
       mountedRef.current = false;
       abortRef.current?.abort();
+      const stream = streamRef.current;
+      if (stream) for (const track of stream.getTracks()) track.stop();
     };
   }, []);
+
+  // Detectar orientación del dispositivo mientras la cámara está activa. Si
+  // está en portrait, mostramos un hint para rotar — la tarjeta entra mejor en
+  // landscape y el OCR rinde mejor con mayor resolución horizontal.
+  React.useEffect(() => {
+    if (!cameraLive || typeof window === "undefined") return;
+    const mq = window.matchMedia("(orientation: portrait)");
+    const update = () => setIsPortrait(mq.matches);
+    update();
+    mq.addEventListener("change", update);
+    return () => mq.removeEventListener("change", update);
+  }, [cameraLive]);
+
+  // Si el dialog se cierra (X o backdrop), garantizamos que el stream se libere.
+  // Sin esto la cámara puede quedar encendida en background — el indicador del
+  // navegador se queda prendido y consume batería.
+  React.useEffect(() => {
+    if (!open) stopLiveCamera();
+  }, [open, stopLiveCamera]);
+
+  async function startLiveCamera() {
+    if (cameraStarting) return;
+    // Si el browser no soporta getUserMedia, caemos directo al input capture.
+    if (typeof navigator === "undefined" || !navigator.mediaDevices?.getUserMedia) {
+      cameraInputRef.current?.click();
+      return;
+    }
+    setCameraStarting(true);
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: false,
+        video: {
+          facingMode: { ideal: "environment" },
+          width: { ideal: 1920 },
+          height: { ideal: 1080 },
+          aspectRatio: { ideal: 16 / 9 },
+        },
+      });
+      if (!mountedRef.current) {
+        for (const track of stream.getTracks()) track.stop();
+        return;
+      }
+      streamRef.current = stream;
+      setCameraLive(true);
+      // Esperamos al próximo tick para que el <video> esté montado y
+      // podamos setear el srcObject sobre el ref.
+      queueMicrotask(() => {
+        const video = videoRef.current;
+        if (video && streamRef.current) {
+          video.srcObject = streamRef.current;
+          void video.play().catch(() => {
+            /* Algunos navegadores devuelven NotAllowedError si la pestaña
+             * está en background — silencioso, el user verá frame congelado
+             * y puede tocar Capturar igual. */
+          });
+        }
+      });
+    } catch (err) {
+      const denied =
+        err instanceof DOMException &&
+        (err.name === "NotAllowedError" || err.name === "PermissionDeniedError");
+      const description = denied
+        ? "Permiso de cámara denegado. Otórgalo en los ajustes del navegador, o usa la cámara del sistema."
+        : "No pudimos abrir la cámara. Prueba con la cámara del sistema o sube la foto desde galería.";
+      toast.show({
+        title: "Cámara no disponible",
+        description,
+        variant: "warning",
+      });
+    } finally {
+      if (mountedRef.current) setCameraStarting(false);
+    }
+  }
+
+  async function captureFromLiveCamera() {
+    const video = videoRef.current;
+    if (!video) return;
+    const vw = video.videoWidth;
+    const vh = video.videoHeight;
+    if (vw === 0 || vh === 0) return;
+    const canvas = document.createElement("canvas");
+    canvas.width = vw;
+    canvas.height = vh;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    ctx.drawImage(video, 0, 0, vw, vh);
+    const blob = await new Promise<Blob | null>((resolve) =>
+      canvas.toBlob((b) => resolve(b), "image/jpeg", 0.92),
+    );
+    stopLiveCamera();
+    if (!blob) {
+      toast.show({
+        title: "No se pudo capturar el frame",
+        variant: "warning",
+      });
+      return;
+    }
+    const file = new File([blob], "tarjeta.jpg", { type: "image/jpeg" });
+    await handleFile(file);
+  }
 
   function openScanner() {
     setOpen(true);
@@ -504,6 +635,11 @@ export function OwnershipCardScanner({
     setShownKeys([]);
     setDetectedSide(null);
     setErrorDetail(null);
+    // Limpiamos cualquier preview de un intento previo. Sin esto, si la
+    // captura anterior se ejecutó pero la nueva falla en resizeBlob, el
+    // ErrorPanel mostraría la foto VIEJA bajo el botón "Usar la foto sin
+    // OCR" — y guardaríamos la imagen incorrecta como evidencia.
+    setPreviewUrl(null);
     setProgress({ status: "Preparando imagen…", pct: 0 });
     try {
       const { previewUrl, ocrBlob } = await resizeBlob(input);
@@ -654,8 +790,8 @@ export function OwnershipCardScanner({
       description: !runOcr
         ? "Reverso registrado como una de las fotos del peritaje."
         : appliedCount > 0
-          ? "Revisá los campos antes de continuar."
-          : "Completá los datos del vehículo a mano.",
+          ? "Revisa los campos antes de continuar."
+          : "Completa los datos del vehículo a mano.",
       variant: "success",
     });
     close();
@@ -673,7 +809,7 @@ export function OwnershipCardScanner({
     : [];
   const hasDetections = renderKeys.length > 0;
 
-  const showCamera = !previewUrl && !fields && !busy;
+  const showCamera = !previewUrl && !fields && !busy && !cameraLive;
 
   return (
     <>
@@ -737,8 +873,8 @@ export function OwnershipCardScanner({
             </DialogTitle>
             <DialogDescription>
               {showCamera
-                ? "Tomá una foto con la cámara o subí una desde galería — el OCR extrae los datos en tu mismo dispositivo."
-                : "Revisá los datos detectados antes de aplicarlos al formulario."}
+                ? "Toma una foto con la cámara o sube una desde galería — el OCR extrae los datos en tu mismo dispositivo."
+                : "Revisa los datos detectados antes de aplicarlos al formulario."}
             </DialogDescription>
           </DialogHeader>
 
@@ -752,27 +888,96 @@ export function OwnershipCardScanner({
                   <ScanLine className="mx-auto mb-2 h-8 w-8 text-muted-foreground" />
                   <p className="text-sm font-medium">Escaneá la tarjeta</p>
                   <p className="mt-1 text-xs leading-snug text-muted-foreground">
-                    Funciona mejor con buena luz, sin reflejos y la tarjeta lo
-                    más cuadrada posible.
+                    Tomá la foto con el celular en horizontal, buena luz y sin
+                    reflejos. Encuadrá la tarjeta dentro del marco blanco.
                   </p>
                 </div>
+                <Button
+                  type="button"
+                  onClick={startLiveCamera}
+                  size="lg"
+                  className="w-full"
+                  disabled={cameraStarting}
+                >
+                  {cameraStarting ? (
+                    <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+                  ) : (
+                    <Camera className="mr-1.5 h-4 w-4" />
+                  )}{" "}
+                  {cameraStarting ? "Abriendo cámara…" : "Tomar foto"}
+                </Button>
                 <div className="grid grid-cols-2 gap-2">
                   <Button
                     type="button"
                     onClick={() => cameraInputRef.current?.click()}
-                    size="lg"
+                    variant="outline"
+                    size="sm"
                     className="w-full"
                   >
-                    <Camera className="mr-1.5 h-4 w-4" /> Tomar foto
+                    <Camera className="mr-1.5 h-4 w-4" /> Cámara del sistema
                   </Button>
                   <Button
                     type="button"
                     onClick={() => fileInputRef.current?.click()}
                     variant="outline"
-                    size="lg"
+                    size="sm"
                     className="w-full"
                   >
                     <ImageIcon className="mr-1.5 h-4 w-4" /> Desde galería
+                  </Button>
+                </div>
+              </div>
+            )}
+
+            {cameraLive && (
+              <div className="space-y-3">
+                {isPortrait && (
+                  <div className="flex items-center gap-2 rounded-md border border-warning/40 bg-warning/10 p-2.5 text-xs text-warning">
+                    <RotateCw className="h-3.5 w-3.5 shrink-0" />
+                    <span>
+                      <strong>Rotá el teléfono en horizontal</strong> — la
+                      tarjeta cabe completa y el OCR funciona mejor.
+                    </span>
+                  </div>
+                )}
+                <div className="relative aspect-video overflow-hidden rounded-md bg-black">
+                  <video
+                    ref={videoRef}
+                    playsInline
+                    muted
+                    autoPlay
+                    className="h-full w-full object-cover"
+                  />
+                  {/* Marco horizontal con proporción de la tarjeta (ID-1:
+                   *  85.60 × 53.98 mm ≈ 1.585:1). El shadow expande el
+                   *  oscurecido a todo el viewport para que el marco recorte
+                   *  visualmente el área de captura. */}
+                  <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+                    <div
+                      className="rounded-md border-2 border-white/85"
+                      style={{
+                        aspectRatio: "1.585 / 1",
+                        width: "82%",
+                        boxShadow: "0 0 0 9999px rgba(0, 0, 0, 0.45)",
+                      }}
+                    />
+                  </div>
+                </div>
+                <div className="grid grid-cols-[1fr_2fr] gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={stopLiveCamera}
+                    size="lg"
+                  >
+                    <X className="mr-1.5 h-4 w-4" /> Cancelar
+                  </Button>
+                  <Button
+                    type="button"
+                    onClick={captureFromLiveCamera}
+                    size="lg"
+                  >
+                    <Camera className="mr-1.5 h-4 w-4" /> Capturar
                   </Button>
                 </div>
               </div>
@@ -812,8 +1017,8 @@ export function OwnershipCardScanner({
                       ? "Este botón es para el FRENTE (extrae los datos por OCR)."
                       : "Este botón es para el REVERSO (solo evidencia, sin OCR)."}{" "}
                     {onWrongSide
-                      ? "Podés guardarla en el slot correcto con un click."
-                      : "Cancelá y usá el otro botón."}
+                      ? "Puedes guardarla en el slot correcto con un click."
+                      : "Cancela y usa el otro botón."}
                   </p>
                   {onWrongSide && (
                     <div className="mt-2 ml-6">
@@ -929,7 +1134,7 @@ export function OwnershipCardScanner({
                     No detecté datos en la tarjeta
                   </div>
                   <p className="mt-1 text-xs leading-snug text-warning/90">
-                    Probá con una foto más nítida o mejor iluminada. Si querés, podés
+                    Prueba con una foto más nítida o mejor iluminada. Si quieres, puedes
                     igual guardar la foto como evidencia y completar los campos a mano.
                   </p>
                 </div>
