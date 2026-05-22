@@ -3,7 +3,7 @@ import { NextResponse } from "next/server";
 import {
   deleteUser,
   getUserById,
-  requireAdmin,
+  requireUser,
   setUserActive,
   setUserPassword,
 } from "@/lib/server/auth";
@@ -25,7 +25,7 @@ export async function PATCH(
 ) {
   let me;
   try {
-    me = await requireAdmin();
+    me = await requireUser();
   } catch (e) {
     return unauth(e);
   }
@@ -38,13 +38,22 @@ export async function PATCH(
     );
   }
 
+  // Un owner solo puede modificar otros owners — no debe poder cambiar
+  // contraseña ni desactivar a un admin. El admin puede todo.
+  if (me.role !== "admin" && target.role === "admin") {
+    return NextResponse.json(
+      { error: "Solo un administrador puede modificar a otro administrador." },
+      { status: 403 },
+    );
+  }
+
   try {
     const body = await req.json();
     if (typeof body.password === "string") {
       await setUserPassword(params.id, body.password);
     }
     if (typeof body.active === "boolean") {
-      // Don't let an admin disable themselves and lose access
+      // Don't let a user disable themselves and lose access
       if (params.id === me.id && body.active === false) {
         return NextResponse.json(
           { error: "No puedes desactivar tu propia cuenta." },
@@ -68,7 +77,7 @@ export async function DELETE(
 ) {
   let me;
   try {
-    me = await requireAdmin();
+    me = await requireUser();
   } catch (e) {
     return unauth(e);
   }
@@ -76,6 +85,14 @@ export async function DELETE(
     return NextResponse.json(
       { error: "No puedes eliminar tu propia cuenta." },
       { status: 400 },
+    );
+  }
+  // Borrar admin solo lo puede otro admin. Owner borra owners.
+  const target = await getUserById(params.id);
+  if (target?.role === "admin" && me.role !== "admin") {
+    return NextResponse.json(
+      { error: "Solo un administrador puede eliminar a otro administrador." },
+      { status: 403 },
     );
   }
   await deleteUser(params.id);

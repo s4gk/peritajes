@@ -10,7 +10,7 @@ import { ThemeToggle } from "@/components/wizard/theme-toggle";
 import { apiFetch } from "@/lib/client/api-client";
 
 export type TopbarProps = {
-  user: { fullName: string; role: "admin" | "perito" };
+  user: { fullName: string; role: "admin" | "owner" };
   onMenuClick: () => void;
   title?: string;
 };

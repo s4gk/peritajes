@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { requireAdmin } from "@/lib/server/auth";
+import { requireUser } from "@/lib/server/auth";
 import { importInspectionsServer } from "@/lib/server/inspections";
 import type { StoredInspection } from "@/lib/types";
 
@@ -26,7 +26,7 @@ function unauth(e: unknown) {
 export async function POST(req: Request) {
   let user;
   try {
-    user = await requireAdmin();
+    user = await requireUser();
   } catch (e) {
     return unauth(e);
   }

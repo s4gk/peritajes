@@ -10,15 +10,6 @@ export const dynamic = "force-dynamic";
 export default async function EmpresaPage() {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
-  if (user.role !== "admin") {
-    return (
-      <div className="container max-w-2xl py-10">
-        <div className="rounded-md border border-warning/30 bg-warning/10 px-4 py-3 text-sm text-warning">
-          Solo los administradores pueden modificar la configuración de la empresa.
-        </div>
-      </div>
-    );
-  }
 
   const company = await getCompanyConfig();
   return (

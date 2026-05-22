@@ -42,7 +42,7 @@ type User = {
   username: string;
   fullName: string;
   email: string | null;
-  role: "admin" | "perito";
+  role: "admin" | "owner";
   active: boolean;
   createdAt: string;
   lastLoginAt: string | null;
@@ -51,9 +51,11 @@ type User = {
 export function UsuariosClient({
   initialUsers,
   currentUserId,
+  currentUserRole,
 }: {
   initialUsers: User[];
   currentUserId: string;
+  currentUserRole: "admin" | "owner";
 }) {
   const toast = useToast();
   const [users, setUsers] = React.useState<User[]>(initialUsers);
@@ -165,7 +167,7 @@ export function UsuariosClient({
                         variant={u.role === "admin" ? "warning" : "neutral"}
                         className="text-[10px]"
                       >
-                        {u.role === "admin" ? "Admin" : "Perito"}
+                        {u.role === "admin" ? "Admin" : "Dueño"}
                       </Badge>
                       {!u.active ? (
                         <Badge variant="danger" className="text-[10px]">
@@ -245,6 +247,7 @@ export function UsuariosClient({
         open={createOpen}
         onOpenChange={setCreateOpen}
         onCreated={refresh}
+        canCreateAdmin={currentUserRole === "admin"}
       />
       <PasswordDialog
         userId={pwUserId}
@@ -322,17 +325,19 @@ function CreateUserDialog({
   open,
   onOpenChange,
   onCreated,
+  canCreateAdmin,
 }: {
   open: boolean;
   onOpenChange: (v: boolean) => void;
   onCreated: () => void;
+  canCreateAdmin: boolean;
 }) {
   const toast = useToast();
   const [fullName, setFullName] = React.useState("");
   const [username, setUsername] = React.useState("");
   const [email, setEmail] = React.useState("");
   const [password, setPassword] = React.useState("");
-  const [role, setRole] = React.useState<"admin" | "perito">("perito");
+  const [role, setRole] = React.useState<"admin" | "owner">("owner");
   const [busy, setBusy] = React.useState(false);
 
   React.useEffect(() => {
@@ -341,7 +346,7 @@ function CreateUserDialog({
       setUsername("");
       setEmail("");
       setPassword("");
-      setRole("perito");
+      setRole("owner");
     }
   }, [open]);
 
@@ -402,15 +407,22 @@ function CreateUserDialog({
             </div>
             <div className="space-y-1.5">
               <Label>Rol</Label>
-              <Select value={role} onValueChange={(v) => setRole(v as "admin" | "perito")}>
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="perito">Perito</SelectItem>
-                  <SelectItem value="admin">Administrador</SelectItem>
-                </SelectContent>
-              </Select>
+              {canCreateAdmin ? (
+                <Select
+                  value={role}
+                  onValueChange={(v) => setRole(v as "admin" | "owner")}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="owner">Dueño</SelectItem>
+                    <SelectItem value="admin">Administrador</SelectItem>
+                  </SelectContent>
+                </Select>
+              ) : (
+                <Input value="Dueño" disabled />
+              )}
             </div>
           </div>
           <div className="space-y-1.5">

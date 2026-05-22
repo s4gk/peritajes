@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { requireAdmin, requireUser } from "@/lib/server/auth";
+import { requireUser } from "@/lib/server/auth";
 import {
   getCompanyConfig,
   updateCompanyConfig,
@@ -30,7 +30,7 @@ export async function GET() {
 export async function PUT(req: Request) {
   let user;
   try {
-    user = await requireAdmin();
+    user = await requireUser();
   } catch (e) {
     return unauth(e);
   }

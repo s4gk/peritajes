@@ -3,7 +3,7 @@ import { NextResponse } from "next/server";
 import {
   createUser,
   listUsers,
-  requireAdmin,
+  requireUser,
 } from "@/lib/server/auth";
 
 export const runtime = "nodejs";
@@ -19,7 +19,7 @@ function unauth(e: unknown) {
 
 export async function GET() {
   try {
-    await requireAdmin();
+    await requireUser();
     return NextResponse.json({ users: await listUsers() });
   } catch (e) {
     return unauth(e);
@@ -27,19 +27,30 @@ export async function GET() {
 }
 
 export async function POST(req: Request) {
+  let actor;
   try {
-    await requireAdmin();
+    actor = await requireUser();
   } catch (e) {
     return unauth(e);
   }
   try {
     const body = await req.json();
+    // Solo admin (Vestel/desarrollo) puede promover a otros a admin. Un owner
+    // crea exclusivamente owners. Defensa en profundidad — la UI ya oculta el
+    // selector de rol cuando el creador no es admin.
+    const requestedRole = body.role === "admin" ? "admin" : "owner";
+    if (requestedRole === "admin" && actor.role !== "admin") {
+      return NextResponse.json(
+        { error: "Solo un administrador puede crear otro administrador." },
+        { status: 403 },
+      );
+    }
     const user = await createUser({
       username: body.username ?? "",
       password: body.password ?? "",
       fullName: body.fullName ?? "",
       email: body.email ?? null,
-      role: body.role === "admin" ? "admin" : "perito",
+      role: requestedRole,
     });
     return NextResponse.json({ user });
   } catch (e) {

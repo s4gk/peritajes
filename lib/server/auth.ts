@@ -9,7 +9,15 @@ import { logAudit, query } from "./db";
 export const SESSION_COOKIE = "perito_session";
 const SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 30; // 30 days
 
-export type UserRole = "admin" | "perito";
+/**
+ * Roles de la app:
+ *  - admin: superuser técnico (Vestel/desarrollo). Único que puede borrar
+ *    peritajes finalizados y acceder a auditoría.
+ *  - owner: dueño del negocio. Hace peritajes, configura su empresa y
+ *    administra usuarios. Es el rol "operativo" que reemplaza al antiguo
+ *    "perito" — filas legacy con role='perito' se mapean a 'owner' al leer.
+ */
+export type UserRole = "admin" | "owner";
 
 export type User = {
   id: string;
@@ -58,7 +66,7 @@ function rowToUser(row: UserRow): User {
     licenseId: row.license_id ?? null,
     signatureDataUrl: row.signature_data_url ?? null,
     waPhone: row.wa_phone ?? null,
-    role: row.role === "admin" ? "admin" : "perito",
+    role: row.role === "admin" ? "admin" : "owner",
     active: row.active,
     createdAt: tsToISO(row.created_at) ?? "",
     lastLoginAt: tsToISO(row.last_login_at),
@@ -167,7 +175,7 @@ export async function createUser(input: CreateUserInput): Promise<User> {
       hash,
       input.fullName.trim(),
       input.email?.trim() || null,
-      input.role ?? "perito",
+      input.role ?? "owner",
     ],
   );
 

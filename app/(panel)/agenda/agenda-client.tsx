@@ -78,7 +78,7 @@ type Appointment = {
 
 type Props = {
   initialAppointments: Appointment[];
-  currentUser: { id: string; role: "admin" | "perito" };
+  currentUser: { id: string; role: "admin" | "owner" };
 };
 
 type FormState = {
@@ -354,7 +354,7 @@ export function AgendaClient({ initialAppointments, currentUser }: Props) {
           <h1 className="text-xl font-semibold tracking-tight sm:text-2xl">Agenda</h1>
           <p className="text-sm text-muted-foreground">
             {appointments.length === 0
-              ? "No tenés citas registradas. Creá la primera para empezar."
+              ? "No tienes citas registradas. Crea la primera para empezar."
               : `${appointments.length} cita${appointments.length === 1 ? "" : "s"} registrada${appointments.length === 1 ? "" : "s"}.`}
           </p>
         </div>

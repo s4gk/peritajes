@@ -32,16 +32,16 @@ const NAV: NavItem[] = [
   { href: "/agenda", label: "Agenda", icon: Calendar },
   { href: "/peritajes", label: "Peritajes", icon: ClipboardList },
   { href: "/vehiculos", label: "Vehículos", icon: Car },
-  { href: "/empresa", label: "Empresa", icon: Building2, adminOnly: true },
-  { href: "/usuarios", label: "Usuarios", icon: Users, adminOnly: true },
-  { href: "/whatsapp", label: "WhatsApp", icon: MessageCircle, adminOnly: true },
+  { href: "/empresa", label: "Empresa", icon: Building2 },
+  { href: "/usuarios", label: "Usuarios", icon: Users },
+  { href: "/whatsapp", label: "WhatsApp", icon: MessageCircle },
   { href: "/auditoria", label: "Auditoría", icon: ScrollText, adminOnly: true },
-  { href: "/backup", label: "Backup", icon: DatabaseBackup, adminOnly: true },
+  { href: "/backup", label: "Backup", icon: DatabaseBackup },
   { href: "/cuenta", label: "Mi cuenta", icon: UserCircle },
 ];
 
 export type SidebarProps = {
-  user: { fullName: string; username: string; role: "admin" | "perito" };
+  user: { fullName: string; username: string; role: "admin" | "owner" };
   open: boolean;
   onClose: () => void;
 };
@@ -125,7 +125,7 @@ export function Sidebar({ user, open, onClose }: SidebarProps) {
             </div>
             <div className="truncate text-muted-foreground">
               @{user.username} ·{" "}
-              {user.role === "admin" ? "Administrador" : "Perito"}
+              {user.role === "admin" ? "Administrador" : "Dueño"}
             </div>
           </div>
         </div>
