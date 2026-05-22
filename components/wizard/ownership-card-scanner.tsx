@@ -500,6 +500,9 @@ export function OwnershipCardScanner({
     setOpen(false);
     // Defer reset hasta que termine la animación de cierre
     window.setTimeout(reset, 200);
+    // `reset` es estable dentro del scope del componente — no necesita estar
+    // en deps. La regla no puede inferirlo desde una function declaration.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Cleanup al desmontar

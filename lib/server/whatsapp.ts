@@ -122,6 +122,9 @@ export async function connectWhatsApp(): Promise<{ status: Status; qrDataUrl: st
     ?? baileys.makeWASocket;
   const { useMultiFileAuthState, DisconnectReason, Browsers, fetchLatestBaileysVersion } = baileys;
 
+  // ESLint piensa que `useMultiFileAuthState` es un React Hook por su prefijo
+  // — pero es una función pura de Baileys que carga creds desde disco.
+  // eslint-disable-next-line react-hooks/rules-of-hooks
   const { state: authState, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
   const { version } = await fetchLatestBaileysVersion().catch(() => ({ version: undefined }));
   const logger = await makeSilentLogger();
