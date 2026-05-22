@@ -113,6 +113,13 @@ CREATE TABLE IF NOT EXISTS company_config (
   logo_data_url TEXT,
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+-- 2026-05 fase 3 multi-tenant: cada org tiene su propia configuración.
+-- Mantenemos la PK legacy id para no romper rows existentes; el lookup
+-- nuevo es por org_id. La fila id=1 (seed inicial) queda como template
+-- y se asocia al org default en backfill. Nuevas orgs reciben su fila al
+-- crearse o al primer get.
+ALTER TABLE company_config ADD COLUMN IF NOT EXISTS org_id TEXT REFERENCES organizations(id) ON DELETE CASCADE;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_company_config_org ON company_config(org_id) WHERE org_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS audit_log (
   id BIGSERIAL PRIMARY KEY,
@@ -150,6 +157,23 @@ CREATE TABLE IF NOT EXISTS report_counters (
   year INTEGER PRIMARY KEY,
   last_number INTEGER NOT NULL DEFAULT 0
 );
+-- 2026-05 fase 3: cada org lleva su propio consecutivo de informes. El
+-- DO block detecta si la migración ya corrió (existe la columna org_id) y
+-- evita repetir. La fila legacy queda asignada al org default en backfill.
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name = 'report_counters' AND column_name = 'org_id'
+  ) THEN
+    ALTER TABLE report_counters ADD COLUMN org_id TEXT;
+    -- placeholder temporal — el backfill lo reemplaza con el org real
+    UPDATE report_counters SET org_id = '__legacy__' WHERE org_id IS NULL;
+    ALTER TABLE report_counters ALTER COLUMN org_id SET NOT NULL;
+    ALTER TABLE report_counters DROP CONSTRAINT report_counters_pkey;
+    ALTER TABLE report_counters ADD PRIMARY KEY (org_id, year);
+  END IF;
+END $$;
 
 CREATE TABLE IF NOT EXISTS appointments (
   id TEXT PRIMARY KEY,
@@ -316,6 +340,18 @@ async function backfillOrganizations(): Promise<void> {
   await rawQuery(`UPDATE inspections SET org_id = $1 WHERE org_id IS NULL`, [orgId]);
   await rawQuery(`UPDATE appointments SET org_id = $1 WHERE org_id IS NULL`, [orgId]);
   await rawQuery(`UPDATE audit_log SET org_id = $1 WHERE org_id IS NULL`, [orgId]);
+
+  // company_config legacy (id=1, seed) pasa a ser la config de la org default.
+  await rawQuery(
+    `UPDATE company_config SET org_id = $1 WHERE id = 1 AND org_id IS NULL`,
+    [orgId],
+  );
+  // report_counters legacy (org_id='__legacy__') pasa a la org default. Si
+  // ya hay rows con el org_id real, los respetamos (idempotente).
+  await rawQuery(
+    `UPDATE report_counters SET org_id = $1 WHERE org_id = '__legacy__'`,
+    [orgId],
+  );
 }
 
 export async function logAudit(

@@ -122,6 +122,9 @@ export async function GET(req: Request, ctx: { params: { token: string } }) {
       data: stored.data,
       verificationUrl,
       reportNumber: stored.reportNumber ?? null,
+      // Render público: usa la org del peritaje, no la del visitante (no
+      // hay sesión). Si la fila legacy no tiene org, sale con defaults.
+      orgId: stored.orgId ?? null,
     });
     // Fire-and-forget access tracking; no need to block the response on it.
     touchShareTokenAccess(token).catch(() => {});

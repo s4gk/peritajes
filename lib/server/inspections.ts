@@ -74,18 +74,28 @@ function rowToStored(row: InspectionRow): StoredInspection {
 }
 
 /**
- * Reserva el siguiente consecutivo del año dado de forma atómica. El UPSERT
- * con incremento dentro del DO UPDATE garantiza que dos peritajes finalizados
- * a la vez no compitan por el mismo número — Postgres serializa la fila.
+ * Reserva el siguiente consecutivo del año dado para una org específica de
+ * forma atómica. Cada cliente (org) tiene su propia secuencia — el peritaje
+ * "001 de 2026" del cliente A es distinto del "001 de 2026" del cliente B.
+ * El UPSERT con incremento dentro del DO UPDATE serializa la fila (gracias
+ * a la PK compuesta org_id+year), evitando colisiones bajo concurrencia.
+ *
+ * Si orgId es null (admin sin tenant cerrando un peritaje legacy), caemos
+ * a un sentinel "__legacy__" para mantener un consecutivo global de admin
+ * — no se mezcla con el de ninguna org de cliente.
  */
-async function reserveReportNumber(year: number): Promise<string> {
+async function reserveReportNumber(
+  orgId: string | null,
+  year: number,
+): Promise<string> {
+  const orgKey = orgId ?? "__legacy__";
   const r = await query<{ last_number: number }>(
-    `INSERT INTO report_counters (year, last_number)
-     VALUES ($1, 1)
-     ON CONFLICT (year) DO UPDATE
+    `INSERT INTO report_counters (org_id, year, last_number)
+     VALUES ($1, $2, 1)
+     ON CONFLICT (org_id, year) DO UPDATE
        SET last_number = report_counters.last_number + 1
      RETURNING last_number`,
-    [year],
+    [orgKey, year],
   );
   return formatReportNumber(year, r.rows[0].last_number);
 }
@@ -244,10 +254,14 @@ export async function updateInspectionServer(
   const nextStatus = data.status === "completed" ? "completed" : "draft";
   const justLocking = nextStatus === "completed";
 
-  // En la transición draft→completed asignamos consecutivo si no tiene.
+  // En la transición draft→completed asignamos consecutivo si no tiene. El
+  // consecutivo es por org: cada cliente tiene su propia secuencia anual.
   let assignedReportNumber: string | null = null;
   if (justLocking && !existingRow.report_number) {
-    assignedReportNumber = await reserveReportNumber(new Date().getFullYear());
+    assignedReportNumber = await reserveReportNumber(
+      existingRow.org_id,
+      new Date().getFullYear(),
+    );
   }
 
   const r = await query<InspectionRow>(
@@ -424,6 +438,7 @@ export async function ensureCompletedPdf(opts: {
     data: r.data,
     verificationUrl,
     reportNumber: r.report_number ?? null,
+    orgId: r.org_id,
   });
   const meta = await savePdf(inspectionId, buffer);
 

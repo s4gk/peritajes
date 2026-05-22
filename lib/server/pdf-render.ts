@@ -65,6 +65,9 @@ export type RenderInspectionPdfOptions = {
    *  muestra en portada y en el header de cada página. Si no, cae a
    *  `buildDocumentNumber(placa, fecha)` — útil para previews de borradores. */
   reportNumber?: string | null;
+  /** Org del peritaje. El branding (NIT, logo, teléfono) se toma de la
+   *  config de esta org. Si es null, sale con defaults del platform. */
+  orgId?: string | null;
 };
 
 export type RenderedPdf = {
@@ -83,7 +86,7 @@ export async function renderInspectionPdf(
   const fallback = getCompanyBranding();
   let branding = fallback;
   try {
-    const cfg = await getCompanyConfig();
+    const cfg = await getCompanyConfig(opts.orgId ?? null);
     branding = {
       name: cfg.name?.trim() || fallback.name,
       tagline: cfg.tagline?.trim() || fallback.tagline,

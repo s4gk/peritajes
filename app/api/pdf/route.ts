@@ -117,12 +117,16 @@ export async function POST(req: Request) {
   }
 
   try {
+    // Para previews (borradores) usamos la org del usuario para que el
+    // branding (NIT, logo, teléfono) sea el correcto. Si admin pide preview
+    // sin org, sale con defaults.
     const { buffer, plateSlug } = await renderInspectionPdf({
       data: body.data,
       report: body.report,
       mode: body.mode,
       verificationUrl,
       reportNumber,
+      orgId: user.orgId,
     });
     return new NextResponse(buffer as unknown as BodyInit, {
       status: 200,

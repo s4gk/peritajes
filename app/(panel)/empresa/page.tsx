@@ -13,7 +13,8 @@ export default async function EmpresaPage() {
   // /empresa es solo para admin y owner — el empleado no configura el negocio.
   if (user.role === "employee") redirect("/dashboard");
 
-  const company = await getCompanyConfig();
+  // Admin sin org → config global (defaults). Owner → config de su org.
+  const company = await getCompanyConfig(user.orgId);
   return (
     <div className="container max-w-3xl py-6">
       <div className="mb-6">

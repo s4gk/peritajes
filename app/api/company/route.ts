@@ -20,8 +20,8 @@ function unauth(e: unknown) {
 
 export async function GET() {
   try {
-    await requireUser();
-    return NextResponse.json(await getCompanyConfig());
+    const user = await requireUser();
+    return NextResponse.json(await getCompanyConfig(user.orgId));
   } catch (e) {
     return unauth(e);
   }
@@ -41,9 +41,18 @@ export async function PUT(req: Request) {
       { status: 403 },
     );
   }
+  if (!user.orgId) {
+    return NextResponse.json(
+      {
+        error:
+          "El admin no tiene config propia. Cambiá los datos desde la org del cliente.",
+      },
+      { status: 400 },
+    );
+  }
   try {
     const body = await req.json();
-    const updated = await updateCompanyConfig(body);
+    const updated = await updateCompanyConfig(user.orgId, body);
     await logAudit(user.id, "company.updated");
     return NextResponse.json(updated);
   } catch (e) {
