@@ -103,6 +103,18 @@ export async function DELETE(
   } catch (e) {
     return unauth(e);
   }
+  // Política del 2026-05: SOLO el admin puede eliminar citas. Owner/employee
+  // que necesiten "cancelar" una cita deben hacerlo vía PATCH status=cancelled
+  // (mantiene la fila para auditoría y para que reminders_sent no se pierda).
+  if (user.role !== "admin") {
+    return NextResponse.json(
+      {
+        error:
+          "Solo el administrador puede eliminar citas. Cancelala desde la cita si querés sacarla del calendario.",
+      },
+      { status: 403 },
+    );
+  }
   const ok = await deleteAppointment(params.id, user);
   if (!ok) {
     return NextResponse.json({ error: "No encontrado o sin permisos" }, { status: 404 });

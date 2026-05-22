@@ -81,18 +81,24 @@ export async function DELETE(
   } catch (e) {
     return unauth(e);
   }
+  // Política del 2026-05: SOLO el admin (Vestel) puede eliminar usuarios.
+  // Owners no borran empleados — los desactivan vía PATCH active=false
+  // si necesitan removerlos del equipo. Mantener la fila histórica es
+  // necesario para auditoría: peritajes pasados siguen apuntando a su
+  // creador real, y el audit log no se rompe.
+  if (me.role !== "admin") {
+    return NextResponse.json(
+      {
+        error:
+          "Solo el administrador puede eliminar usuarios. Para retirar a un empleado, desactivá su cuenta.",
+      },
+      { status: 403 },
+    );
+  }
   if (params.id === me.id) {
     return NextResponse.json(
       { error: "No puedes eliminar tu propia cuenta." },
       { status: 400 },
-    );
-  }
-  // Borrar admin solo lo puede otro admin. Owner borra owners.
-  const target = await getUserById(params.id);
-  if (target?.role === "admin" && me.role !== "admin") {
-    return NextResponse.json(
-      { error: "Solo un administrador puede eliminar a otro administrador." },
-      { status: 403 },
     );
   }
   await deleteUser(params.id);

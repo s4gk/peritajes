@@ -9,8 +9,10 @@ export const dynamic = "force-dynamic";
 
 /**
  * DELETE /api/share/[token]
- * Revoca un token de compartido. Sólo el dueño del peritaje (o admin) puede
- * revocar — sin esto cualquier perito autenticado podía tumbar links de otros.
+ * Revoca un token de compartido. Política del 2026-05: SOLO admin puede
+ * revocar. Un link de PDF entregado al cliente es un commitment — owners
+ * no pueden tumbarlo unilateralmente (puede haber un cliente esperando
+ * acceder al link). Si necesitan invalidar uno, contactan a soporte.
  */
 export async function DELETE(_req: Request, ctx: { params: { token: string } }) {
   let user;
@@ -19,17 +21,25 @@ export async function DELETE(_req: Request, ctx: { params: { token: string } }) 
   } catch {
     return NextResponse.json({ error: "no_auth" }, { status: 401 });
   }
+  if (user.role !== "admin") {
+    return NextResponse.json(
+      {
+        error:
+          "Solo el administrador puede revocar enlaces de PDF públicos.",
+      },
+      { status: 403 },
+    );
+  }
   const token = ctx.params.token;
   if (!token) return NextResponse.json({ error: "missing_token" }, { status: 400 });
 
   const share = await getShareToken(token);
   if (!share) return NextResponse.json({ error: "not_found" }, { status: 404 });
+  // Aún siendo admin verificamos que la inspección exista (defensa en
+  // profundidad — share token huérfano no debería existir, pero por si).
   const access = await checkInspectionAccess(share.inspectionId, user);
   if (access.kind === "not_found") {
     return NextResponse.json({ error: "inspection_not_found" }, { status: 404 });
-  }
-  if (access.kind === "forbidden") {
-    return NextResponse.json({ error: "forbidden" }, { status: 403 });
   }
 
   await revokeShareToken(token);

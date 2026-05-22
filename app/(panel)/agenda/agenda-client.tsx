@@ -422,7 +422,7 @@ export function AgendaClient({ initialAppointments, currentUser }: Props) {
           onCardOpenInspection={(a) =>
             a.inspectionId ? router.push(`/inspection/${a.inspectionId}`) : undefined
           }
-          canDelete={(a) => isAdmin || a.createdBy === currentUser.id}
+          canDelete={(a) => isAdmin}
           busy={busy}
         />
       )}
@@ -461,7 +461,7 @@ export function AgendaClient({ initialAppointments, currentUser }: Props) {
                   <AppointmentCard
                     key={appt.id}
                     appointment={appt}
-                    canDelete={isAdmin || appt.createdBy === currentUser.id}
+                    canDelete={isAdmin}
                     busy={busy}
                     onEdit={() => openEdit(appt)}
                     onStart={() => startInspection(appt)}

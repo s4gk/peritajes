@@ -226,15 +226,18 @@ export function UsuariosClient({
                         </>
                       )}
                     </Button>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => handleDelete(u)}
-                      disabled={isMe}
-                      className="gap-1.5 text-danger"
-                    >
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </Button>
+                    {currentUserRole === "admin" ? (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => handleDelete(u)}
+                        disabled={isMe}
+                        className="gap-1.5 text-danger"
+                        title="Eliminar usuario"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </Button>
+                    ) : null}
                   </div>
                 </div>
               );

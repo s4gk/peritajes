@@ -660,6 +660,7 @@ function ShareCard({
   vehicle: { plate: string; make: string; model: string; owner: string; ownerPhone: string };
 }) {
   const toast = useToast();
+  const shareUser = useCurrentUser();
   const [info, setInfo] = React.useState<ShareTokenInfo | null>(null);
   const [busy, setBusy] = React.useState(false);
   const [loaded, setLoaded] = React.useState(false);
@@ -839,16 +840,19 @@ function ShareCard({
                 <RefreshCw className="mr-2 h-4 w-4" />
                 Regenerar
               </Button>
-              <Button
-                type="button"
-                variant="ghost"
-                onClick={revoke}
-                disabled={busy}
-                className="text-danger hover:text-danger"
-              >
-                <Trash2 className="mr-2 h-4 w-4" />
-                Revocar
-              </Button>
+              {shareUser?.role === "admin" ? (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  onClick={revoke}
+                  disabled={busy}
+                  className="text-danger hover:text-danger"
+                  title="Solo admin: revoca el enlace público"
+                >
+                  <Trash2 className="mr-2 h-4 w-4" />
+                  Revocar
+                </Button>
+              ) : null}
             </div>
           </>
         ) : (

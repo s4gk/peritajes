@@ -244,6 +244,19 @@ export async function DELETE(
   } catch (e) {
     return unauth(e);
   }
+  // Política del 2026-05: SOLO el admin (Vestel) puede eliminar peritajes.
+  // Owners y employees no borran nada — si necesitan corregir un dato,
+  // editan; si es un peritaje de prueba que quieren limpiar, le piden al
+  // admin. Defensa en profundidad: la UI ya esconde el botón a no-admin.
+  if (user.role !== "admin") {
+    return NextResponse.json(
+      {
+        error:
+          "Solo el administrador puede eliminar peritajes. Si necesitás borrar uno, pedíselo a soporte.",
+      },
+      { status: 403 },
+    );
+  }
   const result = await deleteInspectionForUser(params.id, user);
   if (result.kind === "not_found") {
     return NextResponse.json({ error: "No encontrado" }, { status: 404 });
