@@ -6,6 +6,10 @@ import {
   createAppointment,
   listAppointmentsFor,
 } from "@/lib/server/appointments";
+import {
+  notifyAssignedPerito,
+  notifyClientAppointmentConfirmed,
+} from "@/lib/server/whatsapp-notifications";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -66,6 +70,27 @@ export async function POST(req: Request) {
   }
   try {
     const appt = await createAppointment(parsed.data, user);
+    // Notificaciones WhatsApp — fire-and-forget; los templates hacen catch
+    // interno para no romper el response al crear la cita.
+    if (appt.assignedUserId) {
+      void notifyAssignedPerito({
+        peritoUserId: appt.assignedUserId,
+        ownerName: appt.ownerName,
+        ownerPhone: appt.ownerPhone,
+        plate: appt.plate,
+        vehicleLabel: appt.vehicleLabel,
+        scheduledAtISO: appt.scheduledAt,
+        location: appt.location,
+      });
+    }
+    notifyClientAppointmentConfirmed({
+      clientPhone: appt.ownerPhone,
+      ownerName: appt.ownerName,
+      plate: appt.plate,
+      vehicleLabel: appt.vehicleLabel,
+      scheduledAtISO: appt.scheduledAt,
+      location: appt.location,
+    });
     return NextResponse.json({ appointment: appt });
   } catch (e) {
     return NextResponse.json(
