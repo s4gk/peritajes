@@ -69,6 +69,11 @@ CREATE TABLE IF NOT EXISTS users (
 ALTER TABLE users ADD COLUMN IF NOT EXISTS license_id TEXT;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS signature_data_url TEXT;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS wa_phone TEXT;
+-- 2026-05: el rol operativo "perito" pasa a llamarse "owner" (dueño de
+-- negocio). El admin sigue siendo el superuser técnico. Migramos las filas
+-- existentes y rotamos el DEFAULT para nuevos usuarios.
+UPDATE users SET role = 'owner' WHERE role = 'perito';
+ALTER TABLE users ALTER COLUMN role SET DEFAULT 'owner';
 
 CREATE TABLE IF NOT EXISTS sessions (
   id TEXT PRIMARY KEY,
@@ -112,6 +117,10 @@ CREATE TABLE IF NOT EXISTS inspections (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 ALTER TABLE inspections ADD COLUMN IF NOT EXISTS report_number TEXT;
+ALTER TABLE inspections ADD COLUMN IF NOT EXISTS locked_at TIMESTAMPTZ;
+ALTER TABLE inspections ADD COLUMN IF NOT EXISTS pdf_path TEXT;
+ALTER TABLE inspections ADD COLUMN IF NOT EXISTS pdf_sha256 TEXT;
+ALTER TABLE inspections ADD COLUMN IF NOT EXISTS pdf_size INTEGER;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_inspections_report_number ON inspections(report_number) WHERE report_number IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_inspections_updated ON inspections(updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_inspections_user ON inspections(user_id);
@@ -143,6 +152,7 @@ CREATE TABLE IF NOT EXISTS appointments (
 CREATE INDEX IF NOT EXISTS idx_appointments_scheduled ON appointments(scheduled_at);
 CREATE INDEX IF NOT EXISTS idx_appointments_assigned ON appointments(assigned_user_id);
 CREATE INDEX IF NOT EXISTS idx_appointments_status ON appointments(status);
+ALTER TABLE appointments ADD COLUMN IF NOT EXISTS reminders_sent JSONB NOT NULL DEFAULT '{}'::jsonb;
 
 CREATE TABLE IF NOT EXISTS verifik_cache (
   service TEXT NOT NULL,
