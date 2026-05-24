@@ -39,22 +39,24 @@ const globalScope = globalThis as unknown as {
 };
 
 async function pickDue(key: ReminderKey): Promise<DueRow[]> {
-  // Ventana relativa a `now()`:
-  //   24h → [+22h, +25h]   (3h de tolerancia: si scheduled_at es exactamente
-  //                          en 24h, cae al tick que va de 22h..25h)
-  //   2h  → [+1.5h, +2.5h] (1h de tolerancia)
-  const [lowerHours, upperHours] = key === "24h" ? [22, 25] : [1.5, 2.5];
+  // Ventana relativa a `now()` expresada SIEMPRE en minutos para poder usar
+  // `make_interval(mins => int)`. La variante `hours =>` solo acepta int (no
+  // double precision), así que 1.5h se expresa como 90 min.
+  //   24h  → [22h, 25h]    = [1320, 1500] min
+  //   2h   → [1.5h, 2.5h]  = [90, 150]    min
+  const [lowerMin, upperMin] = key === "24h" ? [22 * 60, 25 * 60] : [90, 150];
+
   const r = await query<DueRow>(
     `SELECT id, owner_name, owner_phone, plate, location, scheduled_at, org_id
        FROM appointments
       WHERE status = 'scheduled'
         AND owner_phone <> ''
-        AND scheduled_at BETWEEN now() + ($1 || ' hours')::interval
-                             AND now() + ($2 || ' hours')::interval
+        AND scheduled_at BETWEEN now() + make_interval(mins => $1::int)
+                             AND now() + make_interval(mins => $2::int)
         AND NOT (reminders_sent ? $3)
       ORDER BY scheduled_at ASC
       LIMIT 50`,
-    [String(lowerHours), String(upperHours), key],
+    [lowerMin, upperMin, key],
   );
   return r.rows;
 }
@@ -71,18 +73,21 @@ async function markSent(id: string, key: ReminderKey): Promise<void> {
 }
 
 async function processOne(row: DueRow, key: ReminderKey): Promise<void> {
+  const scheduledAtISO =
+    typeof row.scheduled_at === "string"
+      ? row.scheduled_at
+      : row.scheduled_at.toISOString();
+
   notifyClientAppointmentReminder({
     clientPhone: row.owner_phone,
     ownerName: row.owner_name,
     plate: row.plate,
     location: row.location,
-    scheduledAtISO:
-      typeof row.scheduled_at === "string"
-        ? row.scheduled_at
-        : row.scheduled_at.toISOString(),
+    scheduledAtISO,
     when: key,
     orgId: row.org_id,
   });
+
   await markSent(row.id, key);
 }
 
@@ -93,22 +98,19 @@ export async function processDueReminders(): Promise<{
   let sent24h = 0;
   let sent2h = 0;
   try {
-    const due24 = await pickDue("24h");
-    for (const row of due24) {
-      try {
-        await processOne(row, "24h");
-        sent24h++;
-      } catch (err) {
-        console.error(`[wa-reminders] 24h appt=${row.id} falló:`, (err as Error).message);
-      }
-    }
-    const due2 = await pickDue("2h");
-    for (const row of due2) {
-      try {
-        await processOne(row, "2h");
-        sent2h++;
-      } catch (err) {
-        console.error(`[wa-reminders] 2h appt=${row.id} falló:`, (err as Error).message);
+    for (const key of ["24h", "2h"] as const) {
+      const due = await pickDue(key);
+      for (const row of due) {
+        try {
+          await processOne(row, key);
+          if (key === "24h") sent24h++;
+          else sent2h++;
+        } catch (err) {
+          console.error(
+            `[wa-reminders] ${key} appt=${row.id} falló:`,
+            (err as Error).message,
+          );
+        }
       }
     }
   } catch (err) {
@@ -124,13 +126,16 @@ export async function processDueReminders(): Promise<{
  */
 export function startReminderLoop(): void {
   if (globalScope.__peritoReminderTimer) return;
-  // Primer tick a los 30s del boot (para no chocar con la auto-reconexión de
-  // WA, que también arranca en boot), después cada INTERVAL_MS.
-  setTimeout(() => {
+  // Asignamos el setTimeout al timer global ANTES de esperar los 30s, no
+  // después. Si no, varias llamadas dentro de la ventana de boot pasaban el
+  // guard y armaban N timers (y N logs).
+  globalScope.__peritoReminderTimer = setTimeout(() => {
     void processDueReminders();
     globalScope.__peritoReminderTimer = setInterval(() => {
       void processDueReminders();
     }, INTERVAL_MS);
   }, 30 * 1000);
-  console.log("[wa-reminders] loop programado (cada 10 min)");
+  console.log(
+    `[wa-reminders] loop programado (cada ${INTERVAL_MS / 1000}s)`,
+  );
 }

@@ -1,7 +1,11 @@
 import { NextResponse } from "next/server";
 
 import { requireUser } from "@/lib/server/auth";
-import { autoConnectIfPersisted, getWhatsAppStatus } from "@/lib/server/whatsapp";
+import {
+  ADMIN_WA_ORG,
+  autoConnectIfPersisted,
+  getWhatsAppStatus,
+} from "@/lib/server/whatsapp";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -39,15 +43,19 @@ export async function GET() {
   // orgs sin necesidad de QR. No bloqueamos: corre en background.
   await autoConnectIfPersisted().catch(() => {});
 
-  if (!user.orgId) {
+  // Admin sin org usa el tenant sentinel para tener su propio número WA;
+  // así puede hacer soporte/QA y procesar peritajes huérfanos.
+  const orgId =
+    user.orgId ?? (user.role === "admin" ? ADMIN_WA_ORG : null);
+  if (!orgId) {
     return NextResponse.json({
       status: "disconnected",
       phone: null,
       qrDataUrl: null,
       connectedAt: null,
-      lastError: "admin sin org seleccionada",
+      lastError: "sin org seleccionada",
       queueSize: 0,
     });
   }
-  return NextResponse.json(getWhatsAppStatus(user.orgId));
+  return NextResponse.json(getWhatsAppStatus(orgId));
 }

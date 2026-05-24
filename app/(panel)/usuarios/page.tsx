@@ -15,6 +15,11 @@ export default async function UsuariosPage() {
   if (user.role === "employee") {
     redirect("/dashboard");
   }
+  // Para admin esta sección no aplica — su flujo de gestión es /clientes,
+  // y desde el detalle de cada empresa ve a sus empleados.
+  if (user.role === "admin") {
+    redirect("/clientes");
+  }
   return (
     <UsuariosClient
       initialUsers={await listUsers(user)}

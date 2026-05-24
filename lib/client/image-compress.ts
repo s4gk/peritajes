@@ -155,3 +155,41 @@ export async function compressImage(
     mime: "image/jpeg",
   };
 }
+
+/**
+ * Devuelve un % de uso de la cuota de almacenamiento del browser, o null si
+ * el API no está disponible (Safari < 16, browsers viejos). Útil para alertar
+ * al perito cuando se acerca al límite antes de petar con QuotaExceededError.
+ */
+export async function getStorageUsagePct(): Promise<number | null> {
+  if (typeof navigator === "undefined") return null;
+  if (!navigator.storage || !navigator.storage.estimate) return null;
+  try {
+    const est = await navigator.storage.estimate();
+    if (!est.quota || !est.usage) return null;
+    return Math.round((est.usage / est.quota) * 100);
+  } catch {
+    return null;
+  }
+}
+
+/** Estimate detallado: bytes usados, cuota total, pct. null si no disponible. */
+export async function getStorageEstimate(): Promise<{
+  usage: number;
+  quota: number;
+  pct: number;
+} | null> {
+  if (typeof navigator === "undefined") return null;
+  if (!navigator.storage || !navigator.storage.estimate) return null;
+  try {
+    const est = await navigator.storage.estimate();
+    if (!est.quota || !est.usage) return null;
+    return {
+      usage: est.usage,
+      quota: est.quota,
+      pct: Math.round((est.usage / est.quota) * 100),
+    };
+  } catch {
+    return null;
+  }
+}

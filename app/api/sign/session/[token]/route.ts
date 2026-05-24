@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 
+import { getInspectionServer } from "@/lib/server/inspections";
 import { getSession, submitSignature } from "@/lib/sign-sessions";
+import { notifyPeritoSignatureReceived } from "@/lib/server/whatsapp-notifications";
 
 export const runtime = "nodejs";
 
@@ -39,5 +41,30 @@ export async function POST(request: Request, { params }: Params) {
   if (!session) {
     return NextResponse.json({ error: "expired" }, { status: 404 });
   }
+
+  // Si la firma vino del flow REMOTO (link WA, sin perito al lado), avisamos
+  // al perito asignado para que entre a finalizar. Fire-and-forget: cualquier
+  // fallo del WA no debe romper la firma del cliente.
+  if (session.mode === "remote" && session.inspectionId) {
+    void (async () => {
+      try {
+        const insp = await getInspectionServer(session.inspectionId!);
+        if (!insp) return;
+        await notifyPeritoSignatureReceived({
+          peritoUserId: insp.userId ?? null,
+          inspectionId: insp.id,
+          plate: insp.data?.vehicle?.plate ?? "",
+          ownerName: insp.data?.vehicle?.owner ?? "",
+          orgId: insp.orgId ?? null,
+        });
+      } catch (err) {
+        console.error(
+          "[sign] perito notify falló:",
+          (err as Error).message,
+        );
+      }
+    })();
+  }
+
   return NextResponse.json({ ok: true, signedAt: session.signedAt });
 }

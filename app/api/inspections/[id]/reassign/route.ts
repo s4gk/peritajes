@@ -113,7 +113,7 @@ export async function POST(
   }
   if (actor.role === "owner" && target.orgId !== actor.orgId) {
     return NextResponse.json(
-      { error: "Solo podés reasignar a usuarios de tu propio negocio." },
+      { error: "Solo puedes reasignar a usuarios de tu propio negocio." },
       { status: 403 },
     );
   }

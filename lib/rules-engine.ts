@@ -270,12 +270,15 @@ export function analyze(data: InspectionData): RiskReport {
     level = "medium";
   }
 
+  // Headline puramente descriptivo: el perito reporta hallazgos, NO opina sobre
+  // riesgo ni recomienda comprar/no comprar. Esa interpretación la hace la
+  // aseguradora o el cliente con los datos del peritaje.
   const headline =
     level === "high"
-      ? "Riesgo alto — se recomienda intervención previa a la compra"
+      ? "Hallazgos críticos detectados en la inspección"
       : level === "medium"
-        ? "Riesgo moderado — atender observaciones"
-        : "Riesgo bajo — vehículo en condiciones aceptables";
+        ? "Hallazgos relevantes detectados en la inspección"
+        : "Inspección sin hallazgos críticos";
 
   const conditionSummary =
     counters.structuralHits > 0

@@ -110,7 +110,7 @@ export async function DELETE(
     return NextResponse.json(
       {
         error:
-          "Solo el administrador puede eliminar citas. Cancelala desde la cita si querés sacarla del calendario.",
+          "Solo el administrador puede eliminar citas. Cancélala desde la cita si quieres sacarla del calendario.",
       },
       { status: 403 },
     );

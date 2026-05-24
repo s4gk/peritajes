@@ -1,3 +1,6 @@
+import { existsSync } from "node:fs";
+import path from "node:path";
+
 import { buildDocumentNumber, getCompanyBranding, type CompanyBranding } from "./company";
 import {
   activeSectionsFor,
@@ -433,6 +436,7 @@ function renderSectionDualTable(
   section: InspectionSectionDef,
   data: Record<string, InspectionEntry>,
   sectionHealth?: SectionHealth,
+  sectionId?: SectionId,
 ): string {
   type Row = {
     label: string;
@@ -537,14 +541,74 @@ function renderSectionDualTable(
   // Los detalles de hallazgos (con notas/fotos) ya no se renderizan acá —
   // se consolidan al final del documento en renderAllFindingsDetail para que
   // el PDF tenga primero el resumen tabular y luego el dossier completo.
+  const refImage = sectionId ? sectionReferenceImage(sectionId) : "";
+
   return `
     <section class="docs-section proc-section">
       ${headingHtml}
+      ${refImage}
       ${heroBlock}
       ${tablesBlock}
     </section>
   `;
 }
+
+/**
+ * Si `public/section-refs/<sectionId>.png|jpg` existe, devuelve el HTML
+ * para mostrar esa imagen al inicio de la sección del PDF. Si no, devuelve
+ * string vacío y la sección se renderiza sin imagen. El check de archivo es
+ * sincrónico (existsSync) — barato porque solo corre una vez por sección
+ * del PDF, y los archivos viven en `public/` del bundle.
+ *
+ * La imagen se referencia por ruta `/section-refs/...` que Puppeteer
+ * descarga del mismo origin durante el render.
+ */
+function sectionReferenceImage(sectionId: SectionId): string {
+  const refUrl = SECTION_REF_URL_BY_ID[sectionId];
+  if (!refUrl) return "";
+  return `
+    <figure class="section-ref">
+      <img src="${refUrl}" alt="Referencia visual: ${escapeHtml(sectionId)}" />
+    </figure>
+  `;
+}
+
+/**
+ * Map sectionId → URL pública del archivo en `public/section-refs/`.
+ *
+ * El chequeo se hace UNA VEZ al cargar el módulo (en boot del server) en vez
+ * de en cada render: existsSync es barato pero el render del PDF llama a
+ * sectionReferenceImage por cada sección, y multiplicar I/O ahí no aporta.
+ * Si el operador agrega un archivo nuevo, hay que reiniciar pm2 para que
+ * lo detecte — trade-off aceptable porque las imágenes de referencia se
+ * cambian rara vez.
+ */
+const SECTION_REF_DIR = path.join(process.cwd(), "public", "section-refs");
+const SECTION_REF_IDS: SectionId[] = [
+  "bodywork",
+  "chassis",
+  "suspension",
+  "engine",
+  "electrical",
+  "leaks",
+  "comfort",
+  "roadTest",
+  "tires",
+  "accessories",
+];
+const SECTION_REF_URL_BY_ID: Partial<Record<SectionId, string>> = (() => {
+  const out: Partial<Record<SectionId, string>> = {};
+  for (const id of SECTION_REF_IDS) {
+    for (const ext of ["png", "jpg", "jpeg", "webp"]) {
+      const file = path.join(SECTION_REF_DIR, `${id}.${ext}`);
+      if (existsSync(file)) {
+        out[id] = `/section-refs/${id}.${ext}`;
+        break;
+      }
+    }
+  }
+  return out;
+})();
 
 /**
  * Detalle consolidado de hallazgos: recorre todas las secciones, junta los
@@ -1512,7 +1576,9 @@ export function renderReportHtml(
     reportNumber?: string | null;
   },
 ): string {
-  const mode: PdfMode = options?.mode ?? "executive";
+  // `options.mode` se acepta en el tipo por compatibilidad con callers
+  // existentes, pero ya no diferencia el render: ejecutivo y detallado
+  // producen el mismo PDF (incluyendo fotos obligatorias y documentos).
   const v = data.vehicle;
   const brand = options?.branding ?? getCompanyBranding();
   const inspectorSignatureDataUrl = options?.inspectorSignatureDataUrl ?? null;
@@ -1610,6 +1676,7 @@ export function renderReportHtml(
       s.def,
       s.data,
       health.bySection[s.sectionId],
+      s.sectionId,
     );
   };
 
@@ -2290,6 +2357,26 @@ export function renderReportHtml(
   /* Sección 4+ — Procedimiento (hallazgos, secciones de inspección, llantas, accesorios) */
   .proc-section { margin-top: 8mm; }
   .proc-section .section-h { margin-top: 0; }
+
+  /* Imagen de referencia educativa al inicio de cada sección. Se rellena
+     desde public/section-refs/<sectionId>.{png,jpg,jpeg,webp}; si el operador
+     no subió una para esa sección, el bloque no se renderiza. */
+  .section-ref {
+    margin: 3mm 0 4mm;
+    padding: 0;
+    text-align: center;
+    page-break-inside: avoid;
+    break-inside: avoid;
+  }
+  .section-ref img {
+    max-width: 100%;
+    max-height: 55mm;
+    object-fit: contain;
+    border: 1px solid #e2e8f0;
+    border-radius: 4pt;
+    background: #f8fafc;
+  }
+
   .proc-hero {
     display: flex;
     align-items: center;
@@ -2721,10 +2808,16 @@ export function renderReportHtml(
   .avoid-break { page-break-inside: avoid; }
   .page-break { page-break-before: always; }
 
-  /* Indivisible blocks: never split these mid-page */
+  /* Indivisible blocks: never split these mid-page.
+     .proc-section: cada sección del recorrido (Carrocería, Interior delantero,
+     etc.) intenta caber entera en una página — evita que la tabla quede
+     cortada por un page-break a la mitad. Si una sección no entra en una
+     hoja (Carrocería con muchos ítems), el motor de impresión ignora la
+     regla y la rompe igual, que sigue siendo el comportamiento aceptable. */
+  .proc-section,
   .proc-finding,
   .sig-block,
-  .conclusion { page-break-inside: avoid; }
+  .conclusion { page-break-inside: avoid; break-inside: avoid; }
   /* Avoid orphan headings (a h2 stranded at the bottom of a page) */
   h2, h3, .section-h { page-break-after: avoid; }
 
@@ -2868,7 +2961,6 @@ export function renderReportHtml(
             <div class="spec-cell"><span class="label">Tipo de caja</span><span class="value">${escapeHtml(transmissionLabel(v.transmission))}</span></div>
             <div class="spec-cell"><span class="label">Cilindraje</span><span class="value">${v.cylinderCapacity ? `${escapeHtml(v.cylinderCapacity)} cc` : "—"}</span></div>
             <div class="spec-cell"><span class="label">Combustible</span><span class="value">${escapeHtml(fuelLabel(v.fuel))}</span></div>
-            <div class="spec-cell"><span class="label">Pintura</span><span class="value">${esc(v.paintCondition)}</span></div>
             <div class="spec-cell"><span class="label">Servicio</span><span class="value">${esc(v.serviceType)}</span></div>
             <div class="spec-cell"><span class="label">Kilometraje</span><span class="value">${v.mileage ? `${escapeHtml(v.mileage)} km` : "—"}</span></div>
             <div class="spec-cell"><span class="label">Color</span><span class="value">${esc(v.color)}</span></div>
@@ -2890,23 +2982,16 @@ export function renderReportHtml(
   ${renderFindingsSummary(report, pillarReport, heading("Hallazgos del peritaje"))}
 
   <!-- DETAILED SECTIONS -->
-  ${
-    mode === "executive"
-      ? `
-  ${sections.map(renderOneSection).join("")}
-
-  ${showTires ? renderTires(data, heading("Llantas")) : ""}
-
-  ${showAccessories ? renderAccessories(data, heading("Accesorios")) : ""}
-  `
-      : `
   ${sections.map(renderOneSection).join("")}
 
   ${showTires ? renderTires(data, heading("Llantas")) : ""}
 
   ${showAccessories ? renderAccessories(data, heading("Accesorios")) : ""}
 
-  <!-- EVIDENCE -->
+  <!-- EVIDENCE: fotos obligatorias y tarjeta de propiedad son evidencia
+       requerida del peritaje. Antes este bloque vivía solo en el brazo
+       detailed del ternario y el PDF oficial (que rendereaba en modo
+       executive por default) salía sin las fotos. -->
   <section class="evidence-section" style="margin-top:10pt;">
     ${heading("Evidencia fotográfica")}
     ${(() => {
@@ -2925,8 +3010,6 @@ export function renderReportHtml(
         : `<p class="muted">No se registraron fotografías.</p>`;
     })()}
   </section>
-  `
-  }
 
   <!-- CONCLUSION -->
   <section style="margin-top:10pt;">

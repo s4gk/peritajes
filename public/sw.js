@@ -18,7 +18,7 @@
 // dispositivos (después de cambios grandes en el bundle, p.ej. reemplazo de
 // Gemini OCR por Tesseract). En `activate` borramos los caches que no estén
 // en la versión actual, así los chunks viejos se botan.
-const VERSION = "v6";
+const VERSION = "v8";
 const STATIC_CACHE = `perito-static-${VERSION}`;
 const RUNTIME_CACHE = `perito-runtime-${VERSION}`;
 const API_CACHE = `perito-api-${VERSION}`;
@@ -48,6 +48,19 @@ const PRECACHE_URLS = [
   "/icons/apple-touch-icon.png",
 ];
 
+// Rutas de navegación que intentamos precachear en install pero que pueden
+// fallar (307 a /login si no hay sesión, 500 si el server está reiniciándose).
+// El install no se cae si fallan — el SW se instala igual, y el primer fetch
+// con red cachea la página real para futuros offlines. Pero si el perito ya
+// instaló la PWA con sesión activa, esto cubre el caso "abro la app por
+// primera vez sin red apenas instalada".
+const PRECACHE_NAVIGATIONS = [
+  "/dashboard",
+  "/intake",
+  "/peritajes",
+  "/agenda",
+];
+
 self.addEventListener("install", (event) => {
   event.waitUntil(
     (async () => {
@@ -60,6 +73,28 @@ self.addEventListener("install", (event) => {
             await cache.add(url);
           } catch {
             /* ignore */
+          }
+        }),
+      );
+      // Pre-cache best-effort de las navegaciones más importantes. Usamos un
+      // GET con credentials:include para enviar la cookie de sesión y traer
+      // el HTML autenticado (no el 307 a /login). Si el server devuelve algo
+      // distinto de 200, no lo metemos al cache — el runtime se encargará
+      // cuando el perito visite la ruta con red. Esto reduce drásticamente
+      // el caso "instalé y abro offline → pantalla blanca".
+      const runtime = await caches.open(RUNTIME_CACHE);
+      await Promise.all(
+        PRECACHE_NAVIGATIONS.map(async (url) => {
+          try {
+            const res = await fetch(url, {
+              credentials: "include",
+              redirect: "manual",
+            });
+            if (res.ok && res.type !== "opaqueredirect") {
+              await runtime.put(url, res.clone());
+            }
+          } catch {
+            /* sin red durante install — el runtime se encarga después */
           }
         }),
       );
@@ -93,6 +128,75 @@ self.addEventListener("message", (event) => {
   if (event.data && event.data.type === "SKIP_WAITING") {
     self.skipWaiting();
   }
+});
+
+/* -------------------------------------------------------------------------
+ * Web Push
+ *
+ * El server llama `webpush.sendNotification(sub, payloadJSON)`. El payload
+ * es JSON con { title, body, url, tag, icon }. Lo parseamos defensivamente:
+ * si no es JSON válido (por ejemplo push de prueba sin payload), mostramos
+ * una notificación genérica.
+ *
+ * `notificationclick` decide qué pestaña enfocar / abrir cuando el user
+ * tappea la notif: si hay una ventana de la PWA abierta, la enfoca y navega
+ * a `url`; si no, abre una nueva.
+ * --------------------------------------------------------------------- */
+self.addEventListener("push", (event) => {
+  let data = { title: "Peritajes del Llano", body: "Tienes una notificación nueva." };
+  if (event.data) {
+    try {
+      const parsed = event.data.json();
+      data = { ...data, ...parsed };
+    } catch {
+      // Push sin payload JSON — usamos defaults.
+      const text = event.data.text();
+      if (text) data.body = text;
+    }
+  }
+  const options = {
+    body: data.body,
+    icon: data.icon || "/icons/icon-192.png",
+    badge: "/icons/favicon-32.png",
+    tag: data.tag || undefined,
+    data: { url: data.url || "/dashboard" },
+    // En iOS 16.4+ requireInteraction es ignorado pero no daña; en Android
+    // mantiene la notif visible hasta que el user la atienda.
+    requireInteraction: false,
+  };
+  event.waitUntil(self.registration.showNotification(data.title, options));
+});
+
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  const targetUrl = (event.notification.data && event.notification.data.url) || "/dashboard";
+  event.waitUntil(
+    (async () => {
+      const clientsList = await self.clients.matchAll({
+        type: "window",
+        includeUncontrolled: true,
+      });
+      // Si ya hay una ventana abierta en cualquier ruta del panel, la
+      // enfocamos y la navegamos al targetUrl en vez de abrir una pestaña
+      // nueva — evita acumular tabs duplicadas.
+      for (const client of clientsList) {
+        if ("focus" in client) {
+          await client.focus();
+          if ("navigate" in client) {
+            try {
+              await client.navigate(targetUrl);
+            } catch {
+              /* ignore — algunas combinaciones no permiten navigate */
+            }
+          }
+          return;
+        }
+      }
+      if (self.clients.openWindow) {
+        await self.clients.openWindow(targetUrl);
+      }
+    })(),
+  );
 });
 
 function isStaticAsset(url) {
@@ -380,12 +484,54 @@ self.addEventListener("sync", (event) => {
   }
 });
 
+// Web Share Target: el manifest declara `share_target.action = /intake` con
+// method POST + multipart. Cuando el user comparte una foto desde la cámara
+// nativa hacia la PWA, el browser dispara un POST a /intake con las fotos
+// en FormData. Lo interceptamos acá: leemos las fotos, las guardamos en un
+// Cache temporal y redirigimos a /intake?shared=1 para que el cliente las
+// recoja y arme el peritaje. Sin este handler, Next.js recibe un POST que
+// no espera y devuelve 405.
+const SHARE_CACHE = "perito-share-target";
+async function handleShareTarget(request) {
+  const formData = await request.formData().catch(() => null);
+  if (!formData) {
+    return Response.redirect("/intake", 303);
+  }
+  const photos = formData.getAll("photos").filter((f) => f && f instanceof Blob);
+  const cache = await caches.open(SHARE_CACHE);
+  // Limpiamos shares previos para no acumular basura.
+  const oldKeys = await cache.keys();
+  await Promise.all(oldKeys.map((k) => cache.delete(k)));
+  // Guardamos cada foto bajo /__shared/N con su content-type para que el
+  // cliente la lea como Blob y la convierta a dataURL.
+  for (let i = 0; i < photos.length; i++) {
+    const blob = photos[i];
+    const headers = new Headers();
+    headers.set("content-type", blob.type || "image/jpeg");
+    await cache.put(
+      `/__shared/${i}`,
+      new Response(blob, { headers }),
+    );
+  }
+  return Response.redirect("/intake?shared=1", 303);
+}
+
 self.addEventListener("fetch", (event) => {
   const req = event.request;
+  const url = new URL(req.url);
+  // Share target: POST /intake con multipart. Lo interceptamos antes del
+  // chequeo de método porque sí debe responderse.
+  if (
+    req.method === "POST" &&
+    url.pathname === "/intake" &&
+    url.origin === self.location.origin
+  ) {
+    event.respondWith(handleShareTarget(req));
+    return;
+  }
   // Solo manejamos GET; el resto pasa directo (los POST/PUT/DELETE viven en
   // la queue de IDB).
   if (req.method !== "GET") return;
-  const url = new URL(req.url);
   // Solo same-origin. Recursos externos (Inter font, etc.) se dejan al browser.
   if (url.origin !== self.location.origin) return;
 

@@ -4,7 +4,6 @@ import type { StoredInspection } from "@/lib/types";
 
 import { apiFetch } from "./api-client";
 import {
-  idbCountMutations,
   idbListMutations,
   idbRemoveMutation,
   idbUpdateMutation,
@@ -86,6 +85,51 @@ export function subscribeSync(fn: (state: SyncState) => void): () => void {
 
 export function getSyncState(): SyncState {
   return lastState;
+}
+
+/**
+ * Borra del IDB todas las mutaciones que pasaron MAX_ATTEMPTS. Lo usa el
+ * sidebar cuando el perito aprieta "Limpiar fallidos" — caso típico: peritajes
+ * fantasma de versiones viejas que el server rechaza con 400 (schema
+ * mismatch). Devuelve cuántas se borraron para reportar al user.
+ */
+export async function clearFailedMutations(): Promise<{ removed: number }> {
+  const list = await idbListMutations();
+  let removed = 0;
+  for (const m of list) {
+    if (m.attempts >= MAX_ATTEMPTS && m.id !== undefined) {
+      await idbRemoveMutation(m.id);
+      removed += 1;
+    }
+  }
+  await refreshPending();
+  return { removed };
+}
+
+/**
+ * Reinicia el contador de intentos de las mutaciones fallidas y fuerza un
+ * flush. Útil si la causa del fail fue transitoria (server caído, dominio
+ * cambió) y ahora podría pasar.
+ */
+export async function retryFailedMutations(): Promise<{ retried: number }> {
+  const list = await idbListMutations();
+  let retried = 0;
+  for (const m of list) {
+    if (m.attempts >= MAX_ATTEMPTS) {
+      await idbUpdateMutation({
+        ...m,
+        attempts: 0,
+        lastError: undefined,
+        lastAttemptAt: undefined,
+      });
+      retried += 1;
+    }
+  }
+  await refreshPending();
+  if (retried > 0 && typeof navigator !== "undefined" && navigator.onLine) {
+    void flushSyncQueue();
+  }
+  return { retried };
 }
 
 /** Empuja la cuenta actual de mutations al estado público, incluyendo

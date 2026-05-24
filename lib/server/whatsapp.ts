@@ -34,6 +34,11 @@ type QueuedTask = {
    *  duplicados por reintentos de UI o reconexión del socket. */
   dedupKey: string | null;
   run: () => Promise<void>;
+  /** Hook que el caller usa para persistir el resultado del envío. Lo invoca
+   *  pumpQueue después de ejecutar `run()` con `ok` o `error`. Para mantener
+   *  whatsapp.ts agnóstico de la DB, los errores del callback solo se logean
+   *  (no rompen el pump). */
+  onResult?: (result: { ok: boolean; error?: string }) => void | Promise<void>;
 };
 
 type WhatsAppState = {
@@ -98,6 +103,38 @@ function getOrCreateState(orgId: string): WhatsAppState {
 }
 
 const AUTH_ROOT = path.resolve(process.cwd(), ".wa-auth");
+
+/**
+ * Tenant especial para el admin (Vestel/soporte). Permite que un usuario con
+ * `role === "admin"` conecte SU PROPIO número WA — útil para debug, soporte
+ * técnico y para procesar peritajes huérfanos sin `org_id` (creados antes de
+ * la fase multi-tenant). El admin queda como un "tenant más" desde el punto
+ * de vista del singleton: socket aislado, cola propia, auth en
+ * `.wa-auth/__admin__/`.
+ *
+ * El sentinel respeta el regex de `authDirFor` (solo `[A-Za-z0-9_-]`), así
+ * que no necesita reglas especiales en path-traversal.
+ */
+export const ADMIN_WA_ORG = "__admin__";
+
+/**
+ * Devuelve el orgId que debe usarse para operaciones WA cuando hay un actor
+ * (admin u owner) y opcionalmente un peritaje involucrado. Prioridad:
+ *   1. orgId del peritaje (peritajes nuevos tienen org_id de su negocio).
+ *   2. orgId del actor (owner/employee operando sobre un peritaje legacy sin
+ *      org persistido, pero el actor sí tiene una asignada).
+ *   3. Sentinel del admin si el actor es admin (peritaje huérfano + admin).
+ *   4. null — no hay socket que usar; el caller decide skip o error.
+ */
+export function resolveWaOrgId(
+  actor: { role: string; orgId: string | null },
+  inspectionOrgId?: string | null,
+): string | null {
+  if (inspectionOrgId) return inspectionOrgId;
+  if (actor.orgId) return actor.orgId;
+  if (actor.role === "admin") return ADMIN_WA_ORG;
+  return null;
+}
 
 function authDirFor(orgId: string): string {
   // Sanitizamos el orgId — solo alfanuméricos + guiones. Defense in depth
@@ -234,6 +271,44 @@ export async function connectWhatsApp(
   return { status: state.status, qrDataUrl: state.qrDataUrl };
 }
 
+/**
+ * Manda un texto de prueba al PROPIO número conectado en la org. Sirve como
+ * smoke test on-demand desde el panel `/whatsapp` — el dueño aprieta "enviar
+ * mensaje de prueba" después de escanear el QR y debe ver el texto llegar a
+ * su WhatsApp en segundos. Si no llega, la vinculación quedó incompleta.
+ *
+ * Decisión: NO lo hacemos automáticamente en `connection === "open"`. Probamos
+ * eso y un envío self-to-self justo después del pairing en Baileys 7.0.0-rc11
+ * dejó la sesión Signal en estado raro ("Bad MAC", "closed session") y forzó
+ * reconexiones interminables. Manualizándolo evitamos el race con el sync
+ * post-pairing.
+ */
+export function sendSelfTestMessage(orgId: string): {
+  accepted: boolean;
+  reason?: string;
+  phone: string | null;
+} {
+  const state = getOrCreateState(orgId);
+  if (state.status !== "connected" || !state.phone) {
+    return {
+      accepted: false,
+      reason: "WhatsApp no está conectado",
+      phone: state.phone,
+    };
+  }
+  const text = [
+    "✅ *Prueba de Perito*",
+    "",
+    "Si recibes este mensaje, tu WhatsApp está conectado correctamente.",
+    "Los envíos automáticos al cliente (link de firma, PDF, recordatorios) van a funcionar.",
+  ].join("\n");
+  const r = sendText(orgId, state.phone, text, {
+    // No dedupKey → permitimos múltiples pruebas; el botón es manual.
+    label: `test-self to ${state.phone}`,
+  });
+  return { ...r, phone: state.phone };
+}
+
 export async function logoutWhatsApp(orgId: string): Promise<void> {
   const state = getOrCreateState(orgId);
   const sock = state.socket as
@@ -269,15 +344,25 @@ export function getWhatsAppStatus(orgId: string) {
 /**
  * Normaliza un teléfono a JID de WhatsApp.
  *
- * Acepta entradas tipo "+57 310 555 1234", "3105551234", "57 310 555 1234".
- * Si el número no trae código de país, asume Colombia (+57) — el uso es
- * peritos y clientes locales.
+ * Solo acepta celulares colombianos válidos: 10 dígitos empezando en 3
+ * (`3XXXXXXXXX`), opcionalmente con prefijo `+57`/`57`. Si la entrada no
+ * encaja, lanzamos un error claro — preferible a que Baileys haga el send a
+ * un JID inválido y nuestro audit registre `sent: true` sin que el mensaje
+ * jamás llegue (lo vimos pasar con `+57313880739`, 9 dígitos locales).
  */
 function jidFor(phone: string): string {
   const digits = phone.replace(/\D/g, "");
   if (!digits) throw new Error("Teléfono vacío");
-  const withCc = digits.length === 10 && digits.startsWith("3") ? `57${digits}` : digits;
-  if (withCc.length < 10) throw new Error("Teléfono demasiado corto");
+  let withCc: string;
+  if (digits.length === 10 && digits.startsWith("3")) {
+    withCc = `57${digits}`;
+  } else if (digits.length === 12 && digits.startsWith("573")) {
+    withCc = digits;
+  } else {
+    throw new Error(
+      `Teléfono inválido "${phone}": se espera celular colombiano de 10 dígitos empezando en 3 (con o sin prefijo +57).`,
+    );
+  }
   return `${withCc}@s.whatsapp.net`;
 }
 
@@ -296,13 +381,27 @@ async function pumpQueue(orgId: string): Promise<void> {
     while (state.queue.length > 0 && state.status === "connected") {
       const task = state.queue.shift();
       if (!task) break;
+      let runError: string | undefined;
       try {
         await task.run();
       } catch (err) {
+        runError = (err as Error).message;
         console.error(
           `[wa:${orgId}] envío "${task.label}" falló:`,
-          (err as Error).message,
+          runError,
         );
+      }
+      if (task.onResult) {
+        try {
+          await task.onResult(
+            runError ? { ok: false, error: runError } : { ok: true },
+          );
+        } catch (err) {
+          console.error(
+            `[wa:${orgId}] onResult de "${task.label}" tronó:`,
+            (err as Error).message,
+          );
+        }
       }
       const delay = 2_000 + Math.floor(Math.random() * 3_000);
       await new Promise((r) => setTimeout(r, delay));
@@ -336,10 +435,15 @@ type WaSocket = {
  * la misma key (en esta org), se descarta. La dedup es POR ORG — el mismo
  * key en orgs distintas son envíos independientes.
  */
+export type EnqueueResultHook = (result: {
+  ok: boolean;
+  error?: string;
+}) => void | Promise<void>;
+
 function enqueue(
   orgId: string,
   run: () => Promise<void>,
-  opts: { label: string; dedupKey?: string },
+  opts: { label: string; dedupKey?: string; onResult?: EnqueueResultHook },
 ): { accepted: boolean; reason?: string } {
   const state = getOrCreateState(orgId);
   const now = Date.now();
@@ -365,6 +469,7 @@ function enqueue(
     label: opts.label,
     dedupKey: opts.dedupKey ?? null,
     run,
+    onResult: opts.onResult,
   });
   void pumpQueue(orgId);
   return { accepted: true };
@@ -374,7 +479,7 @@ export function sendText(
   orgId: string,
   phone: string,
   text: string,
-  opts: { dedupKey?: string; label?: string } = {},
+  opts: { dedupKey?: string; label?: string; onResult?: EnqueueResultHook } = {},
 ): { accepted: boolean; reason?: string } {
   const jid = jidFor(phone);
   return enqueue(
@@ -383,7 +488,11 @@ export function sendText(
       const { socket } = ensureReady(orgId);
       await socket.sendMessage(jid, { text });
     },
-    { label: opts.label ?? `text to ${phone}`, dedupKey: opts.dedupKey },
+    {
+      label: opts.label ?? `text to ${phone}`,
+      dedupKey: opts.dedupKey,
+      onResult: opts.onResult,
+    },
   );
 }
 
@@ -397,6 +506,7 @@ export function sendDocument(
     mimetype?: string;
     dedupKey?: string;
     label?: string;
+    onResult?: EnqueueResultHook;
   } = {},
 ): { accepted: boolean; reason?: string } {
   const jid = jidFor(phone);
@@ -415,6 +525,7 @@ export function sendDocument(
     {
       label: options.label ?? `doc ${filename} to ${phone}`,
       dedupKey: options.dedupKey,
+      onResult: options.onResult,
     },
   );
 }

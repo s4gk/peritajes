@@ -138,15 +138,15 @@ export function UsuariosClient({
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="text-xl font-semibold tracking-tight sm:text-2xl">
-            Usuarios
+            Empleados
           </h1>
           <p className="text-sm text-muted-foreground">
-            {users.length} usuario{users.length === 1 ? "" : "s"} registrado
-            {users.length === 1 ? "" : "s"}.
+            {users.length} persona{users.length === 1 ? "" : "s"} en tu equipo
+            (te incluye).
           </p>
         </div>
         <Button onClick={() => setCreateOpen(true)} className="gap-1.5">
-          <Plus className="h-4 w-4" /> Nuevo usuario
+          <Plus className="h-4 w-4" /> Nuevo empleado
         </Button>
       </div>
 
@@ -164,10 +164,20 @@ export function UsuariosClient({
                     <div className="flex flex-wrap items-center gap-2">
                       <span className="font-medium">{u.fullName}</span>
                       <Badge
-                        variant={u.role === "admin" ? "warning" : "neutral"}
+                        variant={
+                          u.role === "admin"
+                            ? "warning"
+                            : u.role === "owner"
+                              ? "neutral"
+                              : "neutral"
+                        }
                         className="text-[10px]"
                       >
-                        {u.role === "admin" ? "Admin" : "Dueño"}
+                        {u.role === "admin"
+                          ? "Admin"
+                          : u.role === "owner"
+                            ? "Dueño"
+                            : "Empleado"}
                       </Badge>
                       {!u.active ? (
                         <Badge variant="danger" className="text-[10px]">
@@ -340,7 +350,7 @@ function CreateUserDialog({
   const [username, setUsername] = React.useState("");
   const [email, setEmail] = React.useState("");
   const [password, setPassword] = React.useState("");
-  const [role, setRole] = React.useState<"admin" | "owner" | "employee">("owner");
+  const [role, setRole] = React.useState<"admin" | "owner" | "employee">("employee");
   const [busy, setBusy] = React.useState(false);
 
   React.useEffect(() => {
@@ -349,7 +359,7 @@ function CreateUserDialog({
       setUsername("");
       setEmail("");
       setPassword("");
-      setRole("owner");
+      setRole("employee");
     }
   }, [open]);
 
@@ -364,7 +374,7 @@ function CreateUserDialog({
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data?.error || "Error");
-      toast.show({ title: "Usuario creado", variant: "success" });
+      toast.show({ title: "Empleado creado", variant: "success" });
       onCreated();
       onOpenChange(false);
     } catch (err) {
@@ -382,9 +392,10 @@ function CreateUserDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Nuevo usuario</DialogTitle>
+          <DialogTitle>Nuevo empleado</DialogTitle>
           <DialogDescription>
-            Crea una cuenta para que otra persona pueda ingresar al panel.
+            Crea una cuenta de empleado para tu negocio. Solo verá sus propios
+            peritajes y podrá cambiar la contraseña desde Mi cuenta.
           </DialogDescription>
         </DialogHeader>
         <form onSubmit={submit} className="space-y-4">
@@ -424,7 +435,7 @@ function CreateUserDialog({
                   </SelectContent>
                 </Select>
               ) : (
-                <Input value="Dueño" disabled />
+                <Input value="Empleado" disabled />
               )}
             </div>
           </div>

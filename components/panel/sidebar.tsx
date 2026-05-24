@@ -9,10 +9,13 @@ import {
   Calendar,
   Car,
   ClipboardList,
+  Contact,
   DatabaseBackup,
   LayoutDashboard,
   MessageCircle,
   ScrollText,
+  Settings,
+  Store,
   UserCircle,
   Users,
   X,
@@ -20,28 +23,42 @@ import {
 
 import { cn } from "@/lib/utils";
 
+import { SyncStatus } from "./sync-status";
+
 type NavItem = {
   href: string;
   label: string;
   icon: React.ComponentType<{ className?: string }>;
-  adminOnly?: boolean;
-  /** Si está marcado, lo ocultamos a employees (solo lo ven owner+admin).
-   *  Empresa, Usuarios, WhatsApp, Backup son cosa del dueño. */
-  ownerOnly?: boolean;
+  /** Roles que pueden ver este item. Si está vacío, lo ve todo el mundo. */
+  roles?: ReadonlyArray<"admin" | "owner" | "employee">;
 };
 
-const NAV: NavItem[] = [
+/** Operación diaria. El admin (Vestel) NO ve los items del dueño (Empresa,
+ *  Empleados, WhatsApp) porque su flujo es por /clientes; cuando necesita
+ *  entrar a la operación de una empresa puntual, lo hace desde ahí. */
+const NAV_MAIN: NavItem[] = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { href: "/agenda", label: "Agenda", icon: Calendar },
   { href: "/peritajes", label: "Peritajes", icon: ClipboardList },
   { href: "/vehiculos", label: "Vehículos", icon: Car },
-  { href: "/empresa", label: "Empresa", icon: Building2, ownerOnly: true },
-  { href: "/usuarios", label: "Usuarios", icon: Users, ownerOnly: true },
-  { href: "/whatsapp", label: "WhatsApp", icon: MessageCircle, ownerOnly: true },
-  { href: "/auditoria", label: "Auditoría", icon: ScrollText, adminOnly: true },
-  { href: "/backup", label: "Backup", icon: DatabaseBackup, ownerOnly: true },
+  { href: "/propietarios", label: "Propietarios", icon: Contact },
+  { href: "/empresa", label: "Empresa", icon: Building2, roles: ["owner"] },
+  { href: "/usuarios", label: "Empleados", icon: Users, roles: ["owner"] },
+  { href: "/whatsapp", label: "WhatsApp", icon: MessageCircle, roles: ["owner"] },
   { href: "/cuenta", label: "Mi cuenta", icon: UserCircle },
 ];
+
+/** Sección "Administrador" — solo el superuser técnico (Vestel) la ve. */
+const NAV_ADMIN: NavItem[] = [
+  { href: "/clientes", label: "Clientes", icon: Store, roles: ["admin"] },
+  { href: "/auditoria", label: "Auditoría", icon: ScrollText, roles: ["admin"] },
+  { href: "/backup", label: "Backup", icon: DatabaseBackup, roles: ["admin"] },
+  { href: "/admin/config", label: "Configuración", icon: Settings, roles: ["admin"] },
+];
+
+function visibleFor(role: "admin" | "owner" | "employee", items: NavItem[]): NavItem[] {
+  return items.filter((i) => !i.roles || i.roles.includes(role));
+}
 
 export type SidebarProps = {
   user: { fullName: string; username: string; role: "admin" | "owner" | "employee" };
@@ -51,11 +68,32 @@ export type SidebarProps = {
 
 export function Sidebar({ user, open, onClose }: SidebarProps) {
   const pathname = usePathname();
-  const items = NAV.filter((i) => {
-    if (i.adminOnly && user.role !== "admin") return false;
-    if (i.ownerOnly && user.role === "employee") return false;
-    return true;
-  });
+  const mainItems = visibleFor(user.role, NAV_MAIN);
+  const adminItems = visibleFor(user.role, NAV_ADMIN);
+
+  const renderItem = (item: NavItem) => {
+    const Icon = item.icon;
+    const active =
+      pathname === item.href ||
+      (item.href !== "/dashboard" && pathname.startsWith(item.href));
+    return (
+      <li key={item.href}>
+        <Link
+          href={item.href}
+          onClick={onClose}
+          className={cn(
+            "flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors",
+            active
+              ? "bg-primary text-primary-foreground"
+              : "text-muted-foreground hover:bg-muted hover:text-foreground",
+          )}
+        >
+          <Icon className="h-4 w-4" />
+          {item.label}
+        </Link>
+      </li>
+    );
+  };
 
   return (
     <>
@@ -98,34 +136,19 @@ export function Sidebar({ user, open, onClose }: SidebarProps) {
         </div>
 
         <nav className="flex-1 overflow-y-auto p-3">
-          <ul className="space-y-1">
-            {items.map((item) => {
-              const Icon = item.icon;
-              const active =
-                pathname === item.href ||
-                (item.href !== "/dashboard" && pathname.startsWith(item.href));
-              return (
-                <li key={item.href}>
-                  <Link
-                    href={item.href}
-                    onClick={onClose}
-                    className={cn(
-                      "flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors",
-                      active
-                        ? "bg-primary text-primary-foreground"
-                        : "text-muted-foreground hover:bg-muted hover:text-foreground",
-                    )}
-                  >
-                    <Icon className="h-4 w-4" />
-                    {item.label}
-                  </Link>
-                </li>
-              );
-            })}
-          </ul>
+          <ul className="space-y-1">{mainItems.map(renderItem)}</ul>
+          {adminItems.length > 0 && (
+            <>
+              <div className="mt-6 mb-2 px-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground/70">
+                Administrador
+              </div>
+              <ul className="space-y-1">{adminItems.map(renderItem)}</ul>
+            </>
+          )}
         </nav>
 
-        <div className="border-t p-3">
+        <div className="space-y-2 border-t p-3">
+          <SyncStatus />
           <div className="rounded-md bg-muted/40 px-3 py-2.5 text-xs">
             <div className="truncate font-medium text-foreground">
               {user.fullName}

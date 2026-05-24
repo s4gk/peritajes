@@ -6,6 +6,7 @@ import {
   createAppointment,
   listAppointmentsFor,
 } from "@/lib/server/appointments";
+import { upsertVehicleOwner } from "@/lib/server/vehicle-owners";
 import {
   notifyAssignedPerito,
   notifyClientAppointmentConfirmed,
@@ -92,6 +93,18 @@ export async function POST(req: Request) {
       scheduledAtISO: appt.scheduledAt,
       location: appt.location,
       orgId: appt.orgId,
+    });
+    // Fire-and-forget: ficha del propietario. La cita no es un peritaje
+    // todavía, así que no incrementamos inspections_count.
+    void upsertVehicleOwner({
+      orgId: appt.orgId,
+      fullName: appt.ownerName,
+      document: appt.ownerDocument,
+      phone: appt.ownerPhone,
+      createdBy: user.id,
+      incrementInspections: false,
+    }).catch((err) => {
+      console.error("[owners] upsert (appt) failed:", (err as Error).message);
     });
     return NextResponse.json({ appointment: appt });
   } catch (e) {

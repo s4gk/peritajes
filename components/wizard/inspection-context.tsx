@@ -15,7 +15,39 @@ import {
   initStore,
   saveInspectionData,
 } from "@/lib/inspections-store";
-import type { InspectionData, PeritajeKind, VehicleType } from "@/lib/types";
+import type {
+  CylinderEntry,
+  InspectionData,
+  InspectionEntry,
+  PeritajeKind,
+  VehicleType,
+} from "@/lib/types";
+import { defaultOkValueFor } from "@/lib/findings-catalog";
+
+/** Merge una sección stored con su base aplicando backfill: si el stored tiene
+ *  el item pero con `status` vacío (peritajes creados antes del default OK),
+ *  hereda el status del base — que ahora es "Bueno"/"Sin observaciones" según
+ *  el ItemKind. Si no, respeta el valor del stored. Sin este backfill, un
+ *  peritaje legacy se quedaba con todos los items en pendiente aunque
+ *  `emptySection()` ya los inicialice con OK. */
+function mergeSectionWithBackfill(
+  base: Record<string, InspectionEntry>,
+  stored: Record<string, InspectionEntry> | undefined,
+): Record<string, InspectionEntry> {
+  if (!stored) return { ...base };
+  const result: Record<string, InspectionEntry> = { ...base };
+  for (const key of Object.keys(stored)) {
+    const baseEntry = base[key];
+    const storedEntry = stored[key];
+    if (!storedEntry) continue;
+    result[key] = {
+      ...(baseEntry ?? { images: [] }),
+      ...storedEntry,
+      status: storedEntry.status || baseEntry?.status,
+    };
+  }
+  return result;
+}
 
 function hydrateData(stored: Partial<InspectionData> | undefined): InspectionData {
   const base = emptyInspection();
@@ -26,20 +58,25 @@ function hydrateData(stored: Partial<InspectionData> | undefined): InspectionDat
     s.vehicleType && s.vehicleType in VEHICLE_TYPES
       ? s.vehicleType
       : FALLBACK_VEHICLE_TYPE;
+  const mechanicalDefault = defaultOkValueFor("mechanical");
+  const engineCompression: CylinderEntry[] = Array.isArray(s.engineCompression)
+    ? s.engineCompression.map((c) => ({ ...c, status: c.status || mechanicalDefault }))
+    : base.engineCompression;
   return {
     ...base,
     ...s,
     kind,
     vehicleType,
     vehicle: { ...base.vehicle, ...(s.vehicle ?? {}) },
-    bodywork: { ...base.bodywork, ...(s.bodywork ?? {}) },
-    chassis: { ...base.chassis, ...(s.chassis ?? {}) },
-    suspension: { ...base.suspension, ...(s.suspension ?? {}) },
-    engine: { ...base.engine, ...(s.engine ?? {}) },
-    electrical: { ...base.electrical, ...(s.electrical ?? {}) },
-    leaks: { ...base.leaks, ...(s.leaks ?? {}) },
-    comfort: { ...base.comfort, ...(s.comfort ?? {}) },
-    roadTest: { ...base.roadTest, ...(s.roadTest ?? {}) },
+    bodywork: mergeSectionWithBackfill(base.bodywork, s.bodywork),
+    chassis: mergeSectionWithBackfill(base.chassis, s.chassis),
+    suspension: mergeSectionWithBackfill(base.suspension, s.suspension),
+    engine: mergeSectionWithBackfill(base.engine, s.engine),
+    electrical: mergeSectionWithBackfill(base.electrical, s.electrical),
+    leaks: mergeSectionWithBackfill(base.leaks, s.leaks),
+    comfort: mergeSectionWithBackfill(base.comfort, s.comfort),
+    roadTest: mergeSectionWithBackfill(base.roadTest, s.roadTest),
+    engineCompression,
     tires: { ...base.tires, ...(s.tires ?? {}) },
     extraPhotos: Array.isArray(s.extraPhotos) ? s.extraPhotos : [],
     mandatoryPhotos: {
@@ -88,6 +125,10 @@ export function InspectionProvider({ id, children }: Props) {
   const [lastSavedAt, setLastSavedAt] = React.useState<number | null>(null);
   const [reportNumber, setReportNumber] = React.useState<string | undefined>(undefined);
   const dirtyRef = React.useRef(false);
+  // True cuando el status "completed" ya quedó persistido (IDB + encolado).
+  // No lo derivamos de `data.status` porque eso bloquearía la save que
+  // transiciona draft → completed (la única forma de cerrar el peritaje).
+  const savedAsCompletedRef = React.useRef(false);
 
   // Load on mount / when id changes — ensure IDB-backed store is ready first.
   // El initStore() resuelve apenas IDB está cargado (instantáneo). Si la
@@ -148,15 +189,18 @@ export function InspectionProvider({ id, children }: Props) {
 
   const isReadOnly = data.status === "completed";
 
-  // Debounced persist with save-status indicator. Si el peritaje ya está
-  // finalizado no encolamos nada — el server rechazaría con 423 y solo
-  // generaríamos ruido en la sync queue.
+  // Debounced persist with save-status indicator. Una vez que el completed
+  // queda persistido marcamos `savedAsCompletedRef` y bloqueamos cualquier
+  // save posterior — el server rechazaría con 423 y solo generaríamos ruido
+  // en la sync queue.
   React.useEffect(() => {
     if (!isHydrated || notFound) return;
-    if (isReadOnly) return;
+    if (savedAsCompletedRef.current) return;
     if (!dirtyRef.current) {
-      // Initial render after hydration — no save needed
+      // Initial render after hydration — no save needed. Si ya viene
+      // finalizado del store, marcamos el ref para no volver a guardar.
       dirtyRef.current = true;
+      if (isReadOnly) savedAsCompletedRef.current = true;
       return;
     }
     setSaveStatus("pending");
@@ -164,6 +208,7 @@ export function InspectionProvider({ id, children }: Props) {
       setSaveStatus("saving");
       try {
         saveInspectionData(id, data);
+        if (data.status === "completed") savedAsCompletedRef.current = true;
         const now = Date.now();
         setLastSavedAt(now);
         setSaveStatus("saved");

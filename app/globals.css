@@ -148,7 +148,15 @@
   body {
     @apply bg-background text-foreground antialiased;
     font-feature-settings: "cv11", "ss01";
+    /* Safe-area en iOS standalone (PWA instalada). El status-bar-style
+     * black-translucent del manifest hace que el viewport quede DEBAJO del
+     * notch — sin estos paddings, el sidebar y los headers quedaban tapados
+     * en iPhones con notch. `padding-left/right` cubre orientación landscape
+     * donde el notch lateral come píxeles. */
+    padding-top: env(safe-area-inset-top);
     padding-bottom: env(safe-area-inset-bottom);
+    padding-left: env(safe-area-inset-left);
+    padding-right: env(safe-area-inset-right);
   }
 
   html {

@@ -20,7 +20,15 @@ function emptySection(sectionId: string): Record<string, InspectionEntry> {
   const acc: Record<string, InspectionEntry> = {};
   for (const group of section.groups) {
     for (const item of group.items) {
-      acc[item.id] = { status: undefined, notes: "", images: [] };
+      // Pre-rellenamos con el valor "OK" del catálogo (Bueno / Sin observaciones /
+      // Sin fugas según kind). El perito solo cambia los items que NO estén bien,
+      // ahorrando clicks. El auto-fill de section-step.tsx queda como no-op
+      // porque detecta items ya llenos y sale temprano.
+      acc[item.id] = {
+        status: defaultOkValueFor(item.kind),
+        notes: "",
+        images: [],
+      };
     }
   }
   return acc;
@@ -37,7 +45,7 @@ export function initialCylinders(count = MIN_CYLINDERS): CylinderEntry[] {
   return Array.from({ length: count }, (_, i) => ({
     id: `cyl-${i + 1}`,
     label: `Cilindro ${i + 1}`,
-    status: undefined,
+    status: defaultOkValueFor("mechanical"),
     notes: "",
     images: [],
   }));
@@ -58,7 +66,7 @@ export function ensureMinCylinders(
       return {
         id: `cyl-${n}`,
         label: `Cilindro ${n}`,
-        status: undefined,
+        status: defaultOkValueFor("mechanical"),
         notes: "",
         images: [],
       };

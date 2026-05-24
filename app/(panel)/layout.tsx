@@ -1,6 +1,8 @@
 import { redirect } from "next/navigation";
 
+import { ImpersonateBanner } from "@/components/panel/impersonate-banner";
 import { PanelShell } from "@/components/panel/panel-shell";
+import { PushSubscriber } from "@/components/shared/push-subscriber";
 import { countUsers, getCurrentUser } from "@/lib/server/auth";
 
 export const dynamic = "force-dynamic";
@@ -30,7 +32,11 @@ export default async function PanelLayout({
         orgId: user.orgId,
       }}
     >
+      {user.impersonatedBy && (
+        <ImpersonateBanner targetFullName={user.fullName} />
+      )}
       {children}
+      <PushSubscriber />
     </PanelShell>
   );
 }

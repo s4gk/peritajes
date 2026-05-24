@@ -50,6 +50,10 @@ export type User = {
   active: boolean;
   createdAt: string;
   lastLoginAt: string | null;
+  /** Si la sesión actual es un impersonate de admin, acá viene el user_id del
+   *  admin original. Permite al cliente mostrar el banner "Estás operando
+   *  como X" y al backend auditarlo. null en sesiones normales. */
+  impersonatedBy?: string | null;
 };
 
 type UserRow = {
@@ -414,11 +418,20 @@ export async function destroyExpiredSessions(): Promise<void> {
 }
 
 export async function getSessionUser(sessionId: string): Promise<User | null> {
-  const r = await query<UserRow & { s_expires_at: Date | string }>(
-    `SELECT u.*, s.expires_at AS s_expires_at
-     FROM sessions s
-     JOIN users u ON u.id = s.user_id
-     WHERE s.id = $1 AND u.active = TRUE`,
+  const r = await query<
+    UserRow & {
+      s_expires_at: Date | string;
+      org_active: boolean | null;
+      impersonated_by: string | null;
+    }
+  >(
+    `SELECT u.*, s.expires_at AS s_expires_at,
+            s.impersonated_by AS impersonated_by,
+            o.active AS org_active
+       FROM sessions s
+       JOIN users u ON u.id = s.user_id
+       LEFT JOIN organizations o ON o.id = u.org_id
+      WHERE s.id = $1 AND u.active = TRUE`,
     [sessionId],
   );
   const row = r.rows[0];
@@ -430,7 +443,76 @@ export async function getSessionUser(sessionId: string): Promise<User | null> {
     await destroySession(sessionId);
     return null;
   }
-  return rowToUser(row);
+  // Empresa suspendida: bloqueamos el acceso de todos sus users y limpiamos
+  // la sesión. Admin (org_id NULL) no se ve afectado — el LEFT JOIN devuelve
+  // org_active=NULL y dejamos pasar. Si la sesión es un impersonate de
+  // admin, tampoco bloqueamos (el admin necesita poder entrar a una org
+  // suspendida para diagnosticar).
+  if (row.org_id && row.org_active === false && !row.impersonated_by) {
+    await destroySession(sessionId);
+    return null;
+  }
+  const user = rowToUser(row);
+  if (row.impersonated_by) user.impersonatedBy = row.impersonated_by;
+  return user;
+}
+
+/** Crea una sesión "impersonate": el adminId actúa como targetUserId. La
+ *  sesión guarda original_session_id para poder restaurar al admin con su
+ *  sesión original al salir, sin re-loguear. */
+export async function createImpersonateSession(args: {
+  adminId: string;
+  targetUserId: string;
+  originalSessionId: string;
+  userAgent?: string | null;
+}): Promise<string> {
+  const sid = `imp_${crypto.randomBytes(20).toString("base64url")}`;
+  const expires = new Date(Date.now() + 60 * 60 * 1000); // 1h
+  await query(
+    `INSERT INTO sessions (id, user_id, expires_at, user_agent, impersonated_by, original_session_id)
+     VALUES ($1, $2, $3, $4, $5, $6)`,
+    [
+      sid,
+      args.targetUserId,
+      expires,
+      args.userAgent ?? null,
+      args.adminId,
+      args.originalSessionId,
+    ],
+  );
+  await logAudit(
+    args.adminId,
+    "session.impersonate.start",
+    JSON.stringify({ targetUserId: args.targetUserId }),
+  );
+  return sid;
+}
+
+/** Lee la sesión original_session_id de una sesión impersonate. Devuelve
+ *  null si la sesión no es impersonate, expiró o ya no existe. */
+export async function readImpersonateOriginal(
+  sessionId: string,
+): Promise<{ originalSessionId: string; adminId: string } | null> {
+  const r = await query<{
+    impersonated_by: string | null;
+    original_session_id: string | null;
+  }>(
+    `SELECT impersonated_by, original_session_id
+       FROM sessions WHERE id = $1`,
+    [sessionId],
+  );
+  const row = r.rows[0];
+  if (!row?.impersonated_by || !row?.original_session_id) return null;
+  // Confirmar que la sesión original sigue viva.
+  const orig = await query<{ id: string }>(
+    "SELECT id FROM sessions WHERE id = $1 AND expires_at > now()",
+    [row.original_session_id],
+  );
+  if (orig.rowCount === 0) return null;
+  return {
+    originalSessionId: row.original_session_id,
+    adminId: row.impersonated_by,
+  };
 }
 
 /* -----------------------------------------------------------

@@ -63,7 +63,7 @@ export async function POST(req: Request) {
 
     if (actor.role !== "admin" && requestedRole !== "employee") {
       return NextResponse.json(
-        { error: "Como dueño solo podés crear empleados de tu negocio." },
+        { error: "Como dueño solo puedes crear empleados de tu negocio." },
         { status: 403 },
       );
     }

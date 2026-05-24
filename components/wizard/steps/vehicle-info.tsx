@@ -1,8 +1,9 @@
 "use client";
 
 import * as React from "react";
-import { AlertTriangle, CheckCircle2, Sparkles } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Sparkles, UserCheck } from "lucide-react";
 
+import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -24,6 +25,23 @@ import {
 } from "../ownership-card-scanner";
 import { useInspection } from "../inspection-context";
 import { VerifikMismatchBanner } from "../verifik-mismatch-banner";
+
+/**
+ * Toma cualquier representación de un celular colombiano (con o sin +57, con
+ * espacios, paréntesis, guiones) y devuelve los 10 dígitos locales formateados
+ * como "XXX XXX XXXX". Si la entrada trae el código de país lo descarta. Si
+ * sobran o faltan dígitos, igual devuelve lo que haya — la validación dura
+ * vive en `finalize()` del summary, no acá.
+ */
+function formatCoMobileLocal(raw: string): string {
+  const digits = (raw || "").replace(/\D/g, "");
+  const local = digits.startsWith("57") && digits.length > 10
+    ? digits.slice(2, 12)
+    : digits.slice(-10);
+  if (local.length <= 3) return local;
+  if (local.length <= 6) return `${local.slice(0, 3)} ${local.slice(3)}`;
+  return `${local.slice(0, 3)} ${local.slice(3, 6)} ${local.slice(6, 10)}`;
+}
 
 const FUEL_OPTIONS: { value: VehicleInfo["fuel"]; label: string }[] = [
   { value: "gasoline", label: "GASOLINA" },
@@ -141,6 +159,86 @@ export function VehicleInfoStep() {
 
   function update<K extends keyof VehicleInfo>(key: K, value: VehicleInfo[K]) {
     setData((prev) => ({ ...prev, vehicle: { ...prev.vehicle, [key]: value } }));
+  }
+
+  // Autocomplete del propietario: cuando el perito tipea documento (o teléfono
+  // como fallback), pegamos a /api/owners/lookup con debounce. Si hay match
+  // mostramos un banner para pre-rellenar nombre/teléfono sin tipear todo de
+  // nuevo. Si los campos ya están llenos con los mismos valores, no mostramos
+  // nada (sería ruido). Si el peritaje ya está finalizado tampoco — la card
+  // está en read-only y no hay nada que pre-rellenar.
+  type OwnerHint = {
+    id: string;
+    fullName: string;
+    document: string;
+    phone: string;
+    inspectionsCount: number;
+  };
+  const [ownerHint, setOwnerHint] = React.useState<OwnerHint | null>(null);
+  const [hintDismissed, setHintDismissed] = React.useState<string | null>(null);
+
+  React.useEffect(() => {
+    if (data.status === "completed") {
+      setOwnerHint(null);
+      return;
+    }
+    const docDigits = (v.ownerDocument || "").replace(/\D/g, "");
+    const phoneDigits = (v.ownerPhone || "").replace(/\D/g, "");
+    // Lookup por documento si tiene ≥6 dígitos, o por teléfono ≥10 dígitos.
+    // Sin estos thresholds disparamos lookups innecesarios mientras el perito
+    // tipea los primeros caracteres.
+    if (docDigits.length < 6 && phoneDigits.length < 10) {
+      setOwnerHint(null);
+      return;
+    }
+    const ctrl = new AbortController();
+    const timer = window.setTimeout(async () => {
+      try {
+        const qs = new URLSearchParams();
+        if (docDigits.length >= 6) qs.set("document", docDigits);
+        if (phoneDigits.length >= 10) qs.set("phone", phoneDigits);
+        const res = await fetch(`/api/owners/lookup?${qs}`, {
+          signal: ctrl.signal,
+        });
+        if (!res.ok) return;
+        const json = (await res.json()) as { owner: OwnerHint | null };
+        setOwnerHint(json.owner ?? null);
+      } catch {
+        // abort o red sin internet — ignoramos, el lookup es opcional.
+      }
+    }, 350);
+    return () => {
+      ctrl.abort();
+      window.clearTimeout(timer);
+    };
+  }, [v.ownerDocument, v.ownerPhone, data.status]);
+
+  const ownerHintActive =
+    ownerHint &&
+    ownerHint.id !== hintDismissed &&
+    // Si los datos del wizard ya coinciden con el hint, no aportamos nada.
+    !(
+      ownerHint.fullName === (v.owner || "").trim().toUpperCase() &&
+      (ownerHint.phone === v.ownerPhone || !ownerHint.phone)
+    );
+
+  function applyOwnerHint() {
+    if (!ownerHint) return;
+    setData((prev) => ({
+      ...prev,
+      vehicle: {
+        ...prev.vehicle,
+        owner: ownerHint.fullName || prev.vehicle.owner,
+        ownerDocument: ownerHint.document || prev.vehicle.ownerDocument,
+        ownerPhone: ownerHint.phone || prev.vehicle.ownerPhone,
+      },
+    }));
+    toast.show({
+      title: "Propietario pre-rellenado",
+      description: `Datos cargados de ficha existente (${ownerHint.inspectionsCount} peritaje${ownerHint.inspectionsCount === 1 ? "" : "s"} previo${ownerHint.inspectionsCount === 1 ? "" : "s"}).`,
+      variant: "success",
+    });
+    setHintDismissed(ownerHint.id);
   }
 
   function saveDocImage(side: "front" | "back", dataUrl: string | null) {
@@ -721,7 +819,43 @@ export function VehicleInfoStep() {
             Datos del propietario, póliza particular y reporte de siniestros. Lo que el RUNT no entrega lo digita el perito.
           </CardDescription>
         </CardHeader>
-        <CardContent className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        <CardContent className="space-y-4">
+          {ownerHintActive && ownerHint && (
+            <div className="flex flex-col gap-2 rounded-md border border-success/40 bg-success/5 px-3 py-2 text-sm sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex items-start gap-2 text-success">
+                <UserCheck className="mt-0.5 h-4 w-4 shrink-0" />
+                <div>
+                  <div className="font-medium">
+                    Cliente recurrente: {ownerHint.fullName || "(sin nombre)"}
+                  </div>
+                  <div className="text-xs text-muted-foreground">
+                    {ownerHint.inspectionsCount} peritaje
+                    {ownerHint.inspectionsCount === 1 ? "" : "s"} previo
+                    {ownerHint.inspectionsCount === 1 ? "" : "s"}
+                    {ownerHint.phone ? ` · ${ownerHint.phone}` : ""}
+                  </div>
+                </div>
+              </div>
+              <div className="flex shrink-0 gap-2">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => setHintDismissed(ownerHint.id)}
+                >
+                  Ignorar
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  onClick={applyOwnerHint}
+                >
+                  Pre-rellenar
+                </Button>
+              </div>
+            </div>
+          )}
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           <div className="space-y-1.5">
             <Label htmlFor="ownerDocument">Documento o NIT</Label>
             <Input
@@ -734,15 +868,30 @@ export function VehicleInfoStep() {
           </div>
           <div className="space-y-1.5">
             <Label htmlFor="ownerPhone">Teléfono</Label>
-            <Input
-              id="ownerPhone"
-              type="tel"
-              inputMode="tel"
-              value={v.ownerPhone}
-              onChange={(e) => update("ownerPhone", e.target.value)}
-              placeholder="+57 310 555 1234"
-              className={cn("h-11 sm:h-10", isPending("ownerPhone") && HL)}
-            />
+            <div
+              className={cn(
+                "flex h-11 items-stretch overflow-hidden rounded-md border border-input bg-background ring-offset-background focus-within:outline-none focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2 sm:h-10",
+                isPending("ownerPhone") && HL,
+              )}
+            >
+              <span className="flex shrink-0 items-center border-r border-input bg-muted px-3 text-sm font-medium text-muted-foreground">
+                +57
+              </span>
+              <Input
+                id="ownerPhone"
+                type="tel"
+                inputMode="numeric"
+                autoComplete="tel-national"
+                value={formatCoMobileLocal(v.ownerPhone)}
+                onChange={(e) => {
+                  const digits = e.target.value.replace(/\D/g, "").slice(0, 10);
+                  update("ownerPhone", digits ? `+57 ${formatCoMobileLocal(digits)}` : "");
+                }}
+                placeholder="310 555 1234"
+                maxLength={12}
+                className="h-full flex-1 rounded-none border-0 focus-visible:ring-0 focus-visible:ring-offset-0"
+              />
+            </div>
           </div>
           <div className="space-y-1.5">
             <Label>Tarjeta de Propiedad</Label>
@@ -828,6 +977,7 @@ export function VehicleInfoStep() {
               </div>
             </>
           )}
+          </div>
         </CardContent>
       </Card>
 

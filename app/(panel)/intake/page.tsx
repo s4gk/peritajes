@@ -31,8 +31,9 @@ import {
   VEHICLE_TYPE_ORDER,
   VEHICLE_TYPES,
 } from "@/lib/constants";
-import { createInspection, initStore } from "@/lib/inspections-store";
-import { cn } from "@/lib/utils";
+import { compressImage } from "@/lib/client/image-compress";
+import { createInspection, initStore, saveInspectionData } from "@/lib/inspections-store";
+import { cn, makeId } from "@/lib/utils";
 import type { PeritajeKind, VehicleType } from "@/lib/types";
 
 const KIND_ICONS: Record<PeritajeKind, React.ComponentType<{ className?: string }>> = {
@@ -43,6 +44,15 @@ const KIND_ICONS: Record<PeritajeKind, React.ComponentType<{ className?: string 
 
 const KIND_ORDER: PeritajeKind[] = ["complete", "quick", "appraisal"];
 
+function blobToDataUrl(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const fr = new FileReader();
+    fr.onload = () => resolve(String(fr.result));
+    fr.onerror = () => reject(fr.error);
+    fr.readAsDataURL(blob);
+  });
+}
+
 export default function IntakePage() {
   const router = useRouter();
   const [vehicleType, setVehicleType] = React.useState<VehicleType | null>(null);
@@ -51,6 +61,58 @@ export default function IntakePage() {
   React.useEffect(() => {
     void initStore();
   }, []);
+
+  // Share target del PWA: cuando el user comparte fotos desde la cámara
+  // nativa hacia "Peritajes del Llano", el SW intercepta el POST a /intake,
+  // guarda las fotos en un cache temporal y redirige acá con ?shared=1.
+  // Acá las leemos, creamos un peritaje vacío y las inyectamos como
+  // extraPhotos. El perito luego decide en qué sección encajan.
+  React.useEffect(() => {
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("shared") !== "1") return;
+    let cancelled = false;
+    (async () => {
+      try {
+        await initStore();
+        const cache = await caches.open("perito-share-target");
+        const keys = await cache.keys();
+        if (keys.length === 0) return;
+        const photos: { id: string; dataUrl: string }[] = [];
+        for (const req of keys) {
+          const res = await cache.match(req);
+          if (!res) continue;
+          const blob = await res.blob();
+          // Las fotos del celular vienen full-res (3-8 MB). Comprimir antes
+          // de meter al IDB previene el QuotaExceededError en sesiones largas.
+          const compressed = await compressImage(blob).catch(async () => ({
+            dataUrl: await blobToDataUrl(blob),
+            width: 0,
+            height: 0,
+            bytes: blob.size,
+            mime: "image/jpeg" as const,
+          }));
+          photos.push({ id: makeId(), dataUrl: compressed.dataUrl });
+          await cache.delete(req);
+        }
+        if (cancelled || photos.length === 0) return;
+        const created = createInspection();
+        // Inyectamos las fotos como extraPhotos via update directo del store.
+        // Esto evita pasar por el wizard hasta que el perito navegue al
+        // peritaje, donde verá las fotos ya cargadas.
+        saveInspectionData(created.id, {
+          ...created.data,
+          extraPhotos: photos,
+        });
+        router.replace(`/inspection/${created.id}`);
+      } catch (err) {
+        console.error("[share-target] failed:", err);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [router]);
 
   function startInspection() {
     if (!vehicleType || !kind) return;

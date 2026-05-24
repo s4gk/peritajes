@@ -11,6 +11,8 @@ import {
 } from "@/lib/server/inspections";
 import { readPdf } from "@/lib/server/pdf-storage";
 import { buildPublicBaseUrl } from "@/lib/server/qr";
+import { upsertVehicleOwner } from "@/lib/server/vehicle-owners";
+import { resolveWaOrgId } from "@/lib/server/whatsapp";
 import {
   notifyClientFinalPdf,
   notifyTeamSignatureCompleted,
@@ -117,6 +119,15 @@ export async function PUT(
       { status: 423 },
     );
   }
+  if (result.kind === "missing_phone") {
+    return NextResponse.json(
+      {
+        error:
+          "Falta el teléfono del cliente. No se puede finalizar un peritaje sin celular: el PDF se entrega siempre al cerrar.",
+      },
+      { status: 422 },
+    );
+  }
 
   // result.kind === "ok"
   let inspection = result.inspection;
@@ -163,6 +174,23 @@ export async function PUT(
     });
   }
 
+  // Fire-and-forget: actualizar la ficha del propietario en vehicle_owners.
+  // Solo incrementamos inspections_count cuando el peritaje acaba de cerrarse
+  // (justLocked), no en cada autosave del wizard.
+  const vehicleForOwner = inspection.data.vehicle;
+  if (vehicleForOwner) {
+    void upsertVehicleOwner({
+      orgId: inspection.orgId ?? user.orgId,
+      fullName: vehicleForOwner.owner ?? "",
+      document: vehicleForOwner.ownerDocument ?? "",
+      phone: vehicleForOwner.ownerPhone ?? "",
+      createdBy: user.id,
+      incrementInspections: result.justLocked,
+    }).catch((err) => {
+      console.error("[owners] upsert (PUT) failed:", (err as Error).message);
+    });
+  }
+
   return NextResponse.json({
     inspection,
     pdfStatus,
@@ -184,11 +212,13 @@ async function sendCompletionNotifications(
   const data = inspection.data;
   const vehicle = data.vehicle;
 
+  const waOrgId = resolveWaOrgId(user, inspection.orgId ?? null);
+
   await notifyTeamSignatureCompleted({
     inspectionId: inspection.id,
     plate: vehicle?.plate ?? "",
     owner: vehicle?.owner ?? "",
-    orgId: inspection.orgId ?? user.orgId,
+    orgId: waOrgId,
   }).catch((err) => {
     console.error("[wa] team-signed failed:", (err as Error).message);
   });
@@ -230,7 +260,8 @@ async function sendCompletionNotifications(
     plate: vehicle.plate ?? "",
     reportNumber: inspection.reportNumber ?? null,
     pdfBuffer,
-    orgId: inspection.orgId ?? user.orgId,
+    orgId: waOrgId,
+    inspectionId: inspection.id,
   });
 }
 

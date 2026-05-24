@@ -32,7 +32,11 @@ type InspectionRow = {
 /**
  * Scope de visibilidad por rol:
  *   admin    → todo
- *   owner    → cualquier peritaje de su org (propios + de empleados)
+ *   owner    → completados de su org + sus propios borradores (si el dueño
+ *              además trabaja como perito, sigue viendo lo suyo en curso).
+ *              Drafts de empleados quedan ocultos hasta que se finalizan —
+ *              así el dueño no puede interceptar/manipular un peritaje a
+ *              medio hacer antes de que llegue al cliente.
  *   employee → solo peritajes cuyo `user_id` es él mismo
  *
  * Lo expongo como helper para usar consistente en todas las queries y no
@@ -48,7 +52,11 @@ function scopeWhere(
     return { sql: "TRUE", params: [], nextIdx: 1 };
   }
   if (actor.role === "owner") {
-    return { sql: `${p}org_id = $1`, params: [actor.orgId], nextIdx: 2 };
+    return {
+      sql: `${p}org_id = $1 AND (${p}status = 'completed' OR ${p}user_id = $2)`,
+      params: [actor.orgId, actor.id],
+      nextIdx: 3,
+    };
   }
   // employee
   return { sql: `${p}user_id = $1`, params: [actor.id], nextIdx: 2 };
@@ -228,7 +236,8 @@ export async function createInspectionServer(
 export type UpdateInspectionResult =
   | { kind: "ok"; inspection: StoredInspection; justLocked: boolean }
   | { kind: "not_found" }
-  | { kind: "locked"; inspection: StoredInspection };
+  | { kind: "locked"; inspection: StoredInspection }
+  | { kind: "missing_phone" };
 
 export async function updateInspectionServer(
   id: string,
@@ -253,6 +262,18 @@ export async function updateInspectionServer(
 
   const nextStatus = data.status === "completed" ? "completed" : "draft";
   const justLocking = nextStatus === "completed";
+
+  // En la finalización exigimos teléfono del cliente: la política es "PDF se
+  // entrega sí o sí al cerrar", y sin celular no tenemos a quién mandarlo. La
+  // UI ya bloquea pero alguien con un PUT a mano podría saltársela.
+  if (justLocking) {
+    const digits = (data.vehicle?.ownerPhone ?? "").replace(/\D/g, "");
+    const local = digits.startsWith("57") ? digits.slice(2) : digits;
+    const valid = local.length === 10 && local.startsWith("3");
+    if (!valid) {
+      return { kind: "missing_phone" };
+    }
+  }
 
   // En la transición draft→completed asignamos consecutivo si no tiene. El
   // consecutivo es por org: cada cliente tiene su propia secuencia anual.
@@ -301,7 +322,8 @@ export type UpdateInspectionForUserResult =
   | { kind: "ok"; inspection: StoredInspection; justLocked: boolean }
   | { kind: "not_found" }
   | { kind: "forbidden" }
-  | { kind: "locked"; inspection: StoredInspection };
+  | { kind: "locked"; inspection: StoredInspection }
+  | { kind: "missing_phone" };
 
 /**
  * Update con ownership check: solo dueño o admin. Cierra el IDOR de PUT

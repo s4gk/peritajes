@@ -429,7 +429,7 @@ function InspectionsInner() {
               {pendingReassign?.data.vehicle.plate
                 ? `Placa ${pendingReassign.data.vehicle.plate}. `
                 : ""}
-              Elegí a quién querés transferirle este peritaje. El nuevo
+              Elige a quién quieres transferirle este peritaje. El nuevo
               dueño podrá editarlo desde su sesión.
             </DialogDescription>
           </DialogHeader>

@@ -16,11 +16,49 @@ import "server-only";
  */
 
 import { getUserById, listTeamWhatsAppPhones } from "./auth";
+import { query } from "./db";
+import { sendPushToOrg, sendPushToUser } from "./push";
 import {
   getWhatsAppStatus,
   sendDocument,
   sendText,
 } from "./whatsapp";
+
+/**
+ * Registra un evento de entrega de WhatsApp en `audit_log` para que el panel
+ * pueda mostrar al perito si el mensaje al cliente salió o falló. Se persiste
+ * con action `wa.delivery` y detalle JSON: `{type, inspectionId, phone, status,
+ * error?}`. El user_id queda null porque el envío es disparado por el sistema,
+ * no por un usuario en sesión.
+ *
+ * Falla silenciosa: si la DB no responde, logueamos a stderr pero no
+ * propagamos — un fallo de auditoría no debe romper el envío real.
+ */
+type WaDeliveryEvent = {
+  type: string;
+  inspectionId: string | null;
+  phone: string;
+  status: "sent" | "failed" | "dedup";
+  error?: string;
+};
+
+async function recordWaDelivery(
+  orgId: string | null,
+  event: WaDeliveryEvent,
+): Promise<void> {
+  try {
+    await query(
+      `INSERT INTO audit_log (user_id, org_id, action, detail)
+       VALUES (NULL, $1, 'wa.delivery', $2)`,
+      [orgId, JSON.stringify(event)],
+    );
+  } catch (err) {
+    console.error(
+      `[wa-notify] no se pudo persistir delivery ${event.type}/${event.status}:`,
+      (err as Error).message,
+    );
+  }
+}
 
 // Formato de fecha/hora colombiano para mensajes al cliente y al perito.
 // Bogotá no tiene horario de verano, así que la TZ fija evita confusiones.
@@ -146,6 +184,16 @@ export async function notifyTeamSignatureCompleted(input: {
   owner: string;
   orgId: string | null;
 }): Promise<void> {
+  // Push notifications van INDEPENDIENTE de WhatsApp — si el socket WA está
+  // caído pero el equipo tiene la PWA instalada, igual les llega el aviso.
+  if (input.orgId) {
+    void sendPushToOrg(input.orgId, {
+      title: "Peritaje firmado",
+      body: `${input.plate || "Sin placa"} · ${input.owner || "—"}`,
+      url: `/inspection/${input.inspectionId}`,
+      tag: `signed-${input.inspectionId}`,
+    }).catch(() => {});
+  }
   if (!isReady(input.orgId)) return;
   const team = await loadTeamPhones("team-signed", input.orgId);
   if (team.length === 0) return;
@@ -182,6 +230,9 @@ export function notifyClientSignLink(input: {
   /** Org del peritaje. El mensaje sale del socket WA de esta org — el
    *  cliente recibe la firma desde el número del perito. */
   orgId: string | null;
+  /** ID del peritaje (para auditar el envío y poder mostrarlo en el wizard).
+   *  El link en sí sigue dependiendo del signToken. */
+  inspectionId?: string | null;
 }): void {
   if (!isReady(input.orgId)) return;
   if (!input.clientPhone?.trim()) return;
@@ -195,10 +246,107 @@ export function notifyClientSignLink(input: {
     "El link expira en 10 minutos. Si no alcanzas, el perito puede generarte uno nuevo.",
   ].join("\n");
   const orgId = input.orgId!;
-  safe(`client-sign to ${input.clientPhone}`, () =>
-    sendText(orgId, input.clientPhone!, text, {
+  const phone = input.clientPhone!;
+  const inspectionId = input.inspectionId ?? null;
+  safe(`client-sign to ${phone}`, () =>
+    sendText(orgId, phone, text, {
       dedupKey: `client-sign:${input.signToken}`,
-      label: `client-sign to ${input.clientPhone}`,
+      label: `client-sign to ${phone}`,
+      onResult: ({ ok, error }) =>
+        recordWaDelivery(orgId, {
+          type: "client-sign",
+          inspectionId,
+          phone,
+          status: ok ? "sent" : "failed",
+          error,
+        }),
+    }),
+  );
+}
+
+/**
+ * Variante remota del caso 3: link de firma con TTL extendido (72h) para
+ * cuando el cliente no está presente. El mensaje incluye contexto (qué
+ * vehículo, ventana de validez) para que el cliente entienda que es legítimo
+ * y no spam — un link seco le da menos confianza.
+ */
+export function notifyClientRemoteSignLink(input: {
+  clientPhone: string | null | undefined;
+  ownerName: string;
+  plate: string;
+  vehicleLabel: string;
+  inspectorName: string;
+  signToken: string;
+  orgId: string | null;
+  inspectionId?: string | null;
+}): void {
+  if (!isReady(input.orgId)) return;
+  if (!input.clientPhone?.trim()) return;
+  const greeting = input.ownerName?.trim() ? `Hola ${input.ownerName},` : "Hola,";
+  const vehicle = input.vehicleLabel
+    ? `${input.vehicleLabel} de placa ${input.plate || "—"}`
+    : `vehículo placa ${input.plate || "—"}`;
+  const text = [
+    greeting,
+    `El perito ${input.inspectorName} terminó la inspección de tu ${vehicle}.`,
+    "Antes de cerrar el informe necesitamos tu firma de aprobación.",
+    "",
+    "Firma desde tu celular en este link:",
+    `${appUrl()}/sign/${input.signToken}`,
+    "",
+    "Tienes 72 horas para firmar. Si dejas vencer el link, podemos generarte otro.",
+  ].join("\n");
+  const orgId = input.orgId!;
+  const phone = input.clientPhone!;
+  const inspectionId = input.inspectionId ?? null;
+  safe(`client-sign-remote to ${phone}`, () =>
+    sendText(orgId, phone, text, {
+      // Dedup por token: el token cambia si el perito regenera la sesión, así
+      // que un reenvío "real" pasa pero un retry interno se colapsa.
+      dedupKey: `client-sign-remote:${input.signToken}`,
+      label: `client-sign-remote to ${phone}`,
+      onResult: ({ ok, error }) =>
+        recordWaDelivery(orgId, {
+          type: "client-sign-remote",
+          inspectionId,
+          phone,
+          status: ok ? "sent" : "failed",
+          error,
+        }),
+    }),
+  );
+}
+
+/**
+ * Aviso al perito cuando un cliente firma vía flow REMOTO. En el presencial
+ * el perito está al lado del cliente; en remoto puede pasar mucho tiempo
+ * entre envío del link y firma, así que esta notificación destapa la novedad
+ * para que el perito entre a finalizar el peritaje.
+ */
+export async function notifyPeritoSignatureReceived(input: {
+  peritoUserId: string | null;
+  inspectionId: string;
+  plate: string;
+  ownerName: string;
+  orgId: string | null;
+}): Promise<void> {
+  if (!isReady(input.orgId)) return;
+  if (!input.peritoUserId) return;
+  const perito = await getUserById(input.peritoUserId).catch(() => null);
+  if (!perito?.waPhone?.trim()) return;
+  const text = [
+    "✍️ *Firma del cliente recibida*",
+    `Placa: ${input.plate || "—"}`,
+    `Cliente: ${input.ownerName || "—"}`,
+    "",
+    "El cliente firmó remotamente. Puedes finalizar el peritaje:",
+    `${appUrl()}/inspection/${input.inspectionId}`,
+  ].join("\n");
+  const orgId = input.orgId!;
+  safe(`perito-signed to ${perito.fullName}`, () =>
+    sendText(orgId, perito.waPhone!, text, {
+      dedupKey: `perito-signed:${input.inspectionId}`,
+      label: `perito-signed to ${perito.fullName}`,
     }),
   );
 }
@@ -215,6 +363,12 @@ export function notifyClientFinalPdf(input: {
   reportNumber: string | null;
   pdfBuffer: Buffer;
   orgId: string | null;
+  /** Si es true, se omite el dedupKey y se mete un sufijo único — usado por
+   *  el endpoint de reenvío manual cuando el perito decide volver a mandar el
+   *  PDF (p.ej. cliente reportó que no le llegó). */
+  manualResend?: boolean;
+  /** ID del peritaje, sólo para auditar (no se manda por WA). */
+  inspectionId?: string | null;
 }): void {
   if (!isReady(input.orgId)) return;
   if (!input.clientPhone?.trim()) return;
@@ -230,15 +384,28 @@ export function notifyClientFinalPdf(input: {
   ]
     .filter(Boolean)
     .join("\n");
-  const dedupKey = input.reportNumber
+  const baseDedupKey = input.reportNumber
     ? `client-pdf:${input.reportNumber}`
     : `client-pdf:${input.clientPhone}:${input.plate || "x"}`;
+  const dedupKey = input.manualResend
+    ? `${baseDedupKey}:resend:${Date.now()}`
+    : baseDedupKey;
   const orgId = input.orgId!;
-  safe(`client-pdf to ${input.clientPhone}`, () =>
-    sendDocument(orgId, input.clientPhone!, input.pdfBuffer, filename, {
+  const inspectionId = input.inspectionId ?? null;
+  const phone = input.clientPhone!;
+  safe(`client-pdf to ${phone}`, () =>
+    sendDocument(orgId, phone, input.pdfBuffer, filename, {
       caption,
       dedupKey,
-      label: `client-pdf to ${input.clientPhone}`,
+      label: `client-pdf to ${phone}`,
+      onResult: ({ ok, error }) =>
+        recordWaDelivery(orgId, {
+          type: "client-pdf",
+          inspectionId,
+          phone,
+          status: ok ? "sent" : "failed",
+          error,
+        }),
     }),
   );
 }
@@ -261,6 +428,15 @@ export async function notifyAssignedPerito(input: {
    *  manda. */
   orgId: string | null;
 }): Promise<void> {
+  // Push notification al perito independiente de WhatsApp: si tiene la PWA
+  // instalada y permisos otorgados, le llega aunque el socket WA esté caído
+  // o aunque el perito no tenga `wa_phone` cargado.
+  void sendPushToUser(input.peritoUserId, {
+    title: "Cita asignada",
+    body: `${fmtScheduledAt(input.scheduledAtISO)} · ${input.plate || "Sin placa"} · ${input.ownerName || "—"}`,
+    url: "/agenda",
+    tag: `appt-${input.peritoUserId}-${input.scheduledAtISO}`,
+  }).catch(() => {});
   if (!isReady(input.orgId)) return;
   const perito = await getUserById(input.peritoUserId).catch(() => null);
   if (!perito?.waPhone?.trim()) return;
@@ -369,3 +545,4 @@ export function notifyClientAppointmentReminder(input: {
     }),
   );
 }
+

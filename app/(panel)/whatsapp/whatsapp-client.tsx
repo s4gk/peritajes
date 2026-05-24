@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { Loader2, LogOut, MessageCircle, RefreshCcw } from "lucide-react";
+import { Loader2, LogOut, MessageCircle, RefreshCcw, Send } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -59,6 +59,33 @@ export function WhatsAppClient() {
         return;
       }
       await refresh();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleTestMessage() {
+    setBusy(true);
+    try {
+      const res = await apiFetch("/api/admin/whatsapp/test-message", {
+        method: "POST",
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        toast.show({
+          title: "No se pudo enviar la prueba",
+          description: data?.error,
+          variant: "danger",
+        });
+        return;
+      }
+      toast.show({
+        title: "Mensaje de prueba enviado",
+        description: data?.phone
+          ? `Revisa el WhatsApp del +${data.phone} en unos segundos.`
+          : "Revisa tu WhatsApp en unos segundos.",
+        variant: "success",
+      });
     } finally {
       setBusy(false);
     }
@@ -164,9 +191,19 @@ export function WhatsAppClient() {
               </Button>
             )}
             {state.status === "connected" && (
-              <Button variant="outline" onClick={handleLogout} disabled={busy}>
-                <LogOut className="mr-2 h-4 w-4" /> Desconectar
-              </Button>
+              <>
+                <Button onClick={handleTestMessage} disabled={busy}>
+                  {busy ? (
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  ) : (
+                    <Send className="mr-2 h-4 w-4" />
+                  )}
+                  Enviar mensaje de prueba
+                </Button>
+                <Button variant="outline" onClick={handleLogout} disabled={busy}>
+                  <LogOut className="mr-2 h-4 w-4" /> Desconectar
+                </Button>
+              </>
             )}
           </div>
         </CardContent>

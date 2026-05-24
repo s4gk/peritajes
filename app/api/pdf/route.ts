@@ -51,6 +51,10 @@ export async function POST(req: Request) {
 
   let verificationUrl: string | null = null;
   let reportNumber: string | null = null;
+  // orgId del peritaje en DB cuando exista (admin previsualizando un peritaje
+  // de OTRO cliente debe ver el branding del cliente, no el suyo). Si no hay
+  // inspectionId o el peritaje no está en server, caemos a user.orgId.
+  let renderOrgId: string | null = user.orgId;
   if (body.inspectionId) {
     // Antes de tocar share tokens hay que confirmar que el user es dueño
     // (o admin) del peritaje. Sin esto, un perito podía generar tokens
@@ -93,6 +97,10 @@ export async function POST(req: Request) {
           }
         }
         reportNumber = stored?.reportNumber ?? null;
+        // Para previews tomamos el orgId del peritaje persistido. Así un
+        // admin pre-visualizando el borrador de un cliente ve el branding
+        // del cliente, no defaults vacíos.
+        if (stored?.orgId) renderOrgId = stored.orgId;
       } catch {
         reportNumber = null;
       }
@@ -116,17 +124,30 @@ export async function POST(req: Request) {
     // un peritaje aún no sincronizado al server).
   }
 
+  // Gate de preview: solo admin puede renderear borradores. Si llegamos hasta
+  // acá sin haber retornado el PDF stored, significa que el peritaje no está
+  // finalizado (o no existe en server). Sin este gate, el perito podía
+  // descargar el PDF y entregarlo al cliente sin finalizar nunca el
+  // peritaje — saltándose firma del cliente, consecutivo oficial y entrega
+  // automática por WhatsApp. Admin sigue pudiendo previsualizar para soporte.
+  if (user.role !== "admin") {
+    return new NextResponse(
+      "El PDF solo se puede descargar después de finalizar el peritaje.",
+      { status: 403 },
+    );
+  }
+
   try {
-    // Para previews (borradores) usamos la org del usuario para que el
-    // branding (NIT, logo, teléfono) sea el correcto. Si admin pide preview
-    // sin org, sale con defaults.
+    // Branding del PDF: si el peritaje vive en server, usamos su orgId (el
+    // PDF debe llevar la marca del cliente que lo emite, no la del user
+    // logueado — relevante cuando admin pre-visualiza). Fallback: user.orgId.
     const { buffer, plateSlug } = await renderInspectionPdf({
       data: body.data,
       report: body.report,
       mode: body.mode,
       verificationUrl,
       reportNumber,
-      orgId: user.orgId,
+      orgId: renderOrgId,
     });
     return new NextResponse(buffer as unknown as BodyInit, {
       status: 200,

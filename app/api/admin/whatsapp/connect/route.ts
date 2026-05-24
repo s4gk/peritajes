@@ -2,7 +2,11 @@ import { NextResponse } from "next/server";
 
 import { requireUser } from "@/lib/server/auth";
 import { logAudit } from "@/lib/server/db";
-import { connectWhatsApp, getWhatsAppStatus } from "@/lib/server/whatsapp";
+import {
+  ADMIN_WA_ORG,
+  connectWhatsApp,
+  getWhatsAppStatus,
+} from "@/lib/server/whatsapp";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -33,21 +37,26 @@ export async function POST() {
       { status: 403 },
     );
   }
-  if (!user.orgId) {
+  // Admin sin org usa el tenant sentinel ADMIN_WA_ORG. Le sirve para hacer
+  // soporte/QA y para que los peritajes huérfanos (sin org_id) puedan
+  // mandar WhatsApp por su socket. Owner usa el orgId real de su negocio.
+  const orgId =
+    user.orgId ?? (user.role === "admin" ? ADMIN_WA_ORG : null);
+  if (!orgId) {
     return NextResponse.json(
       {
         error:
-          "Necesitás una organización para conectar WhatsApp. Como admin, hacelo desde la cuenta del cliente.",
+          "Necesitas una organización para conectar WhatsApp. Como admin, hazlo desde la cuenta del cliente.",
       },
       { status: 400 },
     );
   }
-  await connectWhatsApp(user.orgId).catch((err) => {
+  await connectWhatsApp(orgId).catch((err) => {
     return NextResponse.json(
       { error: (err as Error).message },
       { status: 500 },
     );
   });
-  await logAudit(user.id, "whatsapp.connect_requested", user.orgId);
-  return NextResponse.json(getWhatsAppStatus(user.orgId));
+  await logAudit(user.id, "whatsapp.connect_requested", orgId);
+  return NextResponse.json(getWhatsAppStatus(orgId));
 }

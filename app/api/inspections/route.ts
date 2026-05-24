@@ -7,6 +7,7 @@ import {
   createInspectionServer,
   listInspectionsFor,
 } from "@/lib/server/inspections";
+import { upsertVehicleOwner } from "@/lib/server/vehicle-owners";
 import { notifyTeamNewIntake } from "@/lib/server/whatsapp-notifications";
 import type { InspectionData } from "@/lib/types";
 
@@ -109,5 +110,20 @@ export async function POST(req: Request) {
   }).catch((err) => {
     console.error("[inspections] notify team failed:", (err as Error).message);
   });
+  // Fire-and-forget: registrar / actualizar el propietario en vehicle_owners.
+  // No incrementamos inspections_count al crear (está en draft); se incrementa
+  // recién cuando el peritaje se finaliza (PUT con justLocked).
+  if (vehicle) {
+    void upsertVehicleOwner({
+      orgId: created.orgId ?? user.orgId,
+      fullName: vehicle.owner ?? "",
+      document: vehicle.ownerDocument ?? "",
+      phone: vehicle.ownerPhone ?? "",
+      createdBy: user.id,
+      incrementInspections: false,
+    }).catch((err) => {
+      console.error("[owners] upsert (POST) failed:", (err as Error).message);
+    });
+  }
   return NextResponse.json({ inspection: created });
 }

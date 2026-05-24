@@ -2,7 +2,11 @@ import { NextResponse } from "next/server";
 
 import { requireUser } from "@/lib/server/auth";
 import { logAudit } from "@/lib/server/db";
-import { getWhatsAppStatus, logoutWhatsApp } from "@/lib/server/whatsapp";
+import {
+  ADMIN_WA_ORG,
+  getWhatsAppStatus,
+  logoutWhatsApp,
+} from "@/lib/server/whatsapp";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -29,13 +33,15 @@ export async function POST() {
       { status: 403 },
     );
   }
-  if (!user.orgId) {
+  const orgId =
+    user.orgId ?? (user.role === "admin" ? ADMIN_WA_ORG : null);
+  if (!orgId) {
     return NextResponse.json(
       { error: "Sin org seleccionada." },
       { status: 400 },
     );
   }
-  await logoutWhatsApp(user.orgId);
-  await logAudit(user.id, "whatsapp.logout", user.orgId);
-  return NextResponse.json(getWhatsAppStatus(user.orgId));
+  await logoutWhatsApp(orgId);
+  await logAudit(user.id, "whatsapp.logout", orgId);
+  return NextResponse.json(getWhatsAppStatus(orgId));
 }

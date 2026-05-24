@@ -12,6 +12,7 @@ const globalScope = globalThis as unknown as {
   
   __peritoMigrationsApplied?: boolean;
   __peritoMigrationsPromise?: Promise<void>;
+  __peritoOwnersBackfilled?: boolean;
 };
 
 function buildPool(): Pool {
@@ -86,6 +87,9 @@ CREATE TABLE IF NOT EXISTS organizations (
   owner_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+-- 2026-05: suspender empresa cliente sin borrar datos. active=false bloquea
+-- el login de todos sus users (owner + employees) hasta que admin reactive.
+ALTER TABLE organizations ADD COLUMN IF NOT EXISTS active BOOLEAN NOT NULL DEFAULT TRUE;
 
 ALTER TABLE users ADD COLUMN IF NOT EXISTS org_id TEXT REFERENCES organizations(id) ON DELETE SET NULL;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS parent_user_id TEXT REFERENCES users(id) ON DELETE SET NULL;
@@ -100,6 +104,13 @@ CREATE TABLE IF NOT EXISTS sessions (
 );
 CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at);
+-- 2026-05: impersonate de admin. Cuando un admin entra como otro user, se
+-- crea una sesión target con impersonated_by = adminId y original_session_id
+-- apuntando a la sesión admin original (para restaurar al salir sin
+-- re-loguear).
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS impersonated_by TEXT
+  REFERENCES users(id) ON DELETE SET NULL;
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS original_session_id TEXT;
 
 CREATE TABLE IF NOT EXISTS company_config (
   id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -257,6 +268,58 @@ CREATE TABLE IF NOT EXISTS sign_sessions (
   signed_at TIMESTAMPTZ
 );
 CREATE INDEX IF NOT EXISTS idx_sign_sessions_expires ON sign_sessions(expires_at);
+-- Firma remota (cliente no presente): el perito pide un link de larga vida
+-- (72h) por WhatsApp y el cliente firma desde la casa. mode distingue
+-- presencial (TTL 10min, sesión via QR en pantalla) de remoto (TTL 72h, link
+-- WA). inspection_id permite avisarle al perito por WA cuando el cliente
+-- firma. Ambas columnas opcionales para no romper sesiones presenciales que
+-- ya están vivas en el cluster.
+ALTER TABLE sign_sessions ADD COLUMN IF NOT EXISTS mode TEXT NOT NULL DEFAULT 'presential';
+ALTER TABLE sign_sessions ADD COLUMN IF NOT EXISTS inspection_id TEXT REFERENCES inspections(id) ON DELETE CASCADE;
+CREATE INDEX IF NOT EXISTS idx_sign_sessions_inspection ON sign_sessions(inspection_id);
+
+-- Suscripciones Web Push. Un user puede tener varias (1 por device/browser).
+-- El endpoint es único — si el mismo browser re-suscribe, el ON CONFLICT
+-- actualiza las keys y last_used_at en vez de duplicar fila.
+CREATE TABLE IF NOT EXISTS push_subscriptions (
+  endpoint TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  p256dh TEXT NOT NULL,
+  auth TEXT NOT NULL,
+  user_agent TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_used_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_push_subscriptions_user ON push_subscriptions(user_id);
+
+-- Propietarios de vehículos (dueños que aparecen en peritajes / citas).
+-- Scoped por org: la cartera de un cliente del SaaS NO se comparte con otro.
+-- Dedup primario por (org_id, document); fallback por (org_id, phone) cuando
+-- no hay document. inspections_count / *_seen_at se mantienen via UPSERT
+-- desde el flujo de guardado de peritajes y creación de citas.
+CREATE TABLE IF NOT EXISTS vehicle_owners (
+  id TEXT PRIMARY KEY,
+  org_id TEXT REFERENCES organizations(id) ON DELETE CASCADE,
+  document TEXT NOT NULL DEFAULT '',
+  full_name TEXT NOT NULL DEFAULT '',
+  phone TEXT NOT NULL DEFAULT '',
+  email TEXT NOT NULL DEFAULT '',
+  address TEXT NOT NULL DEFAULT '',
+  notes TEXT NOT NULL DEFAULT '',
+  inspections_count INTEGER NOT NULL DEFAULT 0,
+  first_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  created_by TEXT REFERENCES users(id) ON DELETE SET NULL
+);
+-- Dedup por documento dentro de la org (parcial: solo cuando hay documento).
+CREATE UNIQUE INDEX IF NOT EXISTS idx_vehicle_owners_org_document
+  ON vehicle_owners(org_id, document)
+  WHERE document <> '';
+-- Búsqueda por teléfono (segundaria) y por nombre (autocomplete).
+CREATE INDEX IF NOT EXISTS idx_vehicle_owners_org_phone
+  ON vehicle_owners(org_id, phone) WHERE phone <> '';
+CREATE INDEX IF NOT EXISTS idx_vehicle_owners_org_name
+  ON vehicle_owners(org_id, lower(full_name));
 `;
 
 async function ensureMigrated(): Promise<void> {
@@ -280,6 +343,25 @@ async function ensureMigrated(): Promise<void> {
     );
     await backfillOrganizations();
     globalScope.__peritoMigrationsApplied = true;
+    // Backfill de vehicle_owners corre DESPUÉS de marcar migrations como
+    // aplicadas para evitar deadlock: el helper usa query() que llama a
+    // ensureMigrated. Si aún estuviéramos resolviendo la promise, await
+    // sobre sí misma haría hang. Va fire-and-forget — si falla, el log
+    // queda y el admin puede re-disparar el deploy.
+    if (!globalScope.__peritoOwnersBackfilled) {
+      globalScope.__peritoOwnersBackfilled = true;
+      import("./vehicle-owners")
+        .then((m) => m.backfillVehicleOwners())
+        .then((res) =>
+          console.log(
+            `[migrations] backfill vehicle_owners: ${res.insertedOrUpdated} filas procesadas`,
+          ),
+        )
+        .catch((err) => {
+          console.error("[migrations] backfill vehicle_owners falló:", err);
+          globalScope.__peritoOwnersBackfilled = false;
+        });
+    }
   })();
   await globalScope.__peritoMigrationsPromise;
 }
