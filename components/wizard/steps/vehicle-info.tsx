@@ -19,10 +19,7 @@ import { useCurrentUser } from "@/components/panel/current-user";
 import { listKnownVehicles } from "@/lib/inspections-store";
 import type { VehicleInfo } from "@/lib/types";
 import { cn, makeId } from "@/lib/utils";
-import {
-  OwnershipCardScanner,
-  type ExtractedFields,
-} from "../ownership-card-scanner";
+import { CardPhotoCapture } from "../card-photo-capture";
 import { useInspection } from "../inspection-context";
 import { VerifikMismatchBanner } from "../verifik-mismatch-banner";
 
@@ -254,42 +251,6 @@ export function VehicleInfoStep() {
     }));
   }
 
-  function applyOcrFields(fields: ExtractedFields, imageDataUrl: string | null) {
-    setData((prev) => {
-      const v = prev.vehicle;
-      const next: VehicleInfo = {
-        ...v,
-        plate: fields.plate ?? v.plate,
-        vin: fields.vin ?? v.vin,
-        chassisNumber: fields.chassisNumber ?? v.chassisNumber,
-        engineNumber: fields.engineNumber ?? v.engineNumber,
-        make: fields.make ?? v.make,
-        model: fields.model ?? v.model,
-        year: fields.year ?? v.year,
-        color: fields.color ?? v.color,
-        bodyType: fields.bodyType ?? v.bodyType,
-        fuel: fields.fuel ?? v.fuel,
-        transmission: fields.transmission ?? v.transmission,
-        vehicleClass: fields.vehicleClass ?? v.vehicleClass,
-        nationality: fields.nationality ?? v.nationality,
-        serviceType: fields.serviceType ?? v.serviceType,
-        cylinderCapacity: fields.cylinderCapacity ?? v.cylinderCapacity,
-        owner: fields.owner ?? v.owner,
-        ownerDocument: fields.ownerDocument ?? v.ownerDocument,
-        propertyCardStatus: fields.propertyCardStatus ?? v.propertyCardStatus,
-      };
-      return {
-        ...prev,
-        vehicle: next,
-        documents: imageDataUrl
-          ? {
-              ...prev.documents,
-              ownershipCardFront: [{ id: makeId(), dataUrl: imageDataUrl }],
-            }
-          : prev.documents,
-      };
-    });
-  }
 
   function prefillFrom(source: VehicleInfo) {
     setData((prev) => ({
@@ -381,9 +342,8 @@ export function VehicleInfoStep() {
         <CardHeader>
           <CardTitle>Tarjeta de propiedad / Licencia de tránsito *</CardTitle>
           <CardDescription>
-            Escanea las dos caras. El frente extrae datos por OCR y rellena el formulario;
-            el reverso solo se guarda como evidencia. Las dos caras son obligatorias y
-            cuentan como las dos primeras fotos del peritaje.
+            Fotografía las dos caras de la tarjeta de propiedad. Las dos son obligatorias
+            y cuentan como las dos primeras fotos del peritaje.
           </CardDescription>
         </CardHeader>
         <CardContent className="grid gap-4 sm:grid-cols-2">
@@ -406,15 +366,10 @@ export function VehicleInfoStep() {
                 Sin captura
               </div>
             )}
-            <OwnershipCardScanner
-              onApply={applyOcrFields}
-              buttonLabel={front ? "Re-escanear frente" : "Escanear frente (OCR)"}
-              buttonLabelShort={front ? "Re-escanear frente" : "Escanear frente"}
-              expectedSide="front"
-              // Si el OCR detecta que la foto es el REVERSO, ofrecemos
-              // guardarla directo en el slot del reverso. Evita que el perito
-              // tenga que cancelar, ir al otro botón y volver a tomar la foto.
-              onWrongSide={(dataUrl) => saveDocImage("back", dataUrl)}
+            <CardPhotoCapture
+              side="front"
+              buttonLabel={front ? "Re-fotografiar frente" : "Fotografiar frente"}
+              onCapture={(dataUrl) => saveDocImage("front", dataUrl)}
             />
           </div>
           <div className="space-y-2">
@@ -436,11 +391,10 @@ export function VehicleInfoStep() {
                 Sin captura
               </div>
             )}
-            <OwnershipCardScanner
-              onApply={(_fields, dataUrl) => saveDocImage("back", dataUrl)}
-              runOcr={false}
-              buttonLabel={back ? "Re-capturar reverso" : "Capturar reverso"}
-              buttonLabelShort={back ? "Re-capturar reverso" : "Capturar reverso"}
+            <CardPhotoCapture
+              side="back"
+              buttonLabel={back ? "Re-fotografiar reverso" : "Fotografiar reverso"}
+              onCapture={(dataUrl) => saveDocImage("back", dataUrl)}
             />
           </div>
         </CardContent>
@@ -465,7 +419,7 @@ export function VehicleInfoStep() {
                     : `${pendingFields.length} campos por completar`}
                 </p>
                 <p className="text-xs text-warning/80">
-                  El OCR no llenó estos campos. Revísalos antes de continuar — quedan
+                  Completa estos campos revisando la tarjeta fotografiada — quedan
                   resaltados abajo.
                 </p>
                 <div className="flex flex-wrap gap-1.5 pt-0.5">
@@ -867,11 +821,15 @@ export function VehicleInfoStep() {
             />
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="ownerPhone">Teléfono</Label>
+            <Label htmlFor="ownerPhone">
+              Celular del cliente{" "}
+              <span className="text-destructive">*</span>
+            </Label>
             <div
               className={cn(
                 "flex h-11 items-stretch overflow-hidden rounded-md border border-input bg-background ring-offset-background focus-within:outline-none focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2 sm:h-10",
                 isPending("ownerPhone") && HL,
+                data.status !== "completed" && !v.ownerPhone?.trim() && "border-destructive/50",
               )}
             >
               <span className="flex shrink-0 items-center border-r border-input bg-muted px-3 text-sm font-medium text-muted-foreground">
@@ -885,13 +843,18 @@ export function VehicleInfoStep() {
                 value={formatCoMobileLocal(v.ownerPhone)}
                 onChange={(e) => {
                   const digits = e.target.value.replace(/\D/g, "").slice(0, 10);
-                  update("ownerPhone", digits ? `+57 ${formatCoMobileLocal(digits)}` : "");
+                  update("ownerPhone", digits);
                 }}
                 placeholder="310 555 1234"
                 maxLength={12}
                 className="h-full flex-1 rounded-none border-0 focus-visible:ring-0 focus-visible:ring-offset-0"
               />
             </div>
+            {data.status !== "completed" && !v.ownerPhone?.trim() && (
+              <p className="text-[11px] text-destructive/80">
+                Obligatorio para entregar el PDF al cliente al finalizar.
+              </p>
+            )}
           </div>
           <div className="space-y-1.5">
             <Label>Tarjeta de Propiedad</Label>

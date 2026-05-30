@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import {
   Car,
   CheckCircle2,
+  Cloud,
   Copy,
   Download,
   FileSpreadsheet,
@@ -44,6 +45,7 @@ import {
   initStore,
   listInspections,
 } from "@/lib/inspections-store";
+import { idbListMutations } from "@/lib/client/idb";
 import { downloadInspectionPdf } from "@/lib/pdf-client";
 import { analyze, riskTone } from "@/lib/rules-engine";
 import type { StoredInspection } from "@/lib/types";
@@ -105,6 +107,7 @@ function InspectionsInner() {
     return m;
   }, [teamMembers]);
   const [items, setItems] = React.useState<StoredInspection[]>([]);
+  const [pendingIds, setPendingIds] = React.useState<Set<string>>(new Set());
   const [hydrated, setHydrated] = React.useState(false);
   const [pendingDelete, setPendingDelete] = React.useState<StoredInspection | null>(null);
   const [pendingReassign, setPendingReassign] =
@@ -169,6 +172,10 @@ function InspectionsInner() {
 
   const refresh = React.useCallback(() => {
     setItems(listInspections());
+    // Actualiza el set de peritajes con mutations pendientes en IDB.
+    idbListMutations().then((mutations) => {
+      setPendingIds(new Set(mutations.map((m) => m.inspectionId)));
+    }).catch(() => {});
   }, []);
 
   React.useEffect(() => {
@@ -191,7 +198,12 @@ function InspectionsInner() {
     if (typeof window === "undefined") return;
     const onRefresh = () => refresh();
     window.addEventListener("perito:store-refreshed", onRefresh);
-    return () => window.removeEventListener("perito:store-refreshed", onRefresh);
+    // Cuando el sync queue sube algo, actualizamos los indicadores pendientes.
+    window.addEventListener("perito:sync-flushed", onRefresh);
+    return () => {
+      window.removeEventListener("perito:store-refreshed", onRefresh);
+      window.removeEventListener("perito:sync-flushed", onRefresh);
+    };
   }, [refresh]);
 
   function handleNew() {
@@ -330,6 +342,7 @@ function InspectionsInner() {
                 onChange={(e) => setFromDate(e.target.value)}
                 placeholder="Desde"
                 title="Desde"
+                className="hidden sm:block"
               />
               <Input
                 type="date"
@@ -337,6 +350,7 @@ function InspectionsInner() {
                 onChange={(e) => setToDate(e.target.value)}
                 placeholder="Hasta"
                 title="Hasta"
+                className="hidden sm:block"
               />
             </div>
             {hasActiveFilters && (
@@ -386,6 +400,7 @@ function InspectionsInner() {
               item={item}
               canDelete={isAdmin}
               canReassign={canManage}
+              hasPending={pendingIds.has(item.id)}
               assigneeName={
                 item.userId ? memberById.get(item.userId)?.fullName ?? null : null
               }
@@ -533,6 +548,7 @@ function InspectionCard({
   item,
   canDelete,
   canReassign,
+  hasPending,
   assigneeName,
   onOpen,
   onDuplicate,
@@ -542,6 +558,7 @@ function InspectionCard({
   item: StoredInspection;
   canDelete: boolean;
   canReassign: boolean;
+  hasPending: boolean;
   assigneeName: string | null;
   onOpen: () => void;
   onDuplicate: () => void;
@@ -615,6 +632,14 @@ function InspectionCard({
             ) : (
               <span className="inline-flex items-center gap-1 rounded-full border border-muted-foreground/30 bg-muted/40 px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
                 Borrador
+              </span>
+            )}
+            {hasPending && (
+              <span
+                className="inline-flex items-center gap-1 rounded-full border border-warning/50 bg-warning/10 px-2 py-0.5 text-[10px] font-medium text-warning"
+                title="Hay cambios guardados localmente que aún no se han subido al servidor"
+              >
+                <Cloud className="h-3 w-3" /> Por subir
               </span>
             )}
           </div>

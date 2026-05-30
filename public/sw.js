@@ -18,7 +18,7 @@
 // dispositivos (después de cambios grandes en el bundle, p.ej. reemplazo de
 // Gemini OCR por Tesseract). En `activate` borramos los caches que no estén
 // en la versión actual, así los chunks viejos se botan.
-const VERSION = "v8";
+const VERSION = "v9";
 const STATIC_CACHE = `perito-static-${VERSION}`;
 const RUNTIME_CACHE = `perito-runtime-${VERSION}`;
 const API_CACHE = `perito-api-${VERSION}`;
@@ -98,11 +98,11 @@ self.addEventListener("install", (event) => {
           }
         }),
       );
+      // Tras instalar tomamos control inmediatamente para que la próxima
+      // navegación use el bundle nuevo, no el caché del SW anterior.
+      await self.skipWaiting();
     })(),
   );
-  // OJO: no llamamos skipWaiting() acá. Queremos que el SW nuevo quede en
-  // estado `waiting` y que el cliente decida cuándo aplicar el update via
-  // postMessage({type:"SKIP_WAITING"}) — ver handler de `message` más abajo.
 });
 
 self.addEventListener("activate", (event) => {

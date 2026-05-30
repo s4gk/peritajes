@@ -159,8 +159,8 @@ const ALL_SECTION_IDS: readonly SectionId[] = SECTION_IDS;
 export const VEHICLE_TYPES: Record<VehicleType, VehicleTypeDef> = {
   car_5doors: {
     id: "car_5doors",
-    label: "Carrocería 5 Puertas",
-    short: "5 Puertas",
+    label: "Sedán",
+    short: "Sedán",
     description:
       "Carrocería autoportante: 4 puertas y tapa de baúl, o hatchback.",
     sections: ALL_SECTION_IDS,
@@ -938,8 +938,20 @@ export const LEAKS_SECTION: InspectionSectionDef = {
   label: "Fugas de fluidos",
   groups: [
     {
-      id: "fluids",
-      label: "Fluidos",
+      id: "fluid_levels",
+      label: "Niveles de fluidos",
+      items: [
+        { id: "level_engine_oil", label: "Aceite motor", kind: "fluid_level" },
+        { id: "level_transmission_oil", label: "Aceite caja", kind: "fluid_level" },
+        { id: "level_power_steering", label: "Hidráulico caja dirección", kind: "fluid_level" },
+        { id: "level_coolant", label: "Refrigerante", kind: "fluid_level" },
+        { id: "level_brake_fluid", label: "Líquido de frenos", kind: "fluid_level" },
+        { id: "level_washer_fluid", label: "Lava parabrisas", kind: "fluid_level" },
+      ],
+    },
+    {
+      id: "leaks",
+      label: "Fugas de fluidos",
       items: [
         { id: "engine_oil", label: "Fuga de aceite motor", kind: "leak" },
         { id: "transmission_oil", label: "Fuga de aceite caja", kind: "leak" },

@@ -12,7 +12,7 @@ export default async function WhatsAppPage() {
   if (user.role === "employee") redirect("/dashboard");
 
   return (
-    <div className="mx-auto w-full max-w-screen-md px-4 py-6 sm:px-6 lg:px-8">
+    <div className="mx-auto w-full max-w-screen-md py-6">
       <WhatsAppClient />
     </div>
   );

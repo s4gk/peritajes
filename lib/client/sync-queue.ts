@@ -4,7 +4,9 @@ import type { StoredInspection } from "@/lib/types";
 
 import { apiFetch } from "./api-client";
 import {
+  idbGetInspection,
   idbListMutations,
+  idbPutInspection,
   idbRemoveMutation,
   idbUpdateMutation,
   type PendingMutation,
@@ -50,6 +52,8 @@ let lastState: SyncState = {
   syncing: false,
   failed: 0,
   lastErrorMessage: null,
+  firstFailedInspectionId: null,
+  firstFailedKind: null,
   oldestPendingAt: null,
 };
 
@@ -65,6 +69,10 @@ export type SyncState = {
   /** Último mensaje de error que devolvió el server. null si nada falló o si
    *  el último intento fue exitoso. */
   lastErrorMessage: string | null;
+  /** ID del peritaje de la primera mutation fallida (para mostrar al usuario). */
+  firstFailedInspectionId: string | null;
+  /** Tipo de operación de la primera mutation fallida. */
+  firstFailedKind: "create" | "update" | "delete" | null;
   /** ISO timestamp de la mutation más vieja pendiente. Permite mostrar
    *  "pendiente desde hace 5min" en la UI. */
   oldestPendingAt: string | null;
@@ -140,16 +148,26 @@ export async function refreshPending(): Promise<void> {
     let failed = 0;
     let oldest: string | null = null;
     let lastErr: string | null = null;
+    let firstFailedId: string | null = null;
+    let firstFailedKind: "create" | "update" | "delete" | null = null;
     for (const m of list) {
-      if (m.attempts >= MAX_ATTEMPTS) failed += 1;
+      if (m.attempts >= MAX_ATTEMPTS) {
+        failed += 1;
+        if (!firstFailedId) {
+          firstFailedId = m.inspectionId;
+          firstFailedKind = m.kind;
+        }
+        if (m.lastError) lastErr = m.lastError;
+      }
       if (!oldest || m.enqueuedAt < oldest) oldest = m.enqueuedAt;
-      if (m.lastError) lastErr = m.lastError;
     }
     notify({
       pending: list.length,
       failed,
       oldestPendingAt: oldest,
       lastErrorMessage: failed > 0 ? lastErr : lastState.lastErrorMessage,
+      firstFailedInspectionId: failed > 0 ? firstFailedId : null,
+      firstFailedKind: failed > 0 ? firstFailedKind : null,
     });
   } catch {
     /* noop */
@@ -233,6 +251,22 @@ async function applyMutation(m: PendingMutation): Promise<{ ok: boolean; error?:
         }
         return { ok: true };
       }
+      // 422 Unprocessable: el servidor rechaza los datos por un error de
+      // validación (ej. falta teléfono del cliente). Reintentar nunca va a
+      // funcionar — descartamos la mutación y revertimos el peritaje a borrador
+      // en IDB para que el perito corrija el dato faltante y vuelva a finalizar.
+      if (res.status === 422) {
+        const cached = await idbGetInspection(m.inspectionId).catch(() => undefined);
+        if (cached && cached.data.status === "completed") {
+          const reverted: StoredInspection = {
+            ...cached,
+            data: { ...cached.data, status: "draft", completedAt: undefined },
+          };
+          await idbPutInspection(reverted).catch(() => {});
+          if (syncedHandler) syncedHandler(reverted);
+        }
+        return { ok: true };
+      }
       // 423 Locked: el peritaje ya quedó finalizado en server. Descartamos la
       // mutación (no tiene sentido reintentar) y aplicamos la versión canónica
       // del server al cache para que el wizard se reabra en modo solo-lectura.
@@ -280,6 +314,17 @@ export async function flushSyncQueue(): Promise<void> {
   notify({ syncing: true });
   try {
     let mutations = await idbListMutations();
+    // Descartamos mutations huérfanas: si la inspección ya no existe en IDB y
+    // la mutation no es un delete, no tiene sentido enviarla al server.
+    for (const m of mutations) {
+      if (m.kind !== "delete") {
+        const cached = await idbGetInspection(m.inspectionId).catch(() => undefined);
+        if (!cached && m.id !== undefined) {
+          await idbRemoveMutation(m.id);
+        }
+      }
+    }
+    mutations = await idbListMutations();
     // Procesamos en orden de id (FIFO).
     mutations.sort((a, b) => (a.id ?? 0) - (b.id ?? 0));
     // Soft-skip: si una mutation ya pasó MAX_ATTEMPTS y la última lectura
@@ -290,10 +335,16 @@ export async function flushSyncQueue(): Promise<void> {
     const now = Date.now();
     for (const m of mutations) {
       if (m.attempts >= MAX_ATTEMPTS) {
-        const lastAttempt = m.lastAttemptAt
-          ? new Date(m.lastAttemptAt).getTime()
-          : 0;
-        if (now - lastAttempt < FAILED_RETRY_INTERVAL_MS) continue;
+        // Los errores 422 son permanentes (dato inválido) — los reintentamos
+        // inmediatamente para que el handler los descarte en esta misma vuelta,
+        // sin esperar el cooldown de 5 min.
+        const is422 = m.lastError?.startsWith("422");
+        if (!is422) {
+          const lastAttempt = m.lastAttemptAt
+            ? new Date(m.lastAttemptAt).getTime()
+            : 0;
+          if (now - lastAttempt < FAILED_RETRY_INTERVAL_MS) continue;
+        }
       }
       const result = await applyMutation(m);
       if (result.ok) {
@@ -317,6 +368,9 @@ export async function flushSyncQueue(): Promise<void> {
       }
     }
     await refreshPending();
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent("perito:sync-flushed"));
+    }
   } finally {
     running = false;
     notify({ syncing: false });

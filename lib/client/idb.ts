@@ -151,6 +151,14 @@ export async function idbUpdateMutation(m: PendingMutation): Promise<void> {
   await db.put("mutations", m);
 }
 
+export async function idbRemoveMutationsForInspection(inspectionId: string): Promise<void> {
+  const db = await getDb();
+  const tx = db.transaction("mutations", "readwrite");
+  const keys = await tx.store.index("by-inspection").getAllKeys(inspectionId);
+  await Promise.all(keys.map((k) => tx.store.delete(k)));
+  await tx.done;
+}
+
 export async function idbClearAll(): Promise<void> {
   const db = await getDb();
   await Promise.all([db.clear("inspections"), db.clear("mutations")]);

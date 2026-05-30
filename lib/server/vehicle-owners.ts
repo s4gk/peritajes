@@ -113,36 +113,41 @@ export async function upsertVehicleOwner(input: UpsertInput): Promise<VehicleOwn
 
   const inc = input.incrementInspections ? 1 : 0;
 
-  // Caso 1: hay documento → upsert por (org_id, document).
+  // Caso 1: hay documento → buscar por (org_id, document).
+  // NO usamos ON CONFLICT porque cuando org_id es NULL, PostgreSQL considera
+  // NULL != NULL en unique constraints y nunca dispara el DO UPDATE, creando
+  // duplicados. Usamos IS NOT DISTINCT FROM que sí trata NULL==NULL.
   if (document) {
+    const existing = await query<Row>(
+      `SELECT * FROM vehicle_owners
+        WHERE org_id IS NOT DISTINCT FROM $1
+          AND document = $2
+        LIMIT 1`,
+      [input.orgId, document],
+    );
+    if (existing.rows[0]) {
+      const r = await query<Row>(
+        `UPDATE vehicle_owners SET
+            full_name = CASE WHEN $2 <> '' THEN $2 ELSE full_name END,
+            phone     = CASE WHEN $3 <> '' THEN $3 ELSE phone     END,
+            email     = CASE WHEN $4 <> '' THEN $4 ELSE email     END,
+            address   = CASE WHEN $5 <> '' THEN $5 ELSE address   END,
+            notes     = CASE WHEN $6 <> '' THEN $6 ELSE notes     END,
+            inspections_count = inspections_count + $7,
+            last_seen_at = now()
+          WHERE id = $1
+          RETURNING *`,
+        [existing.rows[0].id, fullName, phone, email, address, notes, inc],
+      );
+      return r.rows[0] ? rowToOwner(r.rows[0]) : null;
+    }
     const r = await query<Row>(
       `INSERT INTO vehicle_owners
          (id, org_id, document, full_name, phone, email, address, notes,
           inspections_count, first_seen_at, last_seen_at, created_by)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, now(), now(), $10)
-       ON CONFLICT (org_id, document) WHERE document <> ''
-       DO UPDATE SET
-         full_name = CASE WHEN EXCLUDED.full_name <> '' THEN EXCLUDED.full_name ELSE vehicle_owners.full_name END,
-         phone     = CASE WHEN EXCLUDED.phone <> ''     THEN EXCLUDED.phone     ELSE vehicle_owners.phone END,
-         email     = CASE WHEN EXCLUDED.email <> ''     THEN EXCLUDED.email     ELSE vehicle_owners.email END,
-         address   = CASE WHEN EXCLUDED.address <> ''   THEN EXCLUDED.address   ELSE vehicle_owners.address END,
-         notes     = CASE WHEN EXCLUDED.notes <> ''     THEN EXCLUDED.notes     ELSE vehicle_owners.notes END,
-         inspections_count = vehicle_owners.inspections_count + $11,
-         last_seen_at = now()
        RETURNING *`,
-      [
-        makeId(),
-        input.orgId,
-        document,
-        fullName,
-        phone,
-        email,
-        address,
-        notes,
-        inc,
-        input.createdBy ?? null,
-        inc,
-      ],
+      [makeId(), input.orgId, document, fullName, phone, email, address, notes, inc, input.createdBy ?? null],
     );
     return r.rows[0] ? rowToOwner(r.rows[0]) : null;
   }
@@ -223,10 +228,26 @@ export async function listVehicleOwners(
   }
   const where = filters.length ? `WHERE ${filters.join(" AND ")}` : "";
 
+  // DISTINCT ON para colapsar duplicados generados por el backfill (propietarios
+  // sin document ni phone crean una fila por inspección — caso 3 del upsert).
+  // La clave natural es (org_id, document) si hay doc, (org_id, phone) si hay
+  // phone, o el id propio como fallback. El CTE deduplica y el outer query
+  // reordena para la vista.
+  // DISTINCT ON para colapsar duplicados del backfill: agrupa por document si
+  // existe, luego por phone, y como último fallback por nombre en minúsculas.
+  // Usar `id` como fallback nunca colapsa (es único por fila).
   const r = await query<Row>(
-    `SELECT * FROM vehicle_owners ${where}
-       ORDER BY last_seen_at DESC, full_name ASC
-       LIMIT 500`,
+    `WITH deduped AS (
+       SELECT DISTINCT ON (org_id, COALESCE(NULLIF(document,''), NULLIF(phone,''), lower(full_name)))
+         *
+       FROM vehicle_owners ${where}
+       ORDER BY org_id,
+                COALESCE(NULLIF(document,''), NULLIF(phone,''), lower(full_name)),
+                last_seen_at DESC
+     )
+     SELECT * FROM deduped
+     ORDER BY last_seen_at DESC, full_name ASC
+     LIMIT 500`,
     params,
   );
   return r.rows.map(rowToOwner);

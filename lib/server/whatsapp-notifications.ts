@@ -1,39 +1,23 @@
 import "server-only";
 
-/**
- * Templates de mensajes WhatsApp para los 4 casos de uso del proyecto:
- *
- *  1. Equipo: aviso de intake nuevo
- *  2. Equipo: aviso de firma completada
- *  3. Cliente: link de firma (con QR/URL)
- *  4. Cliente: PDF final del peritaje
- *
- * Cada función:
- *   - Encola sus mensajes en la cola con delay del módulo `whatsapp`
- *   - Hace catch interno y loggea a stderr — los errores de notificación NUNCA
- *     deben romper el flow principal (intake, firma, pdf). Si WA no está
- *     conectado, los mensajes quedan en la cola hasta que reconecte.
- */
-
 import { getUserById, listTeamWhatsAppPhones } from "./auth";
 import { query } from "./db";
 import { sendPushToOrg, sendPushToUser } from "./push";
+import {
+  isMetaConfigured,
+  sendMetaDocumentTemplate,
+  sendMetaTemplate,
+} from "./whatsapp-meta";
 import {
   getWhatsAppStatus,
   sendDocument,
   sendText,
 } from "./whatsapp";
 
-/**
- * Registra un evento de entrega de WhatsApp en `audit_log` para que el panel
- * pueda mostrar al perito si el mensaje al cliente salió o falló. Se persiste
- * con action `wa.delivery` y detalle JSON: `{type, inspectionId, phone, status,
- * error?}`. El user_id queda null porque el envío es disparado por el sistema,
- * no por un usuario en sesión.
- *
- * Falla silenciosa: si la DB no responde, logueamos a stderr pero no
- * propagamos — un fallo de auditoría no debe romper el envío real.
- */
+// ---------------------------------------------------------------------------
+//  Tipos y helpers internos
+// ---------------------------------------------------------------------------
+
 type WaDeliveryEvent = {
   type: string;
   inspectionId: string | null;
@@ -60,8 +44,6 @@ async function recordWaDelivery(
   }
 }
 
-// Formato de fecha/hora colombiano para mensajes al cliente y al perito.
-// Bogotá no tiene horario de verano, así que la TZ fija evita confusiones.
 const FMT_DATE_TIME = new Intl.DateTimeFormat("es-CO", {
   timeZone: "America/Bogota",
   weekday: "long",
@@ -78,19 +60,7 @@ function fmtScheduledAt(iso: string): string {
   return FMT_DATE_TIME.format(d);
 }
 
-function isReady(orgId: string | null): boolean {
-  // No es bloqueante: aunque WA no esté listo, encolar es válido (se procesa
-  // cuando reconecte). Esta función sirve solo para skip rápido cuando ni
-  // siquiera vale la pena hacer la query de teléfonos del equipo. Sin orgId
-  // (admin) no hay socket — devolvemos false para skip total.
-  if (!orgId) return false;
-  const s = getWhatsAppStatus(orgId);
-  return s.status === "connected" || s.queueSize < 50; // cap defensivo de cola
-}
-
 function appUrl(): string {
-  // Si falta la env var caemos a un placeholder que avisa al admin. Mandar un
-  // link roto es mejor que callarse — al menos el cliente puede preguntar.
   return process.env.APP_PUBLIC_URL?.trim().replace(/\/$/, "") || "https://app.local";
 }
 
@@ -102,26 +72,69 @@ function safe(label: string, fn: () => void): void {
   }
 }
 
+// Dedup en memoria para envíos Meta (equivalente al dedup de la cola Baileys).
+const META_DEDUP_TTL_MS = 10 * 60_000;
+const metaDedup = new Map<string, number>(); // key → expiry epoch ms
+
+function isMetaDeduped(key: string): boolean {
+  const exp = metaDedup.get(key);
+  if (!exp) return false;
+  if (exp <= Date.now()) {
+    metaDedup.delete(key);
+    return false;
+  }
+  return true;
+}
+
+function markMetaDedup(key: string): void {
+  metaDedup.set(key, Date.now() + META_DEDUP_TTL_MS);
+}
+
+type OnResult = (r: { ok: boolean; error?: string }) => void | Promise<void>;
+
 /**
- * Wrapper de `listTeamWhatsAppPhones` que NO traga errores. Si la consulta
- * falla (DB caída, permisos rotos), el admin se entera por log explícito en
- * vez de "nadie recibió y nadie sabe por qué". Devolvemos array vacío en
- * cualquiera de los dos casos (error o legítimamente sin teléfonos) para que
- * los callers tengan un único camino, pero la diferencia queda en logs.
- *
- * Multi-tenant: cada org tiene su propio "equipo" — solo le mandamos avisos
- * internos a usuarios de la misma org que el peritaje/cita. Si orgId es
- * null (cross-org, owner del peritaje borrado, admin sin org), no notificamos
- * a nadie — el admin se entera por log y puede investigar.
+ * Dispara una llamada a la Meta API en fire-and-forget con dedup, logging
+ * y callback de resultado (para auditoría). Mismo patrón que el enqueue
+ * de Baileys pero sin cola: Meta responde en <1s y no necesita rate-limit
+ * manual porque tiene el suyo propio a nivel de API.
  */
+function safeMeta(
+  label: string,
+  dedupKey: string | null,
+  fn: () => Promise<void>,
+  onResult?: OnResult,
+): void {
+  if (dedupKey) {
+    if (isMetaDeduped(dedupKey)) {
+      console.warn(`[wa-meta] descartado por dedup: ${label} (key=${dedupKey})`);
+      return;
+    }
+    markMetaDedup(dedupKey);
+  }
+  fn().then(
+    () => {
+      void onResult?.({ ok: true });
+    },
+    (err: Error) => {
+      console.error(`[wa-meta] ${label} falló:`, err.message);
+      void onResult?.({ ok: false, error: err.message });
+    },
+  );
+}
+
+/** Verifica si el canal WA (Baileys) está operativo para una org. */
+function isBaileysReady(orgId: string | null): boolean {
+  if (!orgId) return false;
+  const s = getWhatsAppStatus(orgId);
+  return s.status === "connected" || s.queueSize < 50;
+}
+
 async function loadTeamPhones(
   context: string,
   orgId: string | null,
 ): Promise<Awaited<ReturnType<typeof listTeamWhatsAppPhones>>> {
   if (!orgId) {
-    console.warn(
-      `[wa-notify] ${context}: sin orgId, no se mandan avisos internos.`,
-    );
+    console.warn(`[wa-notify] ${context}: sin orgId, no se mandan avisos internos.`);
     return [];
   }
   try {
@@ -135,23 +148,42 @@ async function loadTeamPhones(
   }
 }
 
-/**
- * Caso 1: aviso al equipo cuando se crea un peritaje nuevo desde intake.
- * Fan-out a todos los usuarios con `wa_phone` configurado.
- */
+// ---------------------------------------------------------------------------
+//  Notificaciones — cada función tiene un bloque Meta y un fallback Baileys
+// ---------------------------------------------------------------------------
+
+/** Caso 1: aviso al equipo cuando se crea un peritaje nuevo desde intake. */
 export async function notifyTeamNewIntake(input: {
   inspectionId: string;
   plate: string;
-  vehicle: string; // "Toyota Corolla 2018"
+  vehicle: string;
   owner: string;
   inspectorName: string;
-  /** Org del peritaje. El fan-out solo va a usuarios de esta org. */
   orgId: string | null;
 }): Promise<void> {
-  if (!isReady(input.orgId)) return;
+  if (isMetaConfigured()) {
+    const team = await loadTeamPhones("team-intake", input.orgId);
+    for (const member of team) {
+      safeMeta(
+        `team-intake to ${member.fullName}`,
+        `team-intake:${input.inspectionId}:${member.waPhone}`,
+        () =>
+          sendMetaTemplate(member.waPhone, "nuevo_peritaje", [
+            input.vehicle || "—",
+            input.plate || "—",
+            input.owner || "—",
+            input.inspectorName,
+            `${appUrl()}/inspection/${input.inspectionId}`,
+          ]),
+      );
+    }
+    return;
+  }
+  // Baileys fallback
+  if (!isBaileysReady(input.orgId)) return;
   const team = await loadTeamPhones("team-intake", input.orgId);
   if (team.length === 0) return;
-  const lines = [
+  const text = [
     "🚗 *Nuevo peritaje*",
     `Placa: ${input.plate || "—"}`,
     `Vehículo: ${input.vehicle || "—"}`,
@@ -159,13 +191,9 @@ export async function notifyTeamNewIntake(input: {
     `Perito: ${input.inspectorName}`,
     "",
     `Ver: ${appUrl()}/inspection/${input.inspectionId}`,
-  ];
-  const text = lines.join("\n");
-  const orgId = input.orgId!; // isReady() ya descartó null
+  ].join("\n");
+  const orgId = input.orgId!;
   for (const member of team) {
-    // dedupKey por miembro + evento + peritaje: si el intake se procesa dos
-    // veces (reintento del cliente, doble click), cada perito del equipo
-    // recibe el aviso una sola vez.
     safe(`team-intake to ${member.fullName}`, () =>
       sendText(orgId, member.waPhone, text, {
         dedupKey: `team-intake:${input.inspectionId}:${member.waPhone}`,
@@ -175,17 +203,13 @@ export async function notifyTeamNewIntake(input: {
   }
 }
 
-/**
- * Caso 2: aviso al equipo cuando el cliente firma y el peritaje queda listo.
- */
+/** Caso 2: aviso al equipo cuando el cliente firma. */
 export async function notifyTeamSignatureCompleted(input: {
   inspectionId: string;
   plate: string;
   owner: string;
   orgId: string | null;
 }): Promise<void> {
-  // Push notifications van INDEPENDIENTE de WhatsApp — si el socket WA está
-  // caído pero el equipo tiene la PWA instalada, igual les llega el aviso.
   if (input.orgId) {
     void sendPushToOrg(input.orgId, {
       title: "Peritaje firmado",
@@ -194,7 +218,24 @@ export async function notifyTeamSignatureCompleted(input: {
       tag: `signed-${input.inspectionId}`,
     }).catch(() => {});
   }
-  if (!isReady(input.orgId)) return;
+  if (isMetaConfigured()) {
+    const team = await loadTeamPhones("team-signed", input.orgId);
+    for (const member of team) {
+      safeMeta(
+        `team-signed to ${member.fullName}`,
+        `team-signed:${input.inspectionId}:${member.waPhone}`,
+        () =>
+          sendMetaTemplate(member.waPhone, "peritaje_firmado", [
+            input.plate || "—",
+            input.owner || "—",
+            `${appUrl()}/inspection/${input.inspectionId}`,
+          ]),
+      );
+    }
+    return;
+  }
+  // Baileys fallback
+  if (!isBaileysReady(input.orgId)) return;
   const team = await loadTeamPhones("team-signed", input.orgId);
   if (team.length === 0) return;
   const text = [
@@ -215,27 +256,36 @@ export async function notifyTeamSignatureCompleted(input: {
   }
 }
 
-/**
- * Caso 3: mensaje al cliente con el link de firma.
- *
- * El link apunta a la ruta pública /sign/[token] que el cliente abre en su
- * propio celular. Si no hay teléfono del cliente, la función no hace nada
- * (silencioso — el perito puede igual mostrar el QR en su pantalla).
- */
+/** Caso 3: link de firma presencial al cliente (TTL 10 min). */
 export function notifyClientSignLink(input: {
   clientPhone: string | null | undefined;
   ownerName: string;
   plate: string;
   signToken: string;
-  /** Org del peritaje. El mensaje sale del socket WA de esta org — el
-   *  cliente recibe la firma desde el número del perito. */
   orgId: string | null;
-  /** ID del peritaje (para auditar el envío y poder mostrarlo en el wizard).
-   *  El link en sí sigue dependiendo del signToken. */
   inspectionId?: string | null;
 }): void {
-  if (!isReady(input.orgId)) return;
   if (!input.clientPhone?.trim()) return;
+  const phone = input.clientPhone;
+  const inspectionId = input.inspectionId ?? null;
+  const orgId = input.orgId;
+
+  if (isMetaConfigured()) {
+    safeMeta(
+      `client-sign to ${phone}`,
+      `client-sign:${input.signToken}`,
+      () =>
+        sendMetaTemplate(phone, "firma_link", [
+          input.ownerName?.trim() || "cliente",
+          input.plate || "—",
+          `${appUrl()}/sign/${input.signToken}`,
+        ]),
+      (r) => recordWaDelivery(orgId, { type: "client-sign", inspectionId, phone, status: r.ok ? "sent" : "failed", error: r.error }),
+    );
+    return;
+  }
+  // Baileys fallback
+  if (!isBaileysReady(orgId)) return;
   const greeting = input.ownerName?.trim() ? `Hola ${input.ownerName},` : "Hola,";
   const text = [
     greeting,
@@ -245,31 +295,17 @@ export function notifyClientSignLink(input: {
     "",
     "El link expira en 10 minutos. Si no alcanzas, el perito puede generarte uno nuevo.",
   ].join("\n");
-  const orgId = input.orgId!;
-  const phone = input.clientPhone!;
-  const inspectionId = input.inspectionId ?? null;
   safe(`client-sign to ${phone}`, () =>
-    sendText(orgId, phone, text, {
+    sendText(orgId!, phone, text, {
       dedupKey: `client-sign:${input.signToken}`,
       label: `client-sign to ${phone}`,
-      onResult: ({ ok, error }) =>
-        recordWaDelivery(orgId, {
-          type: "client-sign",
-          inspectionId,
-          phone,
-          status: ok ? "sent" : "failed",
-          error,
-        }),
+      onResult: (r) =>
+        recordWaDelivery(orgId, { type: "client-sign", inspectionId, phone, status: r.ok ? "sent" : "failed", error: r.error }),
     }),
   );
 }
 
-/**
- * Variante remota del caso 3: link de firma con TTL extendido (72h) para
- * cuando el cliente no está presente. El mensaje incluye contexto (qué
- * vehículo, ventana de validez) para que el cliente entienda que es legítimo
- * y no spam — un link seco le da menos confianza.
- */
+/** Variante remota: link de firma con TTL 72h. */
 export function notifyClientRemoteSignLink(input: {
   clientPhone: string | null | undefined;
   ownerName: string;
@@ -280,8 +316,28 @@ export function notifyClientRemoteSignLink(input: {
   orgId: string | null;
   inspectionId?: string | null;
 }): void {
-  if (!isReady(input.orgId)) return;
   if (!input.clientPhone?.trim()) return;
+  const phone = input.clientPhone;
+  const inspectionId = input.inspectionId ?? null;
+  const orgId = input.orgId;
+
+  if (isMetaConfigured()) {
+    safeMeta(
+      `client-sign-remote to ${phone}`,
+      `client-sign-remote:${input.signToken}`,
+      () =>
+        sendMetaTemplate(phone, "firma_remota", [
+          input.ownerName?.trim() || "cliente",
+          input.inspectorName,
+          input.plate || "—",
+          `${appUrl()}/sign/${input.signToken}`,
+        ]),
+      (r) => recordWaDelivery(orgId, { type: "client-sign-remote", inspectionId, phone, status: r.ok ? "sent" : "failed", error: r.error }),
+    );
+    return;
+  }
+  // Baileys fallback
+  if (!isBaileysReady(orgId)) return;
   const greeting = input.ownerName?.trim() ? `Hola ${input.ownerName},` : "Hola,";
   const vehicle = input.vehicleLabel
     ? `${input.vehicleLabel} de placa ${input.plate || "—"}`
@@ -296,33 +352,17 @@ export function notifyClientRemoteSignLink(input: {
     "",
     "Tienes 72 horas para firmar. Si dejas vencer el link, podemos generarte otro.",
   ].join("\n");
-  const orgId = input.orgId!;
-  const phone = input.clientPhone!;
-  const inspectionId = input.inspectionId ?? null;
   safe(`client-sign-remote to ${phone}`, () =>
-    sendText(orgId, phone, text, {
-      // Dedup por token: el token cambia si el perito regenera la sesión, así
-      // que un reenvío "real" pasa pero un retry interno se colapsa.
+    sendText(orgId!, phone, text, {
       dedupKey: `client-sign-remote:${input.signToken}`,
       label: `client-sign-remote to ${phone}`,
-      onResult: ({ ok, error }) =>
-        recordWaDelivery(orgId, {
-          type: "client-sign-remote",
-          inspectionId,
-          phone,
-          status: ok ? "sent" : "failed",
-          error,
-        }),
+      onResult: (r) =>
+        recordWaDelivery(orgId, { type: "client-sign-remote", inspectionId, phone, status: r.ok ? "sent" : "failed", error: r.error }),
     }),
   );
 }
 
-/**
- * Aviso al perito cuando un cliente firma vía flow REMOTO. En el presencial
- * el perito está al lado del cliente; en remoto puede pasar mucho tiempo
- * entre envío del link y firma, así que esta notificación destapa la novedad
- * para que el perito entre a finalizar el peritaje.
- */
+/** Aviso al perito cuando el cliente firma remotamente. */
 export async function notifyPeritoSignatureReceived(input: {
   peritoUserId: string | null;
   inspectionId: string;
@@ -330,10 +370,27 @@ export async function notifyPeritoSignatureReceived(input: {
   ownerName: string;
   orgId: string | null;
 }): Promise<void> {
-  if (!isReady(input.orgId)) return;
   if (!input.peritoUserId) return;
   const perito = await getUserById(input.peritoUserId).catch(() => null);
   if (!perito?.waPhone?.trim()) return;
+  const phone = perito.waPhone;
+  const orgId = input.orgId;
+
+  if (isMetaConfigured()) {
+    safeMeta(
+      `perito-signed to ${perito.fullName}`,
+      `perito-signed:${input.inspectionId}`,
+      () =>
+        sendMetaTemplate(phone, "firma_recibida", [
+          input.plate || "—",
+          input.ownerName || "—",
+          `${appUrl()}/inspection/${input.inspectionId}`,
+        ]),
+    );
+    return;
+  }
+  // Baileys fallback
+  if (!isBaileysReady(orgId)) return;
   const text = [
     "✍️ *Firma del cliente recibida*",
     `Placa: ${input.plate || "—"}`,
@@ -342,20 +399,15 @@ export async function notifyPeritoSignatureReceived(input: {
     "El cliente firmó remotamente. Puedes finalizar el peritaje:",
     `${appUrl()}/inspection/${input.inspectionId}`,
   ].join("\n");
-  const orgId = input.orgId!;
   safe(`perito-signed to ${perito.fullName}`, () =>
-    sendText(orgId, perito.waPhone!, text, {
+    sendText(orgId!, phone, text, {
       dedupKey: `perito-signed:${input.inspectionId}`,
       label: `perito-signed to ${perito.fullName}`,
     }),
   );
 }
 
-/**
- * Caso 4: PDF final al cliente cuando el peritaje queda firmado y completado.
- * El PDF llega como adjunto en el mismo mensaje (Baileys empaqueta el
- * Buffer como documento).
- */
+/** Caso 4: PDF final al cliente. */
 export function notifyClientFinalPdf(input: {
   clientPhone: string | null | undefined;
   ownerName: string;
@@ -363,18 +415,45 @@ export function notifyClientFinalPdf(input: {
   reportNumber: string | null;
   pdfBuffer: Buffer;
   orgId: string | null;
-  /** Si es true, se omite el dedupKey y se mete un sufijo único — usado por
-   *  el endpoint de reenvío manual cuando el perito decide volver a mandar el
-   *  PDF (p.ej. cliente reportó que no le llegó). */
   manualResend?: boolean;
-  /** ID del peritaje, sólo para auditar (no se manda por WA). */
   inspectionId?: string | null;
 }): void {
-  if (!isReady(input.orgId)) return;
   if (!input.clientPhone?.trim()) return;
+  const phone = input.clientPhone;
+  const inspectionId = input.inspectionId ?? null;
+  const orgId = input.orgId;
   const filename = input.reportNumber
     ? `Peritaje-${input.reportNumber}.pdf`
     : `Peritaje-${input.plate || "vehiculo"}.pdf`;
+  const baseDedupKey = input.reportNumber
+    ? `client-pdf:${input.reportNumber}`
+    : `client-pdf:${phone}:${input.plate || "x"}`;
+  const dedupKey = input.manualResend
+    ? `${baseDedupKey}:resend:${Date.now()}`
+    : baseDedupKey;
+
+  if (isMetaConfigured()) {
+    safeMeta(
+      `client-pdf to ${phone}`,
+      dedupKey,
+      () =>
+        sendMetaDocumentTemplate(
+          phone,
+          "peritaje_pdf",
+          input.pdfBuffer,
+          filename,
+          [
+            input.ownerName?.trim() || "cliente",
+            input.plate || "—",
+            input.reportNumber ? `Informe N° ${input.reportNumber}.` : "Cualquier duda, escríbenos.",
+          ],
+        ),
+      (r) => recordWaDelivery(orgId, { type: "client-pdf", inspectionId, phone, status: r.ok ? "sent" : "failed", error: r.error }),
+    );
+    return;
+  }
+  // Baileys fallback
+  if (!isBaileysReady(orgId)) return;
   const greeting = input.ownerName?.trim() ? `Hola ${input.ownerName},` : "Hola,";
   const caption = [
     greeting,
@@ -384,37 +463,74 @@ export function notifyClientFinalPdf(input: {
   ]
     .filter(Boolean)
     .join("\n");
-  const baseDedupKey = input.reportNumber
-    ? `client-pdf:${input.reportNumber}`
-    : `client-pdf:${input.clientPhone}:${input.plate || "x"}`;
-  const dedupKey = input.manualResend
-    ? `${baseDedupKey}:resend:${Date.now()}`
-    : baseDedupKey;
-  const orgId = input.orgId!;
-  const inspectionId = input.inspectionId ?? null;
-  const phone = input.clientPhone!;
   safe(`client-pdf to ${phone}`, () =>
-    sendDocument(orgId, phone, input.pdfBuffer, filename, {
+    sendDocument(orgId!, phone, input.pdfBuffer, filename, {
       caption,
       dedupKey,
       label: `client-pdf to ${phone}`,
-      onResult: ({ ok, error }) =>
-        recordWaDelivery(orgId, {
-          type: "client-pdf",
-          inspectionId,
-          phone,
-          status: ok ? "sent" : "failed",
-          error,
-        }),
+      onResult: (r) =>
+        recordWaDelivery(orgId, { type: "client-pdf", inspectionId, phone, status: r.ok ? "sent" : "failed", error: r.error }),
     }),
   );
 }
 
-/**
- * Aviso al perito asignado cuando se le asigna una cita. Si el perito no tiene
- * `wa_phone` configurado, la función no hace nada (silencioso — el admin igual
- * ve la cita en /agenda).
- */
+/** Caso 4b: link público del peritaje al cliente. */
+export function notifyClientShareLink(input: {
+  clientPhone: string | null | undefined;
+  ownerName: string;
+  plate: string;
+  reportNumber: string | null;
+  shareUrl: string;
+  orgId: string | null;
+  inspectionId?: string | null;
+}): void {
+  if (!input.clientPhone?.trim()) return;
+  const phone = input.clientPhone;
+  const inspectionId = input.inspectionId ?? null;
+  const orgId = input.orgId;
+  const dedupKey = input.reportNumber
+    ? `client-link:${input.reportNumber}`
+    : `client-link:${phone}:${input.plate || "x"}`;
+
+  if (isMetaConfigured()) {
+    safeMeta(
+      `client-link to ${phone}`,
+      dedupKey,
+      () =>
+        sendMetaTemplate(phone, "peritaje_link", [
+          input.ownerName?.trim() || "cliente",
+          input.plate || "—",
+          input.reportNumber ? `Informe N° ${input.reportNumber}.` : "",
+          input.shareUrl,
+        ]),
+      (r) => recordWaDelivery(orgId, { type: "client-link", inspectionId, phone, status: r.ok ? "sent" : "failed", error: r.error }),
+    );
+    return;
+  }
+  // Baileys fallback
+  if (!isBaileysReady(orgId)) return;
+  const greeting = input.ownerName?.trim() ? `Hola ${input.ownerName},` : "Hola,";
+  const text = [
+    greeting,
+    `Tu peritaje de la placa *${input.plate || "—"}* está listo.`,
+    ...(input.reportNumber ? [`Informe N° ${input.reportNumber}.`] : []),
+    "",
+    "📄 Ver y descargar tu peritaje:",
+    input.shareUrl,
+    "",
+    "El enlace es válido por 90 días. También te enviamos el PDF adjunto en el siguiente mensaje.",
+  ].join("\n");
+  safe(`client-link to ${phone}`, () =>
+    sendText(orgId!, phone, text, {
+      dedupKey,
+      label: `client-link to ${phone}`,
+      onResult: (r) =>
+        recordWaDelivery(orgId, { type: "client-link", inspectionId, phone, status: r.ok ? "sent" : "failed", error: r.error }),
+    }),
+  );
+}
+
+/** Aviso al perito cuando se le asigna una cita. */
 export async function notifyAssignedPerito(input: {
   peritoUserId: string;
   ownerName: string;
@@ -423,23 +539,38 @@ export async function notifyAssignedPerito(input: {
   vehicleLabel: string;
   scheduledAtISO: string;
   location: string;
-  /** Org de la cita. El aviso sale del socket WA de la org. Si el perito
-   *  está en otra org (no debería), igual usamos el de la cita — la cita
-   *  manda. */
   orgId: string | null;
 }): Promise<void> {
-  // Push notification al perito independiente de WhatsApp: si tiene la PWA
-  // instalada y permisos otorgados, le llega aunque el socket WA esté caído
-  // o aunque el perito no tenga `wa_phone` cargado.
   void sendPushToUser(input.peritoUserId, {
     title: "Cita asignada",
     body: `${fmtScheduledAt(input.scheduledAtISO)} · ${input.plate || "Sin placa"} · ${input.ownerName || "—"}`,
     url: "/agenda",
     tag: `appt-${input.peritoUserId}-${input.scheduledAtISO}`,
   }).catch(() => {});
-  if (!isReady(input.orgId)) return;
+
   const perito = await getUserById(input.peritoUserId).catch(() => null);
   if (!perito?.waPhone?.trim()) return;
+  const phone = perito.waPhone;
+  const orgId = input.orgId;
+
+  if (isMetaConfigured()) {
+    safeMeta(
+      `perito-assigned to ${perito.fullName}`,
+      `perito-assigned:${input.peritoUserId}:${input.scheduledAtISO}`,
+      () =>
+        sendMetaTemplate(phone, "cita_asignada", [
+          fmtScheduledAt(input.scheduledAtISO),
+          input.plate || "—",
+          input.vehicleLabel || "—",
+          input.ownerName || "—",
+          input.ownerPhone || "—",
+          input.location || "—",
+        ]),
+    );
+    return;
+  }
+  // Baileys fallback
+  if (!isBaileysReady(orgId)) return;
   const text = [
     "📅 *Cita asignada*",
     `Cuándo: ${fmtScheduledAt(input.scheduledAtISO)}`,
@@ -451,23 +582,15 @@ export async function notifyAssignedPerito(input: {
   ]
     .filter(Boolean)
     .join("\n");
-  const orgId = input.orgId!;
   safe(`perito-assigned to ${perito.fullName}`, () =>
-    sendText(orgId, perito.waPhone!, text, {
-      // Una asignación cambia si se reasigna a otro perito o se reprograma —
-      // por eso incluimos peritoUserId + scheduledAt en la key.
+    sendText(orgId!, phone, text, {
       dedupKey: `perito-assigned:${input.peritoUserId}:${input.scheduledAtISO}`,
       label: `perito-assigned to ${perito.fullName}`,
     }),
   );
 }
 
-/**
- * Confirmación al cliente cuando se agenda su cita. Le manda hora, ubicación y
- * el teléfono del negocio por si necesita reprogramar/cancelar (no creamos un
- * portal de cancelación — el cliente responde por WhatsApp y el equipo lo
- * ajusta manualmente desde /agenda).
- */
+/** Confirmación de cita al cliente. */
 export function notifyClientAppointmentConfirmed(input: {
   clientPhone: string | null | undefined;
   ownerName: string;
@@ -477,8 +600,26 @@ export function notifyClientAppointmentConfirmed(input: {
   location: string;
   orgId: string | null;
 }): void {
-  if (!isReady(input.orgId)) return;
   if (!input.clientPhone?.trim()) return;
+  const phone = input.clientPhone;
+  const orgId = input.orgId;
+
+  if (isMetaConfigured()) {
+    safeMeta(
+      `client-appt-confirm to ${phone}`,
+      `client-appt-confirm:${phone}:${input.scheduledAtISO}`,
+      () =>
+        sendMetaTemplate(phone, "cita_confirmada", [
+          input.ownerName?.trim() || "cliente",
+          fmtScheduledAt(input.scheduledAtISO),
+          input.plate || "—",
+          input.location || "—",
+        ]),
+    );
+    return;
+  }
+  // Baileys fallback
+  if (!isBaileysReady(orgId)) return;
   const greeting = input.ownerName?.trim() ? `Hola ${input.ownerName},` : "Hola,";
   const text = [
     greeting,
@@ -492,20 +633,15 @@ export function notifyClientAppointmentConfirmed(input: {
   ]
     .filter(Boolean)
     .join("\n");
-  const orgId = input.orgId!;
-  safe(`client-appt-confirm to ${input.clientPhone}`, () =>
-    sendText(orgId, input.clientPhone!, text, {
-      dedupKey: `client-appt-confirm:${input.clientPhone}:${input.scheduledAtISO}`,
-      label: `client-appt-confirm to ${input.clientPhone}`,
+  safe(`client-appt-confirm to ${phone}`, () =>
+    sendText(orgId!, phone, text, {
+      dedupKey: `client-appt-confirm:${phone}:${input.scheduledAtISO}`,
+      label: `client-appt-confirm to ${phone}`,
     }),
   );
 }
 
-/**
- * Recordatorio de cita al cliente. Disparado por el loop de reminders, una vez
- * 24h antes y otra 2h antes. La idempotencia (no repetir) la maneja el
- * llamador vía la columna `appointments.reminders_sent`.
- */
+/** Recordatorio de cita al cliente (24h o 2h antes). */
 export function notifyClientAppointmentReminder(input: {
   clientPhone: string | null | undefined;
   ownerName: string;
@@ -515,8 +651,27 @@ export function notifyClientAppointmentReminder(input: {
   when: "24h" | "2h";
   orgId: string | null;
 }): void {
-  if (!isReady(input.orgId)) return;
   if (!input.clientPhone?.trim()) return;
+  const phone = input.clientPhone;
+  const orgId = input.orgId;
+  const templateName = input.when === "24h" ? "recordatorio_24h" : "recordatorio_2h";
+
+  if (isMetaConfigured()) {
+    safeMeta(
+      `client-appt-reminder-${input.when} to ${phone}`,
+      `client-appt-reminder:${input.when}:${phone}:${input.scheduledAtISO}`,
+      () =>
+        sendMetaTemplate(phone, templateName, [
+          input.ownerName?.trim() || "cliente",
+          fmtScheduledAt(input.scheduledAtISO),
+          input.plate || "—",
+          input.location || "—",
+        ]),
+    );
+    return;
+  }
+  // Baileys fallback
+  if (!isBaileysReady(orgId)) return;
   const greeting = input.ownerName?.trim() ? `Hola ${input.ownerName},` : "Hola,";
   const lead =
     input.when === "24h"
@@ -534,15 +689,55 @@ export function notifyClientAppointmentReminder(input: {
   ]
     .filter(Boolean)
     .join("\n");
-  const orgId = input.orgId!;
-  safe(`client-appt-reminder-${input.when} to ${input.clientPhone}`, () =>
-    sendText(orgId, input.clientPhone!, text, {
-      // Un cliente solo debe recibir un único reminder 24h y un único 2h por
-      // cita; si el loop se dispara más veces (restart, race) la dedup key
-      // colapsa el duplicado.
-      dedupKey: `client-appt-reminder:${input.when}:${input.clientPhone}:${input.scheduledAtISO}`,
-      label: `client-appt-reminder-${input.when} to ${input.clientPhone}`,
+  safe(`client-appt-reminder-${input.when} to ${phone}`, () =>
+    sendText(orgId!, phone, text, {
+      dedupKey: `client-appt-reminder:${input.when}:${phone}:${input.scheduledAtISO}`,
+      label: `client-appt-reminder-${input.when} to ${phone}`,
     }),
   );
 }
 
+/** Mensaje de no-show al cliente. */
+export function notifyClientNoShow(input: {
+  clientPhone: string | null | undefined;
+  ownerName: string;
+  plate: string;
+  orgId: string | null;
+  inspectionId?: string | null;
+}): void {
+  if (!input.clientPhone?.trim()) return;
+  const phone = input.clientPhone;
+  const inspectionId = input.inspectionId ?? null;
+  const orgId = input.orgId;
+
+  if (isMetaConfigured()) {
+    safeMeta(
+      `client-noshow to ${phone}`,
+      `noshow:${phone}:${input.plate || "x"}:${Date.now()}`,
+      () =>
+        sendMetaTemplate(phone, "no_asistio", [
+          input.ownerName?.trim() || "cliente",
+          input.plate ? ` para la placa *${input.plate}*` : "",
+        ]),
+      (r) => recordWaDelivery(orgId, { type: "client-noshow", inspectionId, phone, status: r.ok ? "sent" : "failed", error: r.error }),
+    );
+    return;
+  }
+  // Baileys fallback
+  if (!isBaileysReady(orgId)) return;
+  const greeting = input.ownerName?.trim() ? `Hola ${input.ownerName},` : "Hola,";
+  const text = [
+    greeting,
+    `Notamos que no pudiste llegar a tu cita de peritaje${input.plate ? ` para la placa *${input.plate}*` : ""}.`,
+    "",
+    "¿Te gustaría reagendar? Escríbenos y buscamos un nuevo horario que te quede bien.",
+  ].join("\n");
+  safe(`client-noshow to ${phone}`, () =>
+    sendText(orgId!, phone, text, {
+      dedupKey: `noshow:${phone}:${input.plate || "x"}:${Date.now()}`,
+      label: `client-noshow to ${phone}`,
+      onResult: (r) =>
+        recordWaDelivery(orgId, { type: "client-noshow", inspectionId, phone, status: r.ok ? "sent" : "failed", error: r.error }),
+    }),
+  );
+}

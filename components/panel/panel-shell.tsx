@@ -29,7 +29,7 @@ export function PanelShell({
           <Sidebar user={user} open={open} onClose={() => setOpen(false)} />
           <div className="flex min-w-0 flex-1 flex-col">
             <Topbar user={user} onMenuClick={() => setOpen(true)} />
-            <main className="flex-1">{children}</main>
+            <main className="flex-1 px-20">{children}</main>
           </div>
         </div>
       </UIPreferencesProvider>

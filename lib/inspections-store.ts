@@ -7,6 +7,7 @@ import {
   idbListInspections,
   idbPutInspection,
   idbPutInspections,
+  idbRemoveMutationsForInspection,
 } from "./client/idb";
 import {
   flushSyncQueue,
@@ -345,12 +346,12 @@ export function saveInspectionData(id: string, data: InspectionData) {
 }
 
 export function deleteInspection(id: string) {
-  // Nota: solo admin tiene el botón de borrar en la UI. El bloqueo dura del
-  // server (deleteInspectionServer + requireAdmin) sigue siendo la frontera
-  // real. Acá solo evitamos encolar mutaciones que vamos a saber inválidas.
   memory.delete(id);
   idbDeleteInspection(id).catch(() => {});
-  idbEnqueueMutation({ kind: "delete", inspectionId: id })
+  // Limpiamos todas las mutations previas (updates/creates) para este ID
+  // antes de encolar el delete — así no quedan huérfanas en la cola.
+  idbRemoveMutationsForInspection(id)
+    .then(() => idbEnqueueMutation({ kind: "delete", inspectionId: id }))
     .then(refreshPending)
     .then(flushSyncQueue)
     .then(requestBackgroundSync)

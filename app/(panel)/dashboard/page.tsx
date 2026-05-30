@@ -10,18 +10,19 @@ import {
   getRecentActivity,
   getTopOrgsThisMonth,
 } from "@/lib/server/admin-stats";
+import { getInspectorStats } from "@/lib/server/org-stats";
 
 import { AdminDashboard } from "./admin-dashboard";
 import { DashboardClient } from "./dashboard-client";
+import { InspectorStats } from "./inspector-stats";
 
 export const dynamic = "force-dynamic";
 
 export default async function DashboardPage() {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
+  if (user.role === "employee") redirect("/peritajes");
 
-  // El admin (Vestel) ve la vista agregada cross-org. Owner/employee siguen
-  // viendo el dashboard original orientado a sus propios peritajes.
   if (user.role === "admin") {
     const [kpis, topOrgs, trend, kindBreakdown, alerts, newOrgs, recent] =
       await Promise.all([
@@ -46,5 +47,14 @@ export default async function DashboardPage() {
     );
   }
 
-  return <DashboardClient />;
+  const inspectorStats = user.orgId
+    ? await getInspectorStats(user.orgId).catch(() => [])
+    : [];
+
+  return (
+    <div className="space-y-6">
+      <DashboardClient />
+      {inspectorStats.length > 1 && <InspectorStats stats={inspectorStats} />}
+    </div>
+  );
 }

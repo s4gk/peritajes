@@ -11,6 +11,7 @@ import { apiFetch } from "@/lib/client/api-client";
 import { formatDate } from "@/lib/utils";
 
 type Status = {
+  provider?: "meta" | "baileys";
   status: "disconnected" | "connecting" | "qr" | "connected";
   phone: string | null;
   qrDataUrl: string | null;
@@ -113,14 +114,16 @@ export function WhatsAppClient() {
     );
   }
 
+  const isMeta = state.provider === "meta";
+
   return (
     <div className="space-y-4">
       <div>
         <h1 className="text-2xl font-semibold tracking-tight">WhatsApp</h1>
         <p className="text-sm text-muted-foreground">
-          Conecta un número de WhatsApp para enviar notificaciones al equipo
-          (intake nuevo, firma completada) y al cliente (link de firma, PDF
-          final).
+          {isMeta
+            ? "Integración activa con la API oficial de WhatsApp Business de Meta."
+            : "Conecta un número de WhatsApp para enviar notificaciones al equipo (intake nuevo, firma completada) y al cliente (link de firma, PDF final)."}
         </p>
       </div>
 
@@ -128,22 +131,29 @@ export function WhatsAppClient() {
         <CardHeader className="flex flex-row items-center justify-between gap-2">
           <CardTitle className="flex items-center gap-2 text-base">
             <MessageCircle className="h-4 w-4" /> Estado de conexión
+            {isMeta && (
+              <span className="rounded-full bg-primary/10 px-2 py-0.5 text-xs font-normal text-primary">
+                API Oficial
+              </span>
+            )}
           </CardTitle>
           <StatusBadge status={state.status} />
         </CardHeader>
         <CardContent className="space-y-4">
           {state.phone && (
             <div className="text-sm">
-              <span className="text-muted-foreground">Número conectado:</span>{" "}
+              <span className="text-muted-foreground">Número de empresa:</span>{" "}
               <span className="font-mono">+{state.phone}</span>
             </div>
           )}
           {state.connectedAt && (
             <div className="text-sm text-muted-foreground">
-              Conectado desde {formatDate(new Date(state.connectedAt).toISOString())}
+              {isMeta
+                ? "Token configurado y activo."
+                : `Conectado desde ${formatDate(new Date(state.connectedAt).toISOString())}`}
             </div>
           )}
-          {state.queueSize > 0 && (
+          {!isMeta && state.queueSize > 0 && (
             <div className="text-sm text-muted-foreground">
               {state.queueSize} mensaje(s) en cola.
             </div>
@@ -154,7 +164,8 @@ export function WhatsAppClient() {
             </div>
           )}
 
-          {state.status === "qr" && state.qrDataUrl && (
+          {/* Baileys: QR */}
+          {!isMeta && state.status === "qr" && state.qrDataUrl && (
             <div className="space-y-2">
               <p className="text-sm">
                 Abre WhatsApp en tu teléfono → <strong>Dispositivos vinculados</strong>{" "}
@@ -167,20 +178,30 @@ export function WhatsAppClient() {
                 className="mx-auto h-72 w-72 rounded-md border bg-white p-2"
               />
               <p className="text-xs text-muted-foreground">
-                El QR se renueva automáticamente cada ~20s. No te preocupes si
-                cambia en pantalla.
+                El QR se renueva automáticamente cada ~20s.
               </p>
             </div>
           )}
 
-          {state.status === "connecting" && (
+          {!isMeta && state.status === "connecting" && (
             <div className="flex items-center gap-2 text-sm text-muted-foreground">
               <Loader2 className="h-4 w-4 animate-spin" /> Conectando…
             </div>
           )}
 
+          {/* Meta: info adicional */}
+          {isMeta && (
+            <div className="rounded-md border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+              Los mensajes se envían mediante plantillas aprobadas por Meta.
+              El botón de prueba envía un texto libre a tu número de WhatsApp
+              personal (requiere que hayas escrito al número de empresa en las
+              últimas 24 h).
+            </div>
+          )}
+
           <div className="flex flex-wrap gap-2 pt-2">
-            {(state.status === "disconnected" || state.status === "qr") && (
+            {/* Baileys: conectar */}
+            {!isMeta && (state.status === "disconnected" || state.status === "qr") && (
               <Button onClick={handleConnect} disabled={busy}>
                 {busy ? (
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -190,20 +211,24 @@ export function WhatsAppClient() {
                 {state.status === "qr" ? "Renovar QR" : "Conectar"}
               </Button>
             )}
-            {state.status === "connected" && (
-              <>
-                <Button onClick={handleTestMessage} disabled={busy}>
-                  {busy ? (
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  ) : (
-                    <Send className="mr-2 h-4 w-4" />
-                  )}
-                  Enviar mensaje de prueba
-                </Button>
-                <Button variant="outline" onClick={handleLogout} disabled={busy}>
-                  <LogOut className="mr-2 h-4 w-4" /> Desconectar
-                </Button>
-              </>
+
+            {/* Prueba — disponible en ambos modos cuando hay conexión */}
+            {(isMeta || state.status === "connected") && (
+              <Button onClick={handleTestMessage} disabled={busy}>
+                {busy ? (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                ) : (
+                  <Send className="mr-2 h-4 w-4" />
+                )}
+                Enviar mensaje de prueba
+              </Button>
+            )}
+
+            {/* Baileys: desconectar */}
+            {!isMeta && state.status === "connected" && (
+              <Button variant="outline" onClick={handleLogout} disabled={busy}>
+                <LogOut className="mr-2 h-4 w-4" /> Desconectar
+              </Button>
             )}
           </div>
         </CardContent>
@@ -212,16 +237,36 @@ export function WhatsAppClient() {
       <div className="rounded-md border bg-muted/30 p-4 text-xs text-muted-foreground">
         <p className="mb-1 font-medium text-foreground">Recomendaciones</p>
         <ul className="list-disc space-y-1 pl-4">
-          <li>Usa un número dedicado al negocio, no el personal.</li>
-          <li>
-            Asegúrate que cada usuario del equipo tenga su teléfono WA en{" "}
-            <strong>Mi cuenta</strong> para recibir avisos internos.
-          </li>
-          <li>
-            Carga el teléfono del cliente en el peritaje (paso{" "}
-            <em>Vehículo / Propietario</em>) para que reciba el link de firma y
-            el PDF.
-          </li>
+          {isMeta ? (
+            <>
+              <li>
+                Para que los mensajes lleguen, crea las plantillas en{" "}
+                <strong>Meta Business Manager</strong> con los nombres exactos
+                documentados en <code>lib/server/whatsapp-meta.ts</code>.
+              </li>
+              <li>
+                Registra el webhook <code>/api/webhooks/whatsapp</code> en Meta
+                para recibir confirmaciones de entrega y mensajes entrantes.
+              </li>
+              <li>
+                Asegúrate que cada usuario del equipo tenga su teléfono WA en{" "}
+                <strong>Mi cuenta</strong> para recibir avisos internos.
+              </li>
+            </>
+          ) : (
+            <>
+              <li>Usa un número dedicado al negocio, no el personal.</li>
+              <li>
+                Asegúrate que cada usuario del equipo tenga su teléfono WA en{" "}
+                <strong>Mi cuenta</strong> para recibir avisos internos.
+              </li>
+              <li>
+                Carga el teléfono del cliente en el peritaje (paso{" "}
+                <em>Vehículo / Propietario</em>) para que reciba el link de
+                firma y el PDF.
+              </li>
+            </>
+          )}
         </ul>
       </div>
     </div>

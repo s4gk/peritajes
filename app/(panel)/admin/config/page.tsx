@@ -12,7 +12,7 @@ export default async function AdminConfigPage() {
   if (user.role !== "admin") redirect("/dashboard");
 
   return (
-    <div className="mx-auto w-full max-w-screen-2xl space-y-5 px-4 py-6 sm:px-6 lg:px-8">
+    <div className="mx-auto w-full max-w-screen-2xl space-y-5 py-6">
       <div className="flex items-center gap-2">
         <Settings className="h-5 w-5 text-muted-foreground" />
         <h1 className="text-xl font-semibold tracking-tight sm:text-2xl">

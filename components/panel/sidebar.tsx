@@ -37,7 +37,7 @@ type NavItem = {
  *  Empleados, WhatsApp) porque su flujo es por /clientes; cuando necesita
  *  entrar a la operación de una empresa puntual, lo hace desde ahí. */
 const NAV_MAIN: NavItem[] = [
-  { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
+  { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard, roles: ["owner", "admin"] },
   { href: "/agenda", label: "Agenda", icon: Calendar },
   { href: "/peritajes", label: "Peritajes", icon: ClipboardList },
   { href: "/vehiculos", label: "Vehículos", icon: Car },

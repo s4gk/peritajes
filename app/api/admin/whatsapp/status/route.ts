@@ -6,6 +6,7 @@ import {
   autoConnectIfPersisted,
   getWhatsAppStatus,
 } from "@/lib/server/whatsapp";
+import { getMetaStatus, isMetaConfigured } from "@/lib/server/whatsapp-meta";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -38,6 +39,12 @@ export async function GET() {
       { status: 403 },
     );
   }
+  // Cuando META_WA_TOKEN y META_WA_PHONE_NUMBER_ID están configurados, toda
+  // la plataforma usa la API oficial — no hay sockets Baileys que gestionar.
+  if (isMetaConfigured()) {
+    return NextResponse.json({ ...getMetaStatus(), provider: "meta" });
+  }
+
   // Si tras un restart de pm2 quedaron credenciales en `.wa-auth/<orgId>/`,
   // la primera visita del owner al panel dispara la reconexión de TODAS las
   // orgs sin necesidad de QR. No bloqueamos: corre en background.
@@ -49,6 +56,7 @@ export async function GET() {
     user.orgId ?? (user.role === "admin" ? ADMIN_WA_ORG : null);
   if (!orgId) {
     return NextResponse.json({
+      provider: "baileys",
       status: "disconnected",
       phone: null,
       qrDataUrl: null,
@@ -57,5 +65,5 @@ export async function GET() {
       queueSize: 0,
     });
   }
-  return NextResponse.json(getWhatsAppStatus(orgId));
+  return NextResponse.json({ ...getWhatsAppStatus(orgId), provider: "baileys" });
 }

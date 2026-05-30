@@ -340,19 +340,30 @@ const LEAK_CATALOG: FindingCatalog = {
   ],
   categories: [
     {
-      label: "Humedad",
+      label: "Nivel de fuga",
       options: [
-        { value: "leak_humid", label: "Húmedo sin goteo", tone: "warning", severity: 1, risks: ["leak_light"] },
-        { value: "leak_sweating", label: "Sellos sudados", tone: "warning", severity: 1, risks: ["leak_light"] },
+        { value: "leak_humid", label: "Humedad", tone: "warning", severity: 1, risks: ["leak_light"] },
+        { value: "leak_active", label: "Fuga", tone: "warning", severity: 2, risks: ["leak_light"] },
+        { value: "leak_heavy", label: "Fuga excesiva", tone: "danger", severity: 3, risks: ["leak_heavy"] },
       ],
     },
+  ],
+};
+
+/* -----------------------------------------------------------
+ *  FLUID LEVELS — niveles de fluidos (aceite, refrigerante, etc.)
+ * --------------------------------------------------------- */
+const FLUID_LEVEL_CATALOG: FindingCatalog = {
+  quick: [
+    { value: "fluid_full", label: "Full", tone: "success" },
+    { value: "na", label: "No aplica", tone: "neutral", risks: ["na"] },
+  ],
+  categories: [
     {
-      label: "Goteo",
+      label: "Nivel",
       options: [
-        { value: "leak_slow", label: "Goteo lento (< 1 gota / min)", tone: "warning", severity: 2, risks: ["leak_light"] },
-        { value: "leak_active", label: "Goteo activo", tone: "danger", severity: 2, risks: ["leak_heavy"] },
-        { value: "leak_puddle", label: "Charco visible bajo vehículo", tone: "danger", severity: 3, risks: ["leak_heavy"] },
-        { value: "leak_fuel", label: "Fuga de combustible (riesgo)", tone: "danger", severity: 3, risks: ["leak_heavy"] },
+        { value: "fluid_mid", label: "Medio", tone: "warning", severity: 1 },
+        { value: "fluid_low", label: "Bajo", tone: "danger", severity: 2 },
       ],
     },
   ],
@@ -364,6 +375,7 @@ export const FINDING_CATALOGS: Record<ItemKind, FindingCatalog> = {
   mechanical: COMMON_CATALOG,
   road_test: ROAD_TEST_CATALOG,
   leak: LEAK_CATALOG,
+  fluid_level: FLUID_LEVEL_CATALOG,
   light_unit: LIGHT_CATALOG,
   panoramic: PANORAMIC_CATALOG,
 };

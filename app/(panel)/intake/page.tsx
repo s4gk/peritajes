@@ -124,7 +124,7 @@ export default function IntakePage() {
 
   return (
     <div className="min-h-screen bg-muted/30 py-6">
-      <div className="mx-auto w-full max-w-screen-2xl px-4 sm:px-6 lg:px-8">
+      <div className="mx-auto w-full max-w-screen-2xl">
         <div className="mb-4">
           <Button
             type="button"

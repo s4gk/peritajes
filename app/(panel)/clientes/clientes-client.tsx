@@ -47,7 +47,7 @@ export function ClientesClient({ initialOrgs }: { initialOrgs: OrgSummary[] }) {
   }
 
   return (
-    <div className="mx-auto w-full max-w-screen-2xl space-y-5 px-4 py-6 sm:px-6 lg:px-8">
+    <div className="mx-auto w-full max-w-screen-2xl space-y-5 py-6">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="text-xl font-semibold tracking-tight sm:text-2xl">
@@ -75,7 +75,7 @@ export function ClientesClient({ initialOrgs }: { initialOrgs: OrgSummary[] }) {
                 <Link
                   key={o.id}
                   href={`/clientes/${o.id}`}
-                  className="flex flex-col gap-2 px-4 py-3 transition-colors hover:bg-muted/40 sm:flex-row sm:items-center sm:justify-between"
+                  className="flex flex-col gap-2  py-3 transition-colors hover:bg-muted/40 sm:flex-row sm:items-center sm:justify-between"
                 >
                   <div className="min-w-0">
                     <div className="flex items-center gap-2">

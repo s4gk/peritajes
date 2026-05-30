@@ -94,7 +94,7 @@ export function VehiculosClient() {
   }
 
   return (
-    <div className="mx-auto w-full max-w-screen-2xl space-y-5 px-4 py-6 sm:px-6 lg:px-8">
+    <div className="mx-auto w-full max-w-screen-2xl space-y-5 py-6">
       <div>
         <h1 className="text-xl font-semibold tracking-tight sm:text-2xl">
           Vehículos
@@ -139,7 +139,7 @@ export function VehiculosClient() {
                 <Link
                   key={row.plate}
                   href={`/inspection/${row.lastInspection.id}`}
-                  className="flex items-center justify-between gap-3 px-4 py-3 hover:bg-muted/40"
+                  className="flex items-center justify-between gap-3  py-3 hover:bg-muted/40"
                 >
                   <div className="flex min-w-0 items-center gap-3">
                     <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground">

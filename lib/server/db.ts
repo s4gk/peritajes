@@ -131,6 +131,20 @@ CREATE TABLE IF NOT EXISTS company_config (
 -- crearse o al primer get.
 ALTER TABLE company_config ADD COLUMN IF NOT EXISTS org_id TEXT REFERENCES organizations(id) ON DELETE CASCADE;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_company_config_org ON company_config(org_id) WHERE org_id IS NOT NULL;
+-- El constraint CHECK (id = 1) era del diseño single-tenant original; con
+-- multi-tenant cada org necesita su propia fila con id > 1. Lo dropamos si
+-- todavía existe (idempotente: DO block verifica antes de alterar).
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
+    WHERE table_name = 'company_config'
+      AND constraint_name = 'company_config_id_check'
+      AND constraint_type = 'CHECK'
+  ) THEN
+    ALTER TABLE company_config DROP CONSTRAINT company_config_id_check;
+  END IF;
+END $$;
 
 CREATE TABLE IF NOT EXISTS audit_log (
   id BIGSERIAL PRIMARY KEY,

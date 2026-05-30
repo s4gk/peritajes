@@ -7,14 +7,11 @@ import {
   Cloud,
   CloudOff,
   Loader2,
-  RefreshCw,
-  Trash2,
 } from "lucide-react";
+
 
 import { Badge } from "@/components/ui/badge";
 import {
-  clearFailedMutations,
-  retryFailedMutations,
   subscribeSync,
   type SyncState,
 } from "@/lib/client/sync-queue";
@@ -42,47 +39,11 @@ export function SyncStatus() {
     syncing: false,
     failed: 0,
     lastErrorMessage: null,
+    firstFailedInspectionId: null,
+    firstFailedKind: null,
     oldestPendingAt: null,
   });
   const [storagePct, setStoragePct] = React.useState<number | null>(null);
-  const [busy, setBusy] = React.useState(false);
-  const toast = useToast();
-
-  async function handleClearFailed() {
-    setBusy(true);
-    try {
-      const r = await clearFailedMutations();
-      toast.show({
-        title:
-          r.removed === 0
-            ? "Nada que limpiar"
-            : `${r.removed} cambio(s) descartado(s)`,
-        description:
-          r.removed > 0
-            ? "Eran cambios locales que el servidor rechazaba. Se eliminaron de este dispositivo."
-            : undefined,
-        variant: "success",
-      });
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function handleRetryFailed() {
-    setBusy(true);
-    try {
-      const r = await retryFailedMutations();
-      toast.show({
-        title:
-          r.retried === 0
-            ? "Nada que reintentar"
-            : `Reintentando ${r.retried} cambio(s)…`,
-        variant: "default",
-      });
-    } finally {
-      setBusy(false);
-    }
-  }
 
   React.useEffect(() => {
     const unsub = subscribeSync(setState);
@@ -111,11 +72,6 @@ export function SyncStatus() {
     label = state.pending > 0 ? `Sin red · ${state.pending}` : "Sin red";
     tone = "neutral";
     title = "Sin conexión. Los cambios se guardan local y se subirán cuando vuelva la red.";
-  } else if (state.failed > 0) {
-    icon = <AlertTriangle className="h-3 w-3" />;
-    label = `${state.failed} fallidos`;
-    tone = "danger";
-    title = state.lastErrorMessage ?? "Algunas subidas fallaron tras varios reintentos.";
   } else if (state.syncing) {
     icon = <Loader2 className="h-3 w-3 animate-spin" />;
     label = state.pending > 0 ? `Subiendo · ${state.pending}` : "Subiendo…";
@@ -145,39 +101,6 @@ export function SyncStatus() {
         {icon}
         {label}
       </Badge>
-      {state.failed > 0 && (
-        // Acciones in-line cuando hay mutaciones fallidas. Sin esto el perito
-        // veía la pill roja sin saber qué hacer y nos llamaba a soporte; ahora
-        // se atiende solo desde el sidebar.
-        <div className="space-y-1">
-          <div className="rounded-md border border-danger/30 bg-danger/5 px-2 py-1.5 text-[10px] leading-tight text-muted-foreground">
-            Hay {state.failed} cambio(s) que el servidor rechazó tras varios
-            reintentos. Puedes reintentar o descartarlos.
-          </div>
-          <div className="flex gap-1">
-            <button
-              type="button"
-              onClick={handleRetryFailed}
-              disabled={busy}
-              className="inline-flex flex-1 items-center justify-center gap-1 rounded-md border border-border bg-card px-2 py-1 text-[10px] font-medium hover:bg-muted disabled:opacity-50"
-              title="Resetea el contador de intentos y vuelve a probar"
-            >
-              <RefreshCw className="h-3 w-3" />
-              Reintentar
-            </button>
-            <button
-              type="button"
-              onClick={handleClearFailed}
-              disabled={busy}
-              className="inline-flex flex-1 items-center justify-center gap-1 rounded-md border border-danger/40 bg-danger/10 px-2 py-1 text-[10px] font-medium text-danger hover:bg-danger/20 disabled:opacity-50"
-              title="Borra del dispositivo los cambios que el servidor rechaza (típicamente peritajes corruptos de versiones viejas)"
-            >
-              <Trash2 className="h-3 w-3" />
-              Descartar
-            </button>
-          </div>
-        </div>
-      )}
       {storageWarn && (
         <Badge
           variant="warning"

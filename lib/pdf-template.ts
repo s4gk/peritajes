@@ -1,3 +1,4 @@
+import * as fs from "node:fs";
 import { existsSync } from "node:fs";
 import path from "node:path";
 
@@ -24,6 +25,7 @@ import type {
   InspectionData,
   InspectionEntry,
   InspectionSectionDef,
+  VehicleType,
 } from "./types";
 import { titleCase } from "./verifik/mappings";
 import { fasecoldaLatestValueCop } from "./verifik/fasecolda";
@@ -437,6 +439,7 @@ function renderSectionDualTable(
   data: Record<string, InspectionEntry>,
   sectionHealth?: SectionHealth,
   sectionId?: SectionId,
+  vehicleType?: VehicleType,
 ): string {
   type Row = {
     label: string;
@@ -541,7 +544,11 @@ function renderSectionDualTable(
   // Los detalles de hallazgos (con notas/fotos) ya no se renderizan acá —
   // se consolidan al final del documento en renderAllFindingsDetail para que
   // el PDF tenga primero el resumen tabular y luego el dossier completo.
-  const refImage = sectionId ? sectionReferenceImage(sectionId) : "";
+  const SECTIONS_WITH_REF_IMAGE: readonly SectionId[] = ["bodywork", "chassis", "engine"];
+  const refImage =
+    sectionId && SECTIONS_WITH_REF_IMAGE.includes(sectionId)
+      ? sectionReferenceImage(sectionId, vehicleType)
+      : "";
 
   return `
     <section class="docs-section proc-section">
@@ -563,13 +570,76 @@ function renderSectionDualTable(
  * La imagen se referencia por ruta `/section-refs/...` que Puppeteer
  * descarga del mismo origin durante el render.
  */
-function sectionReferenceImage(sectionId: SectionId): string {
-  const refUrl = SECTION_REF_URL_BY_ID[sectionId];
-  if (!refUrl) return "";
+const SECTION_DESCRIPTIONS: Record<SectionId, { summary: string; items: string[] }> = {
+  bodywork: {
+    summary: "Evaluación visual completa del exterior del vehículo para detectar daños, reparaciones previas y alteraciones de fábrica.",
+    items: ["Paneles, puertas y guardabarros", "Vidrios, molduras y cromados", "Capó y maletero", "Pintura: repintada, oxidación o masilla", "Huellas de colisión o reparación estructural"],
+  },
+  chassis: {
+    summary: "Inspección estructural del chasis para identificar daños post-colisión, reparaciones ocultas y pérdida de integridad.",
+    items: ["Largueros y travesaños", "Puntos de anclaje y soldaduras", "Originalidad de sellantes", "Óxido estructural o dobleces", "Piso, parales y panel trasero"],
+  },
+  suspension: {
+    summary: "Diagnóstico del sistema de amortiguación y dirección para evaluar seguridad, confort y desgaste de componentes.",
+    items: ["Amortiguadores delanteros y traseros", "Rótulas, bujes y muelles", "Brazos de suspensión", "Estabilizadores y terminales", "Alineación y comportamiento general"],
+  },
+  engine: {
+    summary: "Revisión del compartimento motor para verificar su estado mecánico, estanqueidad y comportamiento al encendido.",
+    items: ["Nivel y estado de fluidos", "Mangueras, correas y fajas", "Batería y sistema de arranque", "Signos de fugas o sobrecalentamiento", "Comportamiento al ralentí"],
+  },
+  electrical: {
+    summary: "Verificación del sistema eléctrico y electrónico para detectar fallos en iluminación, carga y conectividad.",
+    items: ["Sistema de iluminación completo", "Señales, sensores y tablero", "Sistema de carga y alternador", "Fusibles y conectores", "Elevavidrios y cierre centralizado"],
+  },
+  comfort: {
+    summary: "Evaluación del habitáculo para verificar el estado de materiales, controles y sistemas de confort del ocupante.",
+    items: ["Tapicería, techo y pisos", "Climatización y calefacción", "Sistema de audio y pantallas", "Tablero e instrumentos", "Funcionamiento de controles y mandos"],
+  },
+  leaks: {
+    summary: "Inspección visual de fugas activas o residuales en sistemas de fluidos críticos del vehículo.",
+    items: ["Aceite de motor y caja", "Líquido refrigerante", "Líquido de frenos", "Dirección hidráulica", "Sellos de cigüeñal y diferencial"],
+  },
+  roadTest: {
+    summary: "Evaluación del comportamiento dinámico del vehículo en condiciones reales de conducción.",
+    items: ["Aceleración y respuesta del motor", "Sistema de frenos", "Dirección y estabilidad", "Transmisión y caja de velocidades", "Ruidos y vibraciones anómalos"],
+  },
+  tires: {
+    summary: "Revisión del estado de los neumáticos y aros para verificar seguridad, desgaste y uniformidad entre ejes.",
+    items: ["Profundidad de banda de rodadura", "Desgaste irregular o excéntrico", "Presión y estado general", "Condición de los aros", "Uniformidad entre ejes"],
+  },
+  accessories: {
+    summary: "Inventario de accesorios obligatorios y opcionales presentes en el vehículo al momento de la inspección.",
+    items: ["Documentos y tarjeta de propiedad", "Llaves y controles remotos", "Extintor y señales de emergencia", "Gato hidráulico y herramientas", "Llanta de repuesto"],
+  },
+};
+
+function sectionReferenceImage(sectionId: SectionId, vehicleType?: VehicleType): string {
+  const refUrl =
+    (vehicleType && SECTION_REF_URLS[`${sectionId}_${vehicleType}`]) ||
+    SECTION_REF_URLS[sectionId] ||
+    null;
+  const desc = SECTION_DESCRIPTIONS[sectionId];
+  if (!desc) return "";
+
+  const descHtml = `
+    <div class="section-intro-desc">
+      <p class="section-intro-summary">${escapeHtml(desc.summary)}</p>
+      <ul class="section-intro-items">
+        ${desc.items.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}
+      </ul>
+    </div>
+  `;
+
+  if (!refUrl) {
+    return `<div class="section-intro section-intro-noimg">${descHtml}</div>`;
+  }
   return `
-    <figure class="section-ref">
-      <img src="${refUrl}" alt="Referencia visual: ${escapeHtml(sectionId)}" />
-    </figure>
+    <div class="section-intro">
+      <div class="section-intro-img">
+        <img src="${refUrl}" alt="Referencia visual: ${escapeHtml(sectionId)}" />
+      </div>
+      ${descHtml}
+    </div>
   `;
 }
 
@@ -596,16 +666,38 @@ const SECTION_REF_IDS: SectionId[] = [
   "tires",
   "accessories",
 ];
-const SECTION_REF_URL_BY_ID: Partial<Record<SectionId, string>> = (() => {
-  const out: Partial<Record<SectionId, string>> = {};
-  for (const id of SECTION_REF_IDS) {
-    for (const ext of ["png", "jpg", "jpeg", "webp"]) {
-      const file = path.join(SECTION_REF_DIR, `${id}.${ext}`);
-      if (existsSync(file)) {
-        out[id] = `/section-refs/${id}.${ext}`;
-        break;
-      }
-    }
+
+/**
+ * Mapa plano de claves "{sectionId}_{vehicleType}" y "{sectionId}" → URL pública.
+ * La búsqueda en sectionReferenceImage prueba primero la clave específica por
+ * tipo de vehículo y cae al genérico si no existe.
+ */
+const SECTION_REF_URLS: Record<string, string> = (() => {
+  const out: Record<string, string> = {};
+  const exts = ["png", "jpg", "jpeg", "webp"];
+  const mimeOf: Record<string, string> = {
+    png: "image/png",
+    jpg: "image/jpeg",
+    jpeg: "image/jpeg",
+    webp: "image/webp",
+  };
+
+  let entries: string[] = [];
+  try {
+    entries = fs.readdirSync(SECTION_REF_DIR);
+  } catch { /* carpeta no existe */ }
+
+  for (const entry of entries) {
+    const dot = entry.lastIndexOf(".");
+    if (dot === -1) continue;
+    const ext = entry.slice(dot + 1).toLowerCase();
+    if (!exts.includes(ext)) continue;
+    const key = entry.slice(0, dot);
+    if (out[key]) continue;
+    try {
+      const buf = fs.readFileSync(path.join(SECTION_REF_DIR, entry));
+      out[key] = `data:${mimeOf[ext]};base64,${buf.toString("base64")}`;
+    } catch { /* archivo no legible */ }
   }
   return out;
 })();
@@ -1677,6 +1769,7 @@ export function renderReportHtml(
       s.data,
       health.bySection[s.sectionId],
       s.sectionId,
+      vehicleType,
     );
   };
 
@@ -1846,36 +1939,83 @@ export function renderReportHtml(
     text-transform: uppercase;
     letter-spacing: 1.4px;
   }
-  .vehicle-specs .spec-group-body {
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 2.5mm 6mm;
+  .vspec-card {
+    border: 1px solid #e2e8f0;
+    border-radius: 6pt;
+    overflow: hidden;
+    font-size: 9pt;
+    page-break-inside: avoid;
+    break-inside: avoid;
   }
-  .vehicle-specs .spec-cell {
+  .vspec-cols {
+    display: flex;
+    gap: 0;
+    border-bottom: 1px solid #e2e8f0;
+  }
+  .vspec-col {
+    flex: 1;
     display: flex;
     flex-direction: column;
-    gap: 1pt;
+    padding: 4pt 0;
   }
-  .vehicle-specs .spec-cell.spec-owner {
-    grid-column: span 2;
+  .vspec-col:first-child {
+    border-right: 1px solid #f1f5f9;
   }
-  .vehicle-specs .label {
-    font-size: 7pt;
+  .vspec-item {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5pt;
+    padding: 2pt 8pt;
+  }
+  .vsl {
+    font-size: 7.5pt;
+    font-weight: 600;
     color: #94a3b8;
     text-transform: uppercase;
     letter-spacing: 0.4px;
-    font-weight: 500;
+    white-space: nowrap;
+    flex-shrink: 0;
   }
-  .vehicle-specs .value {
-    font-size: 9.8pt;
+  .vsv {
+    font-size: 9pt;
     font-weight: 500;
     color: #0f172a;
-    line-height: 1.25;
   }
-  .vehicle-specs .value.mono {
-    font-size: 9pt;
-    letter-spacing: 0.3px;
+  .vsv.mono {
     font-family: "Roboto Mono", "SF Mono", Menlo, Monaco, "Courier New", monospace;
+    font-size: 8.5pt;
+    letter-spacing: 0.3px;
+  }
+  .vspec-ids {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    background: #f1f5f9;
+    border-bottom: 1px solid #e2e8f0;
+  }
+  .vspec-id-item {
+    display: flex;
+    flex-direction: column;
+    gap: 1pt;
+    padding: 3pt 8pt;
+    border-right: 1px solid #e2e8f0;
+  }
+  .vspec-id-item:last-child { border-right: none; }
+  .vspec-owner {
+    display: flex;
+    align-items: baseline;
+    gap: 8pt;
+    padding: 3pt 8pt;
+    background: #f8fafc;
+  }
+  .vspec-owner-val {
+    font-size: 9.5pt;
+    font-weight: 700;
+    color: #0f172a;
+  }
+  .vspec-owner-doc {
+    font-size: 8pt;
+    font-weight: 400;
+    color: #64748b;
   }
   .legal-cards {
     display: grid;
@@ -2118,6 +2258,20 @@ export function renderReportHtml(
     page-break-inside: avoid;
   }
 
+  /* Watermark — logo centrado en todas las páginas */
+  .watermark {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%) rotate(-30deg);
+    width: 200pt;
+    height: 200pt;
+    object-fit: contain;
+    opacity: 0.06;
+    pointer-events: none;
+    z-index: 0;
+  }
+
   /* Branded header on the cover page */
   .brand-header {
     display: grid;
@@ -2188,13 +2342,13 @@ export function renderReportHtml(
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 12pt;
+    gap: 8pt;
     background: #f8fafc;
     border: 1px solid #e2e8f0;
-    border-left: 4pt solid #94a3b8;
+    border-left: 3pt solid #94a3b8;
     border-radius: 5pt;
-    padding: 8pt 14pt;
-    margin: 6pt 0 8pt;
+    padding: 5pt 10pt;
+    margin: 4pt 0 5pt;
   }
   .summary-global.tone-success { border-left-color: #16a34a; background: #f0fdf4; }
   .summary-global.tone-warning { border-left-color: #f59e0b; background: #fffbeb; }
@@ -2212,7 +2366,7 @@ export function renderReportHtml(
     margin-top: 2pt;
   }
   .summary-global .sg-value {
-    font-size: 26pt;
+    font-size: 18pt;
     font-weight: 800;
     color: #0f172a;
     line-height: 1;
@@ -2222,9 +2376,9 @@ export function renderReportHtml(
   .summary-rows {
     display: flex;
     flex-direction: column;
-    gap: 7pt;
-    margin-top: 4pt;
-    padding: 9pt 12pt;
+    gap: 3pt;
+    margin-top: 3pt;
+    padding: 5pt 10pt;
     border: 1px solid #e2e8f0;
     border-radius: 5pt;
     background: #ffffff;
@@ -2232,8 +2386,8 @@ export function renderReportHtml(
   .prog-row {
     display: flex;
     flex-direction: column;
-    gap: 4pt;
-    padding-bottom: 7pt;
+    gap: 2pt;
+    padding-bottom: 3pt;
     border-bottom: 1px solid #f1f5f9;
   }
   .prog-row:last-child {
@@ -2242,18 +2396,18 @@ export function renderReportHtml(
   }
   .prog-row-main {
     display: grid;
-    grid-template-columns: 150pt 1fr 38pt 90pt;
+    grid-template-columns: 130pt 1fr 32pt 80pt;
     align-items: center;
-    gap: 12pt;
+    gap: 8pt;
   }
   .prog-name {
-    font-size: 10.5pt;
+    font-size: 8.5pt;
     font-weight: 700;
     color: #0f172a;
     white-space: nowrap;
     display: inline-flex;
     align-items: center;
-    gap: 5pt;
+    gap: 4pt;
     overflow: hidden;
   }
   /* Gates de seguridad activos */
@@ -2292,7 +2446,7 @@ export function renderReportHtml(
   .prog-tier.tone-danger  { color: #991b1b; }
   .prog-tier.tone-muted   { color: #94a3b8; }
   .prog-pct {
-    font-size: 12pt;
+    font-size: 9.5pt;
     font-weight: 800;
     font-variant-numeric: tabular-nums;
     letter-spacing: -0.3px;
@@ -2303,7 +2457,7 @@ export function renderReportHtml(
   .prog-pct.tone-danger  { color: #991b1b; }
   .prog-pct.tone-muted   { color: #94a3b8; font-weight: 600; }
   .prog-bar {
-    height: 10pt;
+    height: 6pt;
     background: #e2e8f0;
     border-radius: 100px;
     overflow: hidden;
@@ -2318,10 +2472,10 @@ export function renderReportHtml(
   .prog-fill.tone-muted   { background: #cbd5e1; }
   .prog-stats {
     display: flex;
-    gap: 10pt;
+    gap: 7pt;
     align-items: center;
     flex-wrap: wrap;
-    font-size: 8.8pt;
+    font-size: 7.5pt;
     color: #475569;
   }
   .stat-chip {
@@ -2358,24 +2512,67 @@ export function renderReportHtml(
   .proc-section { margin-top: 8mm; }
   .proc-section .section-h { margin-top: 0; }
 
-  /* Imagen de referencia educativa al inicio de cada sección. Se rellena
-     desde public/section-refs/<sectionId>.{png,jpg,jpeg,webp}; si el operador
-     no subió una para esa sección, el bloque no se renderiza. */
-  .section-ref {
+  /* Cabecera descriptiva de sección: imagen de referencia (60%) + descripción (40%).
+     Si no hay imagen para esa sección, la descripción ocupa el ancho completo. */
+  .section-intro {
+    display: flex;
+    gap: 0;
     margin: 3mm 0 4mm;
-    padding: 0;
-    text-align: center;
     page-break-inside: avoid;
     break-inside: avoid;
-  }
-  .section-ref img {
-    max-width: 100%;
-    max-height: 55mm;
-    object-fit: contain;
+    align-items: stretch;
     border: 1px solid #e2e8f0;
-    border-radius: 4pt;
+    border-radius: 6pt;
+    overflow: hidden;
     background: #f8fafc;
   }
+  .section-intro-img {
+    flex: 0 0 58%;
+    max-width: 58%;
+  }
+  .section-intro-img img {
+    width: 100%;
+    height: 100%;
+    max-height: 58mm;
+    object-fit: contain;
+    display: block;
+    background: #f8fafc;
+  }
+  .section-intro-desc {
+    flex: 1;
+    padding: 4mm 5mm;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 4pt;
+  }
+  .section-intro-summary {
+    margin: 0;
+    font-size: 8pt;
+    color: #475569;
+    line-height: 1.5;
+    font-style: italic;
+  }
+  .section-intro-items {
+    margin: 0;
+    padding-left: 12pt;
+    display: flex;
+    flex-direction: column;
+    gap: 2pt;
+  }
+  .section-intro-items li {
+    font-size: 8pt;
+    color: #0f172a;
+    font-weight: 500;
+    line-height: 1.4;
+  }
+  .section-intro-noimg {
+    display: block;
+    border: 1px solid #e2e8f0;
+    border-radius: 6pt;
+    background: #ffffff;
+  }
+  .section-intro-noimg .section-intro-desc { padding: 4mm 5mm; }
 
   .proc-hero {
     display: flex;
@@ -2903,6 +3100,8 @@ export function renderReportHtml(
 </head>
 <body>
 
+  ${brand.logoDataUrl ? `<img class="watermark" src="${brand.logoDataUrl}" alt="" />` : ""}
+
   <!-- COVER -->
   <section class="cover">
     <div>
@@ -2950,24 +3149,33 @@ export function renderReportHtml(
 
       <div class="vehicle-specs">
         ${heading("Datos del vehículo")}
-        <div class="spec-group">
-          <div class="spec-group-body">
-            <div class="spec-cell"><span class="label">Clase</span><span class="value">${esc(v.vehicleClass)}</span></div>
-            <div class="spec-cell"><span class="label">Marca</span><span class="value">${esc(v.make)}</span></div>
-            <div class="spec-cell"><span class="label">Línea</span><span class="value">${esc(v.model)}</span></div>
-            <div class="spec-cell"><span class="label">Carrocería</span><span class="value">${esc(v.bodyType)}</span></div>
-            <div class="spec-cell"><span class="label">Modelo</span><span class="value">${esc(v.year)}</span></div>
-            <div class="spec-cell"><span class="label">Nacionalidad</span><span class="value">${esc(v.nationality)}</span></div>
-            <div class="spec-cell"><span class="label">Tipo de caja</span><span class="value">${escapeHtml(transmissionLabel(v.transmission))}</span></div>
-            <div class="spec-cell"><span class="label">Cilindraje</span><span class="value">${v.cylinderCapacity ? `${escapeHtml(v.cylinderCapacity)} cc` : "—"}</span></div>
-            <div class="spec-cell"><span class="label">Combustible</span><span class="value">${escapeHtml(fuelLabel(v.fuel))}</span></div>
-            <div class="spec-cell"><span class="label">Servicio</span><span class="value">${esc(v.serviceType)}</span></div>
-            <div class="spec-cell"><span class="label">Kilometraje</span><span class="value">${v.mileage ? `${escapeHtml(v.mileage)} km` : "—"}</span></div>
-            <div class="spec-cell"><span class="label">Color</span><span class="value">${esc(v.color)}</span></div>
-            <div class="spec-cell"><span class="label">No. Chasis</span><span class="value mono">${esc(v.chassisNumber)}</span></div>
-            <div class="spec-cell"><span class="label">No. Serial</span><span class="value mono">${esc(v.vin)}</span></div>
-            <div class="spec-cell"><span class="label">No. Motor</span><span class="value mono">${esc(v.engineNumber)}</span></div>
-            <div class="spec-cell spec-owner"><span class="label">Propietario</span><span class="value">${esc(v.owner)}</span></div>
+        <div class="vspec-card">
+          <div class="vspec-cols">
+            <div class="vspec-col">
+              <div class="vspec-item"><span class="vsl">Clase</span><span class="vsv">${esc(v.vehicleClass)}</span></div>
+              <div class="vspec-item"><span class="vsl">Marca</span><span class="vsv">${esc(v.make)}</span></div>
+              <div class="vspec-item"><span class="vsl">Línea</span><span class="vsv">${esc(v.model)}</span></div>
+              <div class="vspec-item"><span class="vsl">Carrocería</span><span class="vsv">${esc(v.bodyType)}</span></div>
+              <div class="vspec-item"><span class="vsl">Modelo</span><span class="vsv">${esc(v.year)}</span></div>
+              <div class="vspec-item"><span class="vsl">Color</span><span class="vsv">${esc(v.color)}</span></div>
+            </div>
+            <div class="vspec-col">
+              <div class="vspec-item"><span class="vsl">Nacionalidad</span><span class="vsv">${esc(v.nationality)}</span></div>
+              <div class="vspec-item"><span class="vsl">Tipo de caja</span><span class="vsv">${escapeHtml(transmissionLabel(v.transmission))}</span></div>
+              <div class="vspec-item"><span class="vsl">Cilindraje</span><span class="vsv">${v.cylinderCapacity ? `${escapeHtml(v.cylinderCapacity)} cc` : "—"}</span></div>
+              <div class="vspec-item"><span class="vsl">Combustible</span><span class="vsv">${escapeHtml(fuelLabel(v.fuel))}</span></div>
+              <div class="vspec-item"><span class="vsl">Servicio</span><span class="vsv">${esc(v.serviceType)}</span></div>
+              <div class="vspec-item"><span class="vsl">Kilometraje</span><span class="vsv">${v.mileage ? `${escapeHtml(v.mileage)} km` : "—"}</span></div>
+            </div>
+          </div>
+          <div class="vspec-ids">
+            <div class="vspec-id-item"><span class="vsl">No. Chasis</span><span class="vsv mono">${esc(v.chassisNumber) || "—"}</span></div>
+            <div class="vspec-id-item"><span class="vsl">No. Serial (VIN)</span><span class="vsv mono">${esc(v.vin) || "—"}</span></div>
+            <div class="vspec-id-item"><span class="vsl">No. Motor</span><span class="vsv mono">${esc(v.engineNumber) || "—"}</span></div>
+          </div>
+          <div class="vspec-owner">
+            <span class="vsl">Propietario</span>
+            <span class="vspec-owner-val">${esc(v.owner) || "—"}${v.ownerDocument ? ` <span class="vspec-owner-doc">· ${esc(v.ownerDocument)}</span>` : ""}</span>
           </div>
         </div>
         ${renderLegalAdmin(data.verifik)}

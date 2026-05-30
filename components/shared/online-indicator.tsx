@@ -24,6 +24,8 @@ export function OnlineIndicator() {
     syncing: false,
     failed: 0,
     lastErrorMessage: null,
+    firstFailedInspectionId: null,
+    firstFailedKind: null,
     oldestPendingAt: null,
   });
 

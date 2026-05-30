@@ -12,9 +12,14 @@ import {
 import { readPdf } from "@/lib/server/pdf-storage";
 import { buildPublicBaseUrl } from "@/lib/server/qr";
 import { upsertVehicleOwner } from "@/lib/server/vehicle-owners";
+import {
+  createShareToken,
+  getActiveShareTokenForInspection,
+} from "@/lib/server/share-tokens";
 import { resolveWaOrgId } from "@/lib/server/whatsapp";
 import {
   notifyClientFinalPdf,
+  notifyClientShareLink,
   notifyTeamSignatureCompleted,
 } from "@/lib/server/whatsapp-notifications";
 import type { InspectionData, StoredInspection } from "@/lib/types";
@@ -225,17 +230,46 @@ async function sendCompletionNotifications(
 
   if (!vehicle?.ownerPhone?.trim()) return;
 
-  // Intentamos leer el PDF; si no existe (el render inline falló en el PUT),
-  // forzamos un nuevo intento aquí. Esto evita que un fallo transitorio de
-  // Puppeteer deje al cliente sin su PDF: la notificación corre fuera del
-  // ciclo de respuesta, así que reintentar es barato.
+  // Generamos (o reutilizamos) el share token para que el cliente tenga un
+  // link permanente que pueda reenviar a aseguradoras, compradores, etc.
+  const baseUrl =
+    process.env.APP_PUBLIC_URL?.trim().replace(/\/$/, "") ||
+    buildPublicBaseUrl(req) ||
+    new URL(req.url).origin;
+
+  let shareUrl: string | null = null;
+  try {
+    const existing = await getActiveShareTokenForInspection(inspection.id);
+    const token = existing
+      ? existing.token
+      : (await createShareToken({ inspectionId: inspection.id, createdBy: user.id }))
+          .token;
+    shareUrl = `${baseUrl}/r/${token}`;
+  } catch (err) {
+    console.error("[wa] share-token: no se pudo generar para", inspection.id, (err as Error).message);
+  }
+
+  // 1. Mensaje de texto con el link (el cliente lo puede reenviar a terceros)
+  if (shareUrl) {
+    notifyClientShareLink({
+      clientPhone: vehicle.ownerPhone,
+      ownerName: vehicle.owner ?? "",
+      plate: vehicle.plate ?? "",
+      reportNumber: inspection.reportNumber ?? null,
+      shareUrl,
+      orgId: waOrgId,
+      inspectionId: inspection.id,
+    });
+  }
+
+  // 2. PDF adjunto como respaldo offline
   let pdfBuffer = await readPdf(inspection.id);
   if (!pdfBuffer) {
     try {
       await ensureCompletedPdf({
         inspectionId: inspection.id,
         user,
-        baseUrl: buildPublicBaseUrl(req) || new URL(req.url).origin,
+        baseUrl,
       });
       pdfBuffer = await readPdf(inspection.id);
     } catch (err) {

@@ -19,7 +19,7 @@ export type VehicleType =
   | "motorcycle"          // Moto, motocarro, cuatrimoto.
   | "trailer";            // Remolque o semirremolque.
 
-export type ItemKind = "bodywork" | "structural" | "mechanical" | "road_test" | "leak" | "light_unit" | "panoramic";
+export type ItemKind = "bodywork" | "structural" | "mechanical" | "road_test" | "leak" | "fluid_level" | "light_unit" | "panoramic";
 
 export type InspectedImage = {
   id: string;

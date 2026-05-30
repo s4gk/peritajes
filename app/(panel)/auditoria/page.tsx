@@ -13,7 +13,7 @@ export default async function AuditoriaPage() {
   if (user.role !== "admin") {
     return (
       <div className="container max-w-2xl py-10">
-        <div className="rounded-md border border-warning/30 bg-warning/10 px-4 py-3 text-sm text-warning">
+        <div className="rounded-md border border-warning/30 bg-warning/10  py-3 text-sm text-warning">
           Solo los administradores pueden ver la auditoría.
         </div>
       </div>
@@ -27,7 +27,7 @@ export default async function AuditoriaPage() {
   ]);
 
   return (
-    <div className="mx-auto w-full max-w-screen-2xl px-4 py-6 sm:px-6 lg:px-8">
+    <div className="mx-auto w-full max-w-screen-2xl py-6">
       <AuditoriaClient
         initialPage={initialPage}
         users={users.map((u) => ({ id: u.id, fullName: u.fullName, username: u.username }))}

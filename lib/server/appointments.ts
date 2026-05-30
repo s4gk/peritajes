@@ -4,6 +4,8 @@ import crypto from "node:crypto";
 
 import { logAudit, query } from "./db";
 import { createInspectionServer } from "./inspections";
+import { resolveWaOrgId } from "./whatsapp";
+import { notifyClientNoShow } from "./whatsapp-notifications";
 import { emptyInspection } from "@/lib/default-data";
 import type { User } from "./auth";
 
@@ -302,7 +304,22 @@ export async function updateAppointment(
   );
   await logAudit(user.id, "appointment.updated", id);
   const r = await query<Row>(`${SELECT_BASE} WHERE a.id = $1`, [id]);
-  return r.rows[0] ? rowToAppointment(r.rows[0]) : null;
+  const updated = r.rows[0] ? rowToAppointment(r.rows[0]) : null;
+
+  // Cuando una cita pasa a no_show, avisamos al cliente por WA para
+  // ofrecerle reagendar sin perder el lead.
+  if (patch.status === "no_show" && updated?.ownerPhone?.trim()) {
+    const waOrgId = resolveWaOrgId(user, updated.orgId ?? null);
+    notifyClientNoShow({
+      clientPhone: updated.ownerPhone,
+      ownerName: updated.ownerName,
+      plate: updated.plate,
+      orgId: waOrgId,
+      inspectionId: updated.inspectionId ?? null,
+    });
+  }
+
+  return updated;
 }
 
 export async function deleteAppointment(
