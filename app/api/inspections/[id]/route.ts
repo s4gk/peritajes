@@ -16,7 +16,7 @@ import {
   createShareToken,
   getActiveShareTokenForInspection,
 } from "@/lib/server/share-tokens";
-import { resolveWaOrgId } from "@/lib/server/whatsapp";
+import { resolveWaOrgId } from "@/lib/server/whatsapp-meta";
 import {
   notifyClientFinalPdf,
   notifyClientShareLink,
@@ -294,6 +294,8 @@ async function sendCompletionNotifications(
     plate: vehicle.plate ?? "",
     reportNumber: inspection.reportNumber ?? null,
     pdfBuffer,
+    // El link público `/r/{token}` devuelve el PDF — Twilio lo usa como media.
+    pdfPublicUrl: shareUrl,
     orgId: waOrgId,
     inspectionId: inspection.id,
   });

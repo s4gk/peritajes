@@ -1,6 +1,7 @@
 import { type NextRequest, NextResponse } from "next/server";
 
 import { query } from "@/lib/server/db";
+import { verifyMetaSignature } from "@/lib/server/whatsapp-meta";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -32,11 +33,32 @@ export async function GET(req: NextRequest) {
  * read, failed) y mensajes entrantes. Respondemos 200 inmediatamente y
  * procesamos en fire-and-forget para no hacer esperar a Meta (tienen un
  * timeout de ~20 s y reintentarían si no responde a tiempo).
+ *
+ * Seguridad: validamos la firma `X-Hub-Signature-256` (HMAC-SHA256 del cuerpo
+ * crudo con META_WA_APP_SECRET) ANTES de procesar nada. Sin esto, cualquiera
+ * que conozca la URL podría inyectar eventos falsos en `audit_log`. Si el
+ * secreto no está configurado, dejamos pasar con un warning (dev/setup) — en
+ * producción META_WA_APP_SECRET debe estar siempre presente.
  */
 export async function POST(req: NextRequest) {
+  // Leemos el cuerpo CRUDO (no req.json()) porque el HMAC se calcula sobre los
+  // bytes exactos que envió Meta; re-serializar el JSON cambiaría el hash.
+  const raw = await req.text();
+
+  const verdict = verifyMetaSignature(raw, req.headers.get("x-hub-signature-256"));
+  if (verdict.ok === false) {
+    console.warn(`[wa-webhook] firma inválida (${verdict.reason}) — rechazado.`);
+    return NextResponse.json({ error: "invalid signature" }, { status: 401 });
+  }
+  if (verdict.ok === null) {
+    console.warn(
+      "[wa-webhook] META_WA_APP_SECRET no configurado — webhook sin validar firma. Configúralo en producción.",
+    );
+  }
+
   let body: unknown;
   try {
-    body = await req.json();
+    body = JSON.parse(raw);
   } catch {
     return NextResponse.json({ error: "invalid json" }, { status: 400 });
   }

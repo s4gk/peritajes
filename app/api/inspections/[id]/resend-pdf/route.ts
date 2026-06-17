@@ -8,7 +8,11 @@ import {
 } from "@/lib/server/inspections";
 import { readPdf } from "@/lib/server/pdf-storage";
 import { buildPublicBaseUrl } from "@/lib/server/qr";
-import { resolveWaOrgId } from "@/lib/server/whatsapp";
+import {
+  createShareToken,
+  getActiveShareTokenForInspection,
+} from "@/lib/server/share-tokens";
+import { resolveWaOrgId } from "@/lib/server/whatsapp-meta";
 import { notifyClientFinalPdf } from "@/lib/server/whatsapp-notifications";
 
 export const runtime = "nodejs";
@@ -94,12 +98,31 @@ export async function POST(
     );
   }
 
+  // URL pública del PDF (link `/r/{token}`) — Twilio la usa como media; Meta
+  // la ignora. Best-effort: si falla, el envío sigue (Meta no la necesita).
+  let pdfPublicUrl: string | null = null;
+  try {
+    const base = buildPublicBaseUrl(req) || new URL(req.url).origin;
+    const existing = await getActiveShareTokenForInspection(params.id);
+    const token = existing
+      ? existing.token
+      : (await createShareToken({ inspectionId: params.id, createdBy: user.id }))
+          .token;
+    pdfPublicUrl = `${base.replace(/\/$/, "")}/r/${token}`;
+  } catch (err) {
+    console.error(
+      "[resend-pdf] no se pudo generar URL pública del PDF:",
+      (err as Error).message,
+    );
+  }
+
   notifyClientFinalPdf({
     clientPhone: phone,
     ownerName: stored.data.vehicle?.owner ?? "",
     plate: stored.data.vehicle?.plate ?? "",
     reportNumber: stored.reportNumber ?? null,
     pdfBuffer,
+    pdfPublicUrl,
     orgId: resolveWaOrgId(user, stored.orgId ?? null),
     inspectionId: stored.id,
     manualResend: true,

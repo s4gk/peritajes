@@ -10,7 +10,7 @@ import {
   createSession,
   getActiveRemoteSessionForInspection,
 } from "@/lib/sign-sessions";
-import { resolveWaOrgId } from "@/lib/server/whatsapp";
+import { resolveWaOrgId } from "@/lib/server/whatsapp-meta";
 import { notifyClientRemoteSignLink } from "@/lib/server/whatsapp-notifications";
 
 export const runtime = "nodejs";

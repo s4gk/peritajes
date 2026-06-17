@@ -24,6 +24,8 @@ export type Organization = {
   name: string;
   ownerUserId: string | null;
   active: boolean;
+  /** Número remitente de WhatsApp (Twilio) en E.164 con +, o null si no configurado. */
+  twilioWaFrom: string | null;
   createdAt: string;
 };
 
@@ -32,6 +34,7 @@ type OrgRow = {
   name: string;
   owner_user_id: string | null;
   active: boolean;
+  twilio_wa_from: string | null;
   created_at: Date | string;
 };
 
@@ -41,6 +44,7 @@ function rowToOrg(row: OrgRow): Organization {
     name: row.name,
     ownerUserId: row.owner_user_id,
     active: row.active !== false,
+    twilioWaFrom: row.twilio_wa_from ?? null,
     createdAt:
       typeof row.created_at === "string"
         ? row.created_at
@@ -104,6 +108,33 @@ export async function setOrgOwner(
     changedBy,
     "org.owner_changed",
     JSON.stringify({ orgId, ownerUserId }),
+  );
+}
+
+/**
+ * Configura (o limpia, con null) el número remitente de WhatsApp Twilio de la
+ * org. Se espera E.164 con + (ej: "+573001234567"). La cuenta Twilio es global;
+ * acá solo guardamos el From propio de cada negocio (Modelo B multi-tenant).
+ */
+export async function setOrgTwilioWaFrom(
+  orgId: string,
+  twilioWaFrom: string | null,
+  changedBy: string | null,
+): Promise<void> {
+  const value = twilioWaFrom?.trim() || null;
+  if (value && !/^\+[1-9]\d{6,14}$/.test(value)) {
+    throw new Error(
+      `Número inválido "${twilioWaFrom}": usa formato internacional E.164 con + (ej: +573001234567).`,
+    );
+  }
+  await query("UPDATE organizations SET twilio_wa_from = $1 WHERE id = $2", [
+    value,
+    orgId,
+  ]);
+  await logAudit(
+    changedBy,
+    "org.twilio_from_changed",
+    JSON.stringify({ orgId, twilioWaFrom: value }),
   );
 }
 

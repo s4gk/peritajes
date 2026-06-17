@@ -3,13 +3,10 @@ import { NextResponse } from "next/server";
 import { requireUser } from "@/lib/server/auth";
 import { logAudit } from "@/lib/server/db";
 import {
-  ADMIN_WA_ORG,
-  sendSelfTestMessage,
-} from "@/lib/server/whatsapp";
-import {
-  isMetaConfigured,
-  sendMetaFreeText,
-} from "@/lib/server/whatsapp-meta";
+  activeProvider,
+  isMessagingConfigured,
+  sendFreeText,
+} from "@/lib/server/messaging";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -37,61 +34,52 @@ export async function POST() {
     );
   }
 
-  // Cuando Meta está configurado enviamos un texto libre al wa_phone del
-  // actor (requiere que el número destino haya escrito al número empresarial
-  // en las últimas 24 h para que Meta permita la respuesta libre).
-  if (isMetaConfigured()) {
-    const phone = user.waPhone?.trim();
-    if (!phone) {
-      return NextResponse.json(
-        {
-          error:
-            "Configura tu teléfono de WhatsApp en Mi cuenta para poder enviar el mensaje de prueba.",
-        },
-        { status: 400 },
-      );
-    }
-    try {
-      await sendMetaFreeText(
-        phone,
-        [
-          "✅ *Prueba de Perito (API Oficial)*",
-          "",
-          "Si recibes este mensaje, la integración con la API oficial de WhatsApp está funcionando correctamente.",
-          "Los mensajes de notificación (link de firma, PDF, recordatorios) se enviarán por este canal.",
-        ].join("\n"),
-      );
-    } catch (err) {
-      const msg = (err as Error).message;
-      return NextResponse.json(
-        {
-          error: msg.includes("131047")
-            ? "El número destino no ha iniciado conversación con el número empresarial en las últimas 24 h. Escríbele primero desde tu WhatsApp personal y vuelve a intentarlo."
-            : msg,
-        },
-        { status: 400 },
-      );
-    }
-    await logAudit(user.id, "whatsapp.test_sent", user.orgId ?? "meta");
-    return NextResponse.json({ ok: true, phone });
+  if (!isMessagingConfigured()) {
+    return NextResponse.json(
+      {
+        error:
+          activeProvider() === "twilio"
+            ? "WhatsApp (Twilio) no está configurado. Define TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN y un sender."
+            : "WhatsApp (Meta) no está configurado. Define META_WA_TOKEN y META_WA_PHONE_NUMBER_ID.",
+      },
+      { status: 400 },
+    );
   }
 
-  // Baileys
-  const orgId =
-    user.orgId ?? (user.role === "admin" ? ADMIN_WA_ORG : null);
-  if (!orgId) {
+  // Enviamos un texto libre al wa_phone del actor. Requiere que ese número
+  // haya escrito al número empresarial en las últimas 24 h para que Meta
+  // permita la respuesta libre (ventana de servicio).
+  const phone = user.waPhone?.trim();
+  if (!phone) {
     return NextResponse.json(
-      { error: "Necesitas una organización para mandar un mensaje de prueba." },
+      {
+        error:
+          "Configura tu teléfono de WhatsApp en Mi cuenta para poder enviar el mensaje de prueba.",
+      },
       { status: 400 },
     );
   }
-  const r = sendSelfTestMessage(orgId);
-  if (!r.accepted) {
+  try {
+    await sendFreeText(
+      phone,
+      [
+        "✅ *Prueba de Perito (API Oficial)*",
+        "",
+        "Si recibes este mensaje, la integración con la API oficial de WhatsApp está funcionando correctamente.",
+        "Los mensajes de notificación (link de firma, PDF, recordatorios) se enviarán por este canal.",
+      ].join("\n"),
+    );
+  } catch (err) {
+    const msg = (err as Error).message;
     return NextResponse.json(
-      { error: r.reason ?? "No se pudo encolar el mensaje" },
+      {
+        error: msg.includes("131047")
+          ? "El número destino no ha iniciado conversación con el número empresarial en las últimas 24 h. Escríbele primero desde tu WhatsApp personal y vuelve a intentarlo."
+          : msg,
+      },
       { status: 400 },
     );
   }
-  await logAudit(user.id, "whatsapp.test_sent", orgId);
-  return NextResponse.json({ ok: true, phone: r.phone });
+  await logAudit(user.id, "whatsapp.test_sent", user.orgId ?? "meta");
+  return NextResponse.json({ ok: true, phone });
 }

@@ -90,6 +90,10 @@ CREATE TABLE IF NOT EXISTS organizations (
 -- 2026-05: suspender empresa cliente sin borrar datos. active=false bloquea
 -- el login de todos sus users (owner + employees) hasta que admin reactive.
 ALTER TABLE organizations ADD COLUMN IF NOT EXISTS active BOOLEAN NOT NULL DEFAULT TRUE;
+-- 2026-05: número remitente de WhatsApp por organización para el proveedor
+-- Twilio (Modelo B multi-tenant). E.164 con + (ej: "+573001234567"). La cuenta
+-- Twilio es global (env vars); solo el número From varía por org.
+ALTER TABLE organizations ADD COLUMN IF NOT EXISTS twilio_wa_from TEXT;
 
 ALTER TABLE users ADD COLUMN IF NOT EXISTS org_id TEXT REFERENCES organizations(id) ON DELETE SET NULL;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS parent_user_id TEXT REFERENCES users(id) ON DELETE SET NULL;

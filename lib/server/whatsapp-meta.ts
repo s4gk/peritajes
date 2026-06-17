@@ -1,10 +1,14 @@
 import "server-only";
 
+import crypto from "node:crypto";
+
 /**
- * Cliente oficial de WhatsApp Cloud API de Meta.
+ * Cliente oficial de WhatsApp Cloud API de Meta — ÚNICO proveedor de WhatsApp.
  *
  * Activo cuando META_WA_TOKEN y META_WA_PHONE_NUMBER_ID están en el entorno.
- * En ese caso, TODO el envío de mensajes va por aquí — Baileys queda inactivo.
+ * TODO el envío de mensajes de la plataforma va por aquí. La plataforma usa
+ * un solo número empresarial de Meta para todas las orgs (el `orgId` solo
+ * sirve para auditar y deduplicar, no para enrutar el envío).
  *
  * Los mensajes business-initiated requieren templates pre-aprobados por Meta.
  * Ver el objeto TEMPLATES al final de este archivo para los nombres exactos
@@ -23,6 +27,74 @@ function phoneNumberId(): string {
 
 export function isMetaConfigured(): boolean {
   return !!(token().trim() && phoneNumberId().trim());
+}
+
+/**
+ * Tenant sentinel para el admin (Vestel/soporte) cuando no tiene `org_id`.
+ * En el modelo Meta-only no hay sockets por org — este valor solo etiqueta
+ * la auditoría y las llaves de dedup de envíos disparados por un admin que
+ * opera sobre peritajes huérfanos (creados antes del multi-tenant).
+ */
+export const ADMIN_WA_ORG = "__admin__";
+
+/**
+ * Devuelve el orgId que debe etiquetar una operación WA, dado un actor y
+ * opcionalmente el peritaje involucrado. Prioridad:
+ *   1. orgId del peritaje (peritajes nuevos lo traen).
+ *   2. orgId del actor (owner/employee sobre un peritaje legacy sin org).
+ *   3. Sentinel del admin si el actor es admin (peritaje huérfano + admin).
+ *   4. null — el caller decide si omite o registra sin org.
+ */
+export function resolveWaOrgId(
+  actor: { role: string; orgId: string | null },
+  inspectionOrgId?: string | null,
+): string | null {
+  if (inspectionOrgId) return inspectionOrgId;
+  if (actor.orgId) return actor.orgId;
+  if (actor.role === "admin") return ADMIN_WA_ORG;
+  return null;
+}
+
+/**
+ * Secreto de la app de Meta — usado para validar la firma de los webhooks.
+ * Se configura en Meta Business Manager → Configuración de la app → Clave
+ * secreta de la app, y se expone como META_WA_APP_SECRET en el entorno.
+ */
+function appSecret(): string {
+  return process.env.META_WA_APP_SECRET?.trim() ?? "";
+}
+
+/**
+ * Valida la firma `X-Hub-Signature-256` que Meta envía en cada webhook POST.
+ * El header tiene la forma `sha256=<hex>` donde el hex es el HMAC-SHA256 del
+ * cuerpo crudo (bytes exactos) usando el app secret como clave.
+ *
+ * Devuelve el veredicto + un motivo legible para logs:
+ *   - { ok: true }                          → firma válida.
+ *   - { ok: false, reason }                 → rechazar el webhook (401).
+ *   - { ok: null, reason: "unconfigured" }  → no hay app secret; el caller
+ *     decide (en dev dejamos pasar con warning; en prod hay que configurarlo).
+ *
+ * Usamos `timingSafeEqual` para no filtrar información por timing.
+ */
+export function verifyMetaSignature(
+  rawBody: string,
+  signatureHeader: string | null,
+): { ok: boolean | null; reason?: string } {
+  const secret = appSecret();
+  if (!secret) return { ok: null, reason: "unconfigured" };
+  if (!signatureHeader) return { ok: false, reason: "missing-signature" };
+
+  const expected = `sha256=${crypto
+    .createHmac("sha256", secret)
+    .update(rawBody, "utf8")
+    .digest("hex")}`;
+
+  const a = Buffer.from(signatureHeader);
+  const b = Buffer.from(expected);
+  if (a.length !== b.length) return { ok: false, reason: "length-mismatch" };
+  if (!crypto.timingSafeEqual(a, b)) return { ok: false, reason: "mismatch" };
+  return { ok: true };
 }
 
 /** Normaliza teléfono colombiano a E.164 sin + (ej: "573001234567"). */

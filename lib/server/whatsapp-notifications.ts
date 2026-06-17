@@ -2,20 +2,19 @@ import "server-only";
 
 import { getUserById, listTeamWhatsAppPhones } from "./auth";
 import { query } from "./db";
+import {
+  isMessagingConfigured,
+  sendDocumentTemplate,
+  sendTemplate,
+} from "./messaging";
 import { sendPushToOrg, sendPushToUser } from "./push";
-import {
-  isMetaConfigured,
-  sendMetaDocumentTemplate,
-  sendMetaTemplate,
-} from "./whatsapp-meta";
-import {
-  getWhatsAppStatus,
-  sendDocument,
-  sendText,
-} from "./whatsapp";
 
 // ---------------------------------------------------------------------------
 //  Tipos y helpers internos
+//
+//  Todas las notificaciones salen por el dispatcher de mensajería (./messaging),
+//  que enruta a Meta WhatsApp Cloud API o a Twilio según MESSAGING_PROVIDER.
+//  Si el proveedor activo no está configurado, las funciones son no-ops.
 // ---------------------------------------------------------------------------
 
 type WaDeliveryEvent = {
@@ -64,15 +63,9 @@ function appUrl(): string {
   return process.env.APP_PUBLIC_URL?.trim().replace(/\/$/, "") || "https://app.local";
 }
 
-function safe(label: string, fn: () => void): void {
-  try {
-    fn();
-  } catch (err) {
-    console.error(`[wa-notify] ${label} falló:`, (err as Error).message);
-  }
-}
-
-// Dedup en memoria para envíos Meta (equivalente al dedup de la cola Baileys).
+// Dedup en memoria para envíos Meta: si dos disparos llegan con la misma key
+// dentro de la ventana, el segundo se descarta (evita duplicados por
+// reintentos de UI o doble submit del wizard).
 const META_DEDUP_TTL_MS = 10 * 60_000;
 const metaDedup = new Map<string, number>(); // key → expiry epoch ms
 
@@ -94,9 +87,8 @@ type OnResult = (r: { ok: boolean; error?: string }) => void | Promise<void>;
 
 /**
  * Dispara una llamada a la Meta API en fire-and-forget con dedup, logging
- * y callback de resultado (para auditoría). Mismo patrón que el enqueue
- * de Baileys pero sin cola: Meta responde en <1s y no necesita rate-limit
- * manual porque tiene el suyo propio a nivel de API.
+ * y callback de resultado (para auditoría). Meta responde en <1s y tiene su
+ * propio rate-limit a nivel de API, así que no necesitamos cola manual.
  */
 function safeMeta(
   label: string,
@@ -122,13 +114,6 @@ function safeMeta(
   );
 }
 
-/** Verifica si el canal WA (Baileys) está operativo para una org. */
-function isBaileysReady(orgId: string | null): boolean {
-  if (!orgId) return false;
-  const s = getWhatsAppStatus(orgId);
-  return s.status === "connected" || s.queueSize < 50;
-}
-
 async function loadTeamPhones(
   context: string,
   orgId: string | null,
@@ -149,7 +134,7 @@ async function loadTeamPhones(
 }
 
 // ---------------------------------------------------------------------------
-//  Notificaciones — cada función tiene un bloque Meta y un fallback Baileys
+//  Notificaciones — cada función envía un template de Meta
 // ---------------------------------------------------------------------------
 
 /** Caso 1: aviso al equipo cuando se crea un peritaje nuevo desde intake. */
@@ -161,44 +146,20 @@ export async function notifyTeamNewIntake(input: {
   inspectorName: string;
   orgId: string | null;
 }): Promise<void> {
-  if (isMetaConfigured()) {
-    const team = await loadTeamPhones("team-intake", input.orgId);
-    for (const member of team) {
-      safeMeta(
-        `team-intake to ${member.fullName}`,
-        `team-intake:${input.inspectionId}:${member.waPhone}`,
-        () =>
-          sendMetaTemplate(member.waPhone, "nuevo_peritaje", [
-            input.vehicle || "—",
-            input.plate || "—",
-            input.owner || "—",
-            input.inspectorName,
-            `${appUrl()}/inspection/${input.inspectionId}`,
-          ]),
-      );
-    }
-    return;
-  }
-  // Baileys fallback
-  if (!isBaileysReady(input.orgId)) return;
+  if (!isMessagingConfigured()) return;
   const team = await loadTeamPhones("team-intake", input.orgId);
-  if (team.length === 0) return;
-  const text = [
-    "🚗 *Nuevo peritaje*",
-    `Placa: ${input.plate || "—"}`,
-    `Vehículo: ${input.vehicle || "—"}`,
-    `Cliente: ${input.owner || "—"}`,
-    `Perito: ${input.inspectorName}`,
-    "",
-    `Ver: ${appUrl()}/inspection/${input.inspectionId}`,
-  ].join("\n");
-  const orgId = input.orgId!;
   for (const member of team) {
-    safe(`team-intake to ${member.fullName}`, () =>
-      sendText(orgId, member.waPhone, text, {
-        dedupKey: `team-intake:${input.inspectionId}:${member.waPhone}`,
-        label: `team-intake to ${member.fullName}`,
-      }),
+    safeMeta(
+      `team-intake to ${member.fullName}`,
+      `team-intake:${input.inspectionId}:${member.waPhone}`,
+      () =>
+        sendTemplate(member.waPhone, "nuevo_peritaje", [
+          input.vehicle || "—",
+          input.plate || "—",
+          input.owner || "—",
+          input.inspectorName,
+          `${appUrl()}/inspection/${input.inspectionId}`,
+        ]),
     );
   }
 }
@@ -218,40 +179,18 @@ export async function notifyTeamSignatureCompleted(input: {
       tag: `signed-${input.inspectionId}`,
     }).catch(() => {});
   }
-  if (isMetaConfigured()) {
-    const team = await loadTeamPhones("team-signed", input.orgId);
-    for (const member of team) {
-      safeMeta(
-        `team-signed to ${member.fullName}`,
-        `team-signed:${input.inspectionId}:${member.waPhone}`,
-        () =>
-          sendMetaTemplate(member.waPhone, "peritaje_firmado", [
-            input.plate || "—",
-            input.owner || "—",
-            `${appUrl()}/inspection/${input.inspectionId}`,
-          ]),
-      );
-    }
-    return;
-  }
-  // Baileys fallback
-  if (!isBaileysReady(input.orgId)) return;
+  if (!isMessagingConfigured()) return;
   const team = await loadTeamPhones("team-signed", input.orgId);
-  if (team.length === 0) return;
-  const text = [
-    "✅ *Peritaje firmado*",
-    `Placa: ${input.plate || "—"}`,
-    `Cliente: ${input.owner || "—"}`,
-    "",
-    `Ver: ${appUrl()}/inspection/${input.inspectionId}`,
-  ].join("\n");
-  const orgId = input.orgId!;
   for (const member of team) {
-    safe(`team-signed to ${member.fullName}`, () =>
-      sendText(orgId, member.waPhone, text, {
-        dedupKey: `team-signed:${input.inspectionId}:${member.waPhone}`,
-        label: `team-signed to ${member.fullName}`,
-      }),
+    safeMeta(
+      `team-signed to ${member.fullName}`,
+      `team-signed:${input.inspectionId}:${member.waPhone}`,
+      () =>
+        sendTemplate(member.waPhone, "peritaje_firmado", [
+          input.plate || "—",
+          input.owner || "—",
+          `${appUrl()}/inspection/${input.inspectionId}`,
+        ]),
     );
   }
 }
@@ -266,42 +205,21 @@ export function notifyClientSignLink(input: {
   inspectionId?: string | null;
 }): void {
   if (!input.clientPhone?.trim()) return;
+  if (!isMessagingConfigured()) return;
   const phone = input.clientPhone;
   const inspectionId = input.inspectionId ?? null;
   const orgId = input.orgId;
 
-  if (isMetaConfigured()) {
-    safeMeta(
-      `client-sign to ${phone}`,
-      `client-sign:${input.signToken}`,
-      () =>
-        sendMetaTemplate(phone, "firma_link", [
-          input.ownerName?.trim() || "cliente",
-          input.plate || "—",
-          `${appUrl()}/sign/${input.signToken}`,
-        ]),
-      (r) => recordWaDelivery(orgId, { type: "client-sign", inspectionId, phone, status: r.ok ? "sent" : "failed", error: r.error }),
-    );
-    return;
-  }
-  // Baileys fallback
-  if (!isBaileysReady(orgId)) return;
-  const greeting = input.ownerName?.trim() ? `Hola ${input.ownerName},` : "Hola,";
-  const text = [
-    greeting,
-    `Te enviamos el link para firmar el peritaje de la placa ${input.plate || "—"}:`,
-    "",
-    `${appUrl()}/sign/${input.signToken}`,
-    "",
-    "El link expira en 10 minutos. Si no alcanzas, el perito puede generarte uno nuevo.",
-  ].join("\n");
-  safe(`client-sign to ${phone}`, () =>
-    sendText(orgId!, phone, text, {
-      dedupKey: `client-sign:${input.signToken}`,
-      label: `client-sign to ${phone}`,
-      onResult: (r) =>
-        recordWaDelivery(orgId, { type: "client-sign", inspectionId, phone, status: r.ok ? "sent" : "failed", error: r.error }),
-    }),
+  safeMeta(
+    `client-sign to ${phone}`,
+    `client-sign:${input.signToken}`,
+    () =>
+      sendTemplate(phone, "firma_link", [
+        input.ownerName?.trim() || "cliente",
+        input.plate || "—",
+        `${appUrl()}/sign/${input.signToken}`,
+      ]),
+    (r) => recordWaDelivery(orgId, { type: "client-sign", inspectionId, phone, status: r.ok ? "sent" : "failed", error: r.error }),
   );
 }
 
@@ -317,48 +235,22 @@ export function notifyClientRemoteSignLink(input: {
   inspectionId?: string | null;
 }): void {
   if (!input.clientPhone?.trim()) return;
+  if (!isMessagingConfigured()) return;
   const phone = input.clientPhone;
   const inspectionId = input.inspectionId ?? null;
   const orgId = input.orgId;
 
-  if (isMetaConfigured()) {
-    safeMeta(
-      `client-sign-remote to ${phone}`,
-      `client-sign-remote:${input.signToken}`,
-      () =>
-        sendMetaTemplate(phone, "firma_remota", [
-          input.ownerName?.trim() || "cliente",
-          input.inspectorName,
-          input.plate || "—",
-          `${appUrl()}/sign/${input.signToken}`,
-        ]),
-      (r) => recordWaDelivery(orgId, { type: "client-sign-remote", inspectionId, phone, status: r.ok ? "sent" : "failed", error: r.error }),
-    );
-    return;
-  }
-  // Baileys fallback
-  if (!isBaileysReady(orgId)) return;
-  const greeting = input.ownerName?.trim() ? `Hola ${input.ownerName},` : "Hola,";
-  const vehicle = input.vehicleLabel
-    ? `${input.vehicleLabel} de placa ${input.plate || "—"}`
-    : `vehículo placa ${input.plate || "—"}`;
-  const text = [
-    greeting,
-    `El perito ${input.inspectorName} terminó la inspección de tu ${vehicle}.`,
-    "Antes de cerrar el informe necesitamos tu firma de aprobación.",
-    "",
-    "Firma desde tu celular en este link:",
-    `${appUrl()}/sign/${input.signToken}`,
-    "",
-    "Tienes 72 horas para firmar. Si dejas vencer el link, podemos generarte otro.",
-  ].join("\n");
-  safe(`client-sign-remote to ${phone}`, () =>
-    sendText(orgId!, phone, text, {
-      dedupKey: `client-sign-remote:${input.signToken}`,
-      label: `client-sign-remote to ${phone}`,
-      onResult: (r) =>
-        recordWaDelivery(orgId, { type: "client-sign-remote", inspectionId, phone, status: r.ok ? "sent" : "failed", error: r.error }),
-    }),
+  safeMeta(
+    `client-sign-remote to ${phone}`,
+    `client-sign-remote:${input.signToken}`,
+    () =>
+      sendTemplate(phone, "firma_remota", [
+        input.ownerName?.trim() || "cliente",
+        input.inspectorName,
+        input.plate || "—",
+        `${appUrl()}/sign/${input.signToken}`,
+      ]),
+    (r) => recordWaDelivery(orgId, { type: "client-sign-remote", inspectionId, phone, status: r.ok ? "sent" : "failed", error: r.error }),
   );
 }
 
@@ -371,39 +263,20 @@ export async function notifyPeritoSignatureReceived(input: {
   orgId: string | null;
 }): Promise<void> {
   if (!input.peritoUserId) return;
+  if (!isMessagingConfigured()) return;
   const perito = await getUserById(input.peritoUserId).catch(() => null);
   if (!perito?.waPhone?.trim()) return;
   const phone = perito.waPhone;
-  const orgId = input.orgId;
 
-  if (isMetaConfigured()) {
-    safeMeta(
-      `perito-signed to ${perito.fullName}`,
-      `perito-signed:${input.inspectionId}`,
-      () =>
-        sendMetaTemplate(phone, "firma_recibida", [
-          input.plate || "—",
-          input.ownerName || "—",
-          `${appUrl()}/inspection/${input.inspectionId}`,
-        ]),
-    );
-    return;
-  }
-  // Baileys fallback
-  if (!isBaileysReady(orgId)) return;
-  const text = [
-    "✍️ *Firma del cliente recibida*",
-    `Placa: ${input.plate || "—"}`,
-    `Cliente: ${input.ownerName || "—"}`,
-    "",
-    "El cliente firmó remotamente. Puedes finalizar el peritaje:",
-    `${appUrl()}/inspection/${input.inspectionId}`,
-  ].join("\n");
-  safe(`perito-signed to ${perito.fullName}`, () =>
-    sendText(orgId!, phone, text, {
-      dedupKey: `perito-signed:${input.inspectionId}`,
-      label: `perito-signed to ${perito.fullName}`,
-    }),
+  safeMeta(
+    `perito-signed to ${perito.fullName}`,
+    `perito-signed:${input.inspectionId}`,
+    () =>
+      sendTemplate(phone, "firma_recibida", [
+        input.plate || "—",
+        input.ownerName || "—",
+        `${appUrl()}/inspection/${input.inspectionId}`,
+      ]),
   );
 }
 
@@ -414,11 +287,15 @@ export function notifyClientFinalPdf(input: {
   plate: string;
   reportNumber: string | null;
   pdfBuffer: Buffer;
+  /** URL pública que devuelve el PDF (ej. el link `/r/{token}`). La usa Twilio,
+   *  que no acepta los bytes del archivo. Meta la ignora (sube el buffer). */
+  pdfPublicUrl?: string | null;
   orgId: string | null;
   manualResend?: boolean;
   inspectionId?: string | null;
 }): void {
   if (!input.clientPhone?.trim()) return;
+  if (!isMessagingConfigured()) return;
   const phone = input.clientPhone;
   const inspectionId = input.inspectionId ?? null;
   const orgId = input.orgId;
@@ -432,45 +309,25 @@ export function notifyClientFinalPdf(input: {
     ? `${baseDedupKey}:resend:${Date.now()}`
     : baseDedupKey;
 
-  if (isMetaConfigured()) {
-    safeMeta(
-      `client-pdf to ${phone}`,
-      dedupKey,
-      () =>
-        sendMetaDocumentTemplate(
-          phone,
-          "peritaje_pdf",
-          input.pdfBuffer,
+  safeMeta(
+    `client-pdf to ${phone}`,
+    dedupKey,
+    () =>
+      sendDocumentTemplate(
+        phone,
+        "peritaje_pdf",
+        {
+          pdfBuffer: input.pdfBuffer,
           filename,
-          [
-            input.ownerName?.trim() || "cliente",
-            input.plate || "—",
-            input.reportNumber ? `Informe N° ${input.reportNumber}.` : "Cualquier duda, escríbenos.",
-          ],
-        ),
-      (r) => recordWaDelivery(orgId, { type: "client-pdf", inspectionId, phone, status: r.ok ? "sent" : "failed", error: r.error }),
-    );
-    return;
-  }
-  // Baileys fallback
-  if (!isBaileysReady(orgId)) return;
-  const greeting = input.ownerName?.trim() ? `Hola ${input.ownerName},` : "Hola,";
-  const caption = [
-    greeting,
-    `Adjunto el peritaje finalizado de la placa ${input.plate || "—"}.`,
-    input.reportNumber ? `Informe N° ${input.reportNumber}.` : "",
-    "Cualquier duda, escríbenos por este mismo medio.",
-  ]
-    .filter(Boolean)
-    .join("\n");
-  safe(`client-pdf to ${phone}`, () =>
-    sendDocument(orgId!, phone, input.pdfBuffer, filename, {
-      caption,
-      dedupKey,
-      label: `client-pdf to ${phone}`,
-      onResult: (r) =>
-        recordWaDelivery(orgId, { type: "client-pdf", inspectionId, phone, status: r.ok ? "sent" : "failed", error: r.error }),
-    }),
+          publicUrl: input.pdfPublicUrl ?? undefined,
+        },
+        [
+          input.ownerName?.trim() || "cliente",
+          input.plate || "—",
+          input.reportNumber ? `Informe N° ${input.reportNumber}.` : "Cualquier duda, escríbenos.",
+        ],
+      ),
+    (r) => recordWaDelivery(orgId, { type: "client-pdf", inspectionId, phone, status: r.ok ? "sent" : "failed", error: r.error }),
   );
 }
 
@@ -485,6 +342,7 @@ export function notifyClientShareLink(input: {
   inspectionId?: string | null;
 }): void {
   if (!input.clientPhone?.trim()) return;
+  if (!isMessagingConfigured()) return;
   const phone = input.clientPhone;
   const inspectionId = input.inspectionId ?? null;
   const orgId = input.orgId;
@@ -492,41 +350,17 @@ export function notifyClientShareLink(input: {
     ? `client-link:${input.reportNumber}`
     : `client-link:${phone}:${input.plate || "x"}`;
 
-  if (isMetaConfigured()) {
-    safeMeta(
-      `client-link to ${phone}`,
-      dedupKey,
-      () =>
-        sendMetaTemplate(phone, "peritaje_link", [
-          input.ownerName?.trim() || "cliente",
-          input.plate || "—",
-          input.reportNumber ? `Informe N° ${input.reportNumber}.` : "",
-          input.shareUrl,
-        ]),
-      (r) => recordWaDelivery(orgId, { type: "client-link", inspectionId, phone, status: r.ok ? "sent" : "failed", error: r.error }),
-    );
-    return;
-  }
-  // Baileys fallback
-  if (!isBaileysReady(orgId)) return;
-  const greeting = input.ownerName?.trim() ? `Hola ${input.ownerName},` : "Hola,";
-  const text = [
-    greeting,
-    `Tu peritaje de la placa *${input.plate || "—"}* está listo.`,
-    ...(input.reportNumber ? [`Informe N° ${input.reportNumber}.`] : []),
-    "",
-    "📄 Ver y descargar tu peritaje:",
-    input.shareUrl,
-    "",
-    "El enlace es válido por 90 días. También te enviamos el PDF adjunto en el siguiente mensaje.",
-  ].join("\n");
-  safe(`client-link to ${phone}`, () =>
-    sendText(orgId!, phone, text, {
-      dedupKey,
-      label: `client-link to ${phone}`,
-      onResult: (r) =>
-        recordWaDelivery(orgId, { type: "client-link", inspectionId, phone, status: r.ok ? "sent" : "failed", error: r.error }),
-    }),
+  safeMeta(
+    `client-link to ${phone}`,
+    dedupKey,
+    () =>
+      sendTemplate(phone, "peritaje_link", [
+        input.ownerName?.trim() || "cliente",
+        input.plate || "—",
+        input.reportNumber ? `Informe N° ${input.reportNumber}.` : "",
+        input.shareUrl,
+      ]),
+    (r) => recordWaDelivery(orgId, { type: "client-link", inspectionId, phone, status: r.ok ? "sent" : "failed", error: r.error }),
   );
 }
 
@@ -548,45 +382,23 @@ export async function notifyAssignedPerito(input: {
     tag: `appt-${input.peritoUserId}-${input.scheduledAtISO}`,
   }).catch(() => {});
 
+  if (!isMessagingConfigured()) return;
   const perito = await getUserById(input.peritoUserId).catch(() => null);
   if (!perito?.waPhone?.trim()) return;
   const phone = perito.waPhone;
-  const orgId = input.orgId;
 
-  if (isMetaConfigured()) {
-    safeMeta(
-      `perito-assigned to ${perito.fullName}`,
-      `perito-assigned:${input.peritoUserId}:${input.scheduledAtISO}`,
-      () =>
-        sendMetaTemplate(phone, "cita_asignada", [
-          fmtScheduledAt(input.scheduledAtISO),
-          input.plate || "—",
-          input.vehicleLabel || "—",
-          input.ownerName || "—",
-          input.ownerPhone || "—",
-          input.location || "—",
-        ]),
-    );
-    return;
-  }
-  // Baileys fallback
-  if (!isBaileysReady(orgId)) return;
-  const text = [
-    "📅 *Cita asignada*",
-    `Cuándo: ${fmtScheduledAt(input.scheduledAtISO)}`,
-    `Placa: ${input.plate || "—"}`,
-    input.vehicleLabel ? `Vehículo: ${input.vehicleLabel}` : "",
-    `Cliente: ${input.ownerName || "—"}`,
-    input.ownerPhone ? `Tel cliente: ${input.ownerPhone}` : "",
-    input.location ? `Ubicación: ${input.location}` : "",
-  ]
-    .filter(Boolean)
-    .join("\n");
-  safe(`perito-assigned to ${perito.fullName}`, () =>
-    sendText(orgId!, phone, text, {
-      dedupKey: `perito-assigned:${input.peritoUserId}:${input.scheduledAtISO}`,
-      label: `perito-assigned to ${perito.fullName}`,
-    }),
+  safeMeta(
+    `perito-assigned to ${perito.fullName}`,
+    `perito-assigned:${input.peritoUserId}:${input.scheduledAtISO}`,
+    () =>
+      sendTemplate(phone, "cita_asignada", [
+        fmtScheduledAt(input.scheduledAtISO),
+        input.plate || "—",
+        input.vehicleLabel || "—",
+        input.ownerName || "—",
+        input.ownerPhone || "—",
+        input.location || "—",
+      ]),
   );
 }
 
@@ -601,43 +413,19 @@ export function notifyClientAppointmentConfirmed(input: {
   orgId: string | null;
 }): void {
   if (!input.clientPhone?.trim()) return;
+  if (!isMessagingConfigured()) return;
   const phone = input.clientPhone;
-  const orgId = input.orgId;
 
-  if (isMetaConfigured()) {
-    safeMeta(
-      `client-appt-confirm to ${phone}`,
-      `client-appt-confirm:${phone}:${input.scheduledAtISO}`,
-      () =>
-        sendMetaTemplate(phone, "cita_confirmada", [
-          input.ownerName?.trim() || "cliente",
-          fmtScheduledAt(input.scheduledAtISO),
-          input.plate || "—",
-          input.location || "—",
-        ]),
-    );
-    return;
-  }
-  // Baileys fallback
-  if (!isBaileysReady(orgId)) return;
-  const greeting = input.ownerName?.trim() ? `Hola ${input.ownerName},` : "Hola,";
-  const text = [
-    greeting,
-    `Tu peritaje quedó agendado para *${fmtScheduledAt(input.scheduledAtISO)}*.`,
-    "",
-    `Placa: ${input.plate || "—"}`,
-    input.vehicleLabel ? `Vehículo: ${input.vehicleLabel}` : "",
-    input.location ? `Ubicación: ${input.location}` : "",
-    "",
-    "Si necesitas cancelar o reprogramar, responde por este mismo chat.",
-  ]
-    .filter(Boolean)
-    .join("\n");
-  safe(`client-appt-confirm to ${phone}`, () =>
-    sendText(orgId!, phone, text, {
-      dedupKey: `client-appt-confirm:${phone}:${input.scheduledAtISO}`,
-      label: `client-appt-confirm to ${phone}`,
-    }),
+  safeMeta(
+    `client-appt-confirm to ${phone}`,
+    `client-appt-confirm:${phone}:${input.scheduledAtISO}`,
+    () =>
+      sendTemplate(phone, "cita_confirmada", [
+        input.ownerName?.trim() || "cliente",
+        fmtScheduledAt(input.scheduledAtISO),
+        input.plate || "—",
+        input.location || "—",
+      ]),
   );
 }
 
@@ -652,48 +440,20 @@ export function notifyClientAppointmentReminder(input: {
   orgId: string | null;
 }): void {
   if (!input.clientPhone?.trim()) return;
+  if (!isMessagingConfigured()) return;
   const phone = input.clientPhone;
-  const orgId = input.orgId;
   const templateName = input.when === "24h" ? "recordatorio_24h" : "recordatorio_2h";
 
-  if (isMetaConfigured()) {
-    safeMeta(
-      `client-appt-reminder-${input.when} to ${phone}`,
-      `client-appt-reminder:${input.when}:${phone}:${input.scheduledAtISO}`,
-      () =>
-        sendMetaTemplate(phone, templateName, [
-          input.ownerName?.trim() || "cliente",
-          fmtScheduledAt(input.scheduledAtISO),
-          input.plate || "—",
-          input.location || "—",
-        ]),
-    );
-    return;
-  }
-  // Baileys fallback
-  if (!isBaileysReady(orgId)) return;
-  const greeting = input.ownerName?.trim() ? `Hola ${input.ownerName},` : "Hola,";
-  const lead =
-    input.when === "24h"
-      ? "Te recordamos que mañana tienes tu peritaje:"
-      : "Te recordamos que en aproximadamente 2 horas tienes tu peritaje:";
-  const text = [
-    greeting,
-    lead,
-    "",
-    `Cuándo: ${fmtScheduledAt(input.scheduledAtISO)}`,
-    `Placa: ${input.plate || "—"}`,
-    input.location ? `Ubicación: ${input.location}` : "",
-    "",
-    "Si no puedes asistir, responde este chat para reprogramar.",
-  ]
-    .filter(Boolean)
-    .join("\n");
-  safe(`client-appt-reminder-${input.when} to ${phone}`, () =>
-    sendText(orgId!, phone, text, {
-      dedupKey: `client-appt-reminder:${input.when}:${phone}:${input.scheduledAtISO}`,
-      label: `client-appt-reminder-${input.when} to ${phone}`,
-    }),
+  safeMeta(
+    `client-appt-reminder-${input.when} to ${phone}`,
+    `client-appt-reminder:${input.when}:${phone}:${input.scheduledAtISO}`,
+    () =>
+      sendTemplate(phone, templateName, [
+        input.ownerName?.trim() || "cliente",
+        fmtScheduledAt(input.scheduledAtISO),
+        input.plate || "—",
+        input.location || "—",
+      ]),
   );
 }
 
@@ -706,38 +466,19 @@ export function notifyClientNoShow(input: {
   inspectionId?: string | null;
 }): void {
   if (!input.clientPhone?.trim()) return;
+  if (!isMessagingConfigured()) return;
   const phone = input.clientPhone;
   const inspectionId = input.inspectionId ?? null;
   const orgId = input.orgId;
 
-  if (isMetaConfigured()) {
-    safeMeta(
-      `client-noshow to ${phone}`,
-      `noshow:${phone}:${input.plate || "x"}:${Date.now()}`,
-      () =>
-        sendMetaTemplate(phone, "no_asistio", [
-          input.ownerName?.trim() || "cliente",
-          input.plate ? ` para la placa *${input.plate}*` : "",
-        ]),
-      (r) => recordWaDelivery(orgId, { type: "client-noshow", inspectionId, phone, status: r.ok ? "sent" : "failed", error: r.error }),
-    );
-    return;
-  }
-  // Baileys fallback
-  if (!isBaileysReady(orgId)) return;
-  const greeting = input.ownerName?.trim() ? `Hola ${input.ownerName},` : "Hola,";
-  const text = [
-    greeting,
-    `Notamos que no pudiste llegar a tu cita de peritaje${input.plate ? ` para la placa *${input.plate}*` : ""}.`,
-    "",
-    "¿Te gustaría reagendar? Escríbenos y buscamos un nuevo horario que te quede bien.",
-  ].join("\n");
-  safe(`client-noshow to ${phone}`, () =>
-    sendText(orgId!, phone, text, {
-      dedupKey: `noshow:${phone}:${input.plate || "x"}:${Date.now()}`,
-      label: `client-noshow to ${phone}`,
-      onResult: (r) =>
-        recordWaDelivery(orgId, { type: "client-noshow", inspectionId, phone, status: r.ok ? "sent" : "failed", error: r.error }),
-    }),
+  safeMeta(
+    `client-noshow to ${phone}`,
+    `noshow:${phone}:${input.plate || "x"}:${Date.now()}`,
+    () =>
+      sendTemplate(phone, "no_asistio", [
+        input.ownerName?.trim() || "cliente",
+        input.plate ? ` para la placa *${input.plate}*` : "",
+      ]),
+    (r) => recordWaDelivery(orgId, { type: "client-noshow", inspectionId, phone, status: r.ok ? "sent" : "failed", error: r.error }),
   );
 }

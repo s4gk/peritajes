@@ -4,7 +4,7 @@ import crypto from "node:crypto";
 
 import { logAudit, query } from "./db";
 import { createInspectionServer } from "./inspections";
-import { resolveWaOrgId } from "./whatsapp";
+import { resolveWaOrgId } from "./whatsapp-meta";
 import { notifyClientNoShow } from "./whatsapp-notifications";
 import { emptyInspection } from "@/lib/default-data";
 import type { User } from "./auth";

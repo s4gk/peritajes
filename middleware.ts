@@ -72,10 +72,15 @@ function isPanelPath(pathname: string): boolean {
 //    (no perito), que no tiene sesión Perito. La autenticación del POST es
 //    la posesión del token de la sesión de firma (single-use, 10 min TTL).
 //  - /api/health: monitoring.
+//  - /api/webhooks/*: los llaman servicios externos (Meta, Twilio) que no
+//    pueden mandar cookie CSRF. Se autentican por firma del proveedor
+//    (X-Hub-Signature-256 de Meta / X-Twilio-Signature), no por CSRF.
 const EXEMPT_EXACT = new Set([
   "/api/auth/login",
   "/api/auth/setup",
   "/api/health",
+  "/api/webhooks/whatsapp",
+  "/api/webhooks/twilio",
 ]);
 
 function isExempt(pathname: string): boolean {

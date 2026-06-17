@@ -2,18 +2,15 @@ import { NextResponse } from "next/server";
 
 import { requireUser } from "@/lib/server/auth";
 import { query } from "@/lib/server/db";
-import {
-  checkInspectionAccess,
-  getInspectionServer,
-} from "@/lib/server/inspections";
-import { getWhatsAppStatus, resolveWaOrgId } from "@/lib/server/whatsapp";
+import { checkInspectionAccess } from "@/lib/server/inspections";
+import { getMetaStatus } from "@/lib/server/whatsapp-meta";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 /**
  * Devuelve el historial de envíos por WhatsApp asociados al peritaje +
- * estado actual del socket WA de su org. El wizard lo pollea cada 3s después
+ * estado actual de la integración Meta. El wizard lo pollea cada 3s después
  * de finalizar para mostrar al perito si el cliente recibió el PDF.
  *
  * Los eventos vienen de `audit_log` (action='wa.delivery'). El JSON detail
@@ -43,14 +40,6 @@ export async function GET(
   if (access.kind === "forbidden") {
     return NextResponse.json({ error: "Sin permisos" }, { status: 403 });
   }
-
-  // Necesitamos saber a qué org pertenece el peritaje para reportar el estado
-  // del socket WA de esa org (no el del user — pueden diferir si el peritaje
-  // se reasignó cross-org en algún momento). Para peritajes huérfanos sin
-  // org, si el actor es admin caemos al tenant sentinel del admin para que
-  // pueda probar el flow desde su propia sesión.
-  const stored = await getInspectionServer(params.id);
-  const orgId = resolveWaOrgId(user, stored?.orgId ?? null);
 
   const rows = await query<{
     id: string;
@@ -98,16 +87,14 @@ export async function GET(
     }
   }
 
-  const wa = orgId ? getWhatsAppStatus(orgId) : null;
+  const wa = getMetaStatus();
 
   return NextResponse.json({
-    socket: wa
-      ? {
-          status: wa.status,
-          phone: wa.phone,
-          queueSize: wa.queueSize,
-        }
-      : { status: "disconnected", phone: null, queueSize: 0 },
+    socket: {
+      status: wa.status,
+      phone: wa.phone,
+      queueSize: wa.queueSize,
+    },
     events,
   });
 }
