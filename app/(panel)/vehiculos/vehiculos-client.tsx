@@ -107,7 +107,7 @@ export function VehiculosClient() {
       </div>
 
       {rows.length > 0 ? (
-        <div className="relative">
+        <div data-tour="veh-search" className="relative">
           <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
           <Input
             value={query}
@@ -139,7 +139,7 @@ export function VehiculosClient() {
                 <Link
                   key={row.plate}
                   href={`/inspection/${row.lastInspection.id}`}
-                  className="flex items-center justify-between gap-3  py-3 hover:bg-muted/40"
+                  className="flex items-center justify-between gap-3 px-4 py-3 hover:bg-muted/40"
                 >
                   <div className="flex min-w-0 items-center gap-3">
                     <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground">

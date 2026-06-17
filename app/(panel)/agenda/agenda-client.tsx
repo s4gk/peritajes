@@ -359,7 +359,7 @@ export function AgendaClient({ initialAppointments, currentUser }: Props) {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <div className="inline-flex rounded-md border bg-card p-0.5">
+          <div data-tour="agenda-view" className="inline-flex rounded-md border bg-card p-0.5">
             <button
               type="button"
               onClick={() => setViewMode("list")}
@@ -399,7 +399,12 @@ export function AgendaClient({ initialAppointments, currentUser }: Props) {
               CSV
             </Button>
           )}
-          <Button onClick={openCreate} size="lg" className="hidden h-10 sm:inline-flex">
+          <Button
+            onClick={openCreate}
+            size="lg"
+            data-tour="agenda-new"
+            className="hidden h-10 sm:inline-flex"
+          >
             <Plus className="mr-1 h-4 w-4" />
             Nueva cita
           </Button>
@@ -486,6 +491,7 @@ export function AgendaClient({ initialAppointments, currentUser }: Props) {
         type="button"
         onClick={openCreate}
         aria-label="Nueva cita"
+        data-tour="agenda-new"
         className="fixed right-4 z-40 inline-flex items-center gap-2 rounded-full bg-primary px-5 py-3.5 text-sm font-semibold text-primary-foreground shadow-xl shadow-primary/30 transition-transform active:scale-95 sm:hidden"
         style={{ bottom: "max(1rem, calc(env(safe-area-inset-bottom) + 0.75rem))" }}
       >

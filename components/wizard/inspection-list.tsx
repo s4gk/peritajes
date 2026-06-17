@@ -317,14 +317,19 @@ function InspectionsInner() {
             </Button>
           )}
           {isAdmin ? <BackupControls onChange={refresh} /> : null}
-          <Button onClick={handleNew} size="lg" className="hidden h-10 sm:inline-flex">
+          <Button
+            onClick={handleNew}
+            size="lg"
+            data-tour="per-new"
+            className="hidden h-10 sm:inline-flex"
+          >
             <Plus className="mr-1 h-4 w-4" /> Nuevo peritaje
           </Button>
         </div>
       </div>
 
       {items.length > 0 && (
-        <Card>
+        <Card data-tour="per-search">
           <CardContent className="space-y-3 p-3 sm:p-4">
             <div className="grid gap-2 sm:grid-cols-[1fr_140px_140px]">
               <div className="relative">
@@ -393,7 +398,7 @@ function InspectionsInner() {
           </CardContent>
         </Card>
       ) : (
-        <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
+        <div data-tour="per-list" className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
           {filtered.map((item) => (
             <InspectionCard
               key={item.id}
@@ -421,6 +426,7 @@ function InspectionsInner() {
         type="button"
         onClick={handleNew}
         aria-label="Nuevo peritaje"
+        data-tour="per-new"
         className="fixed right-4 z-40 inline-flex items-center gap-2 rounded-full bg-primary px-5 py-3.5 text-sm font-semibold text-primary-foreground shadow-xl shadow-primary/30 transition-transform active:scale-95 sm:hidden"
         style={{ bottom: "max(1rem, calc(env(safe-area-inset-bottom) + 0.75rem))" }}
       >
@@ -620,7 +626,7 @@ function InspectionCard({
               {(VEHICLE_TYPES[item.data.vehicleType] ?? VEHICLE_TYPES[FALLBACK_VEHICLE_TYPE]).short}
             </span>
             <span className="inline-flex items-center rounded-full border bg-muted/40 px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
-              {(PERITAJE_KINDS[item.data.kind] ?? PERITAJE_KINDS.complete).short}
+              {(PERITAJE_KINDS[item.data.kind] ?? PERITAJE_KINDS.plus).short}
             </span>
             {isLocked ? (
               <span

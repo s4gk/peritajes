@@ -1,13 +1,16 @@
 "use client";
 
 import * as React from "react";
-import { useRouter } from "next/navigation";
 import { LogOut, Menu } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/components/ui/toast";
 import { ThemeToggle } from "@/components/wizard/theme-toggle";
 import { apiFetch } from "@/lib/client/api-client";
+import { flushSyncQueue } from "@/lib/client/sync-queue";
+import { wipeLocalUserData } from "@/lib/inspections-store";
+
+import { HelpButton } from "./tour/help-button";
 
 export type TopbarProps = {
   user: { fullName: string; role: "admin" | "owner" | "employee" };
@@ -16,17 +19,26 @@ export type TopbarProps = {
 };
 
 export function Topbar({ user, onMenuClick, title }: TopbarProps) {
-  const router = useRouter();
   const toast = useToast();
   const [busy, setBusy] = React.useState(false);
 
   async function handleLogout() {
     setBusy(true);
     try {
+      // 1. Subir lo pendiente mientras la sesión de este usuario sigue viva,
+      //    así no perdemos peritajes sin sincronizar al limpiar la cola.
+      await flushSyncQueue().catch(() => {});
+      // 2. Cerrar sesión en el server (borra cookie + fila de sesión).
       const res = await apiFetch("/api/auth/logout", { method: "POST" });
       if (!res.ok) throw new Error("Error al cerrar sesión");
-      router.replace("/login");
-      router.refresh();
+      // 3. Botar TODO el estado local (memory + IndexedDB + caches del SW) para
+      //    que el próximo usuario en este dispositivo no herede peritajes ni
+      //    identidad ajenos. Sin esto, en tablets compartidas los peritajes del
+      //    usuario anterior aparecían "a nombre del otro".
+      await wipeLocalUserData().catch(() => {});
+      // 4. Recarga dura (no SPA) para botar el memory singleton del bundle y
+      //    re-arrancar el store limpio desde cero en /login.
+      window.location.href = "/login";
     } catch (err) {
       toast.show({
         title: "No se pudo cerrar sesión",
@@ -38,7 +50,7 @@ export function Topbar({ user, onMenuClick, title }: TopbarProps) {
   }
 
   return (
-    <header className="sticky top-0 z-30 flex h-14 items-center gap-3 border-b bg-background/80 px-20 backdrop-blur">
+    <header className="sticky top-0 z-30 flex h-14 items-center gap-3 border-b bg-background/80 px-4 sm:px-6 lg:px-12 xl:px-20 backdrop-blur">
       <button
         type="button"
         onClick={onMenuClick}
@@ -52,6 +64,7 @@ export function Topbar({ user, onMenuClick, title }: TopbarProps) {
           <h1 className="truncate text-base font-semibold sm:text-lg">{title}</h1>
         ) : null}
       </div>
+      <HelpButton />
       <ThemeToggle />
       <div className="hidden items-center gap-2 text-sm sm:flex">
         <span className="text-muted-foreground">Hola,</span>

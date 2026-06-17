@@ -31,26 +31,28 @@ type NavItem = {
   icon: React.ComponentType<{ className?: string }>;
   /** Roles que pueden ver este item. Si está vacío, lo ve todo el mundo. */
   roles?: ReadonlyArray<"admin" | "owner" | "employee">;
+  /** Identificador para anclar pasos del tour de uso (data-tour). */
+  tourId?: string;
 };
 
 /** Operación diaria. El admin (Vestel) NO ve los items del dueño (Empresa,
  *  Empleados, WhatsApp) porque su flujo es por /clientes; cuando necesita
  *  entrar a la operación de una empresa puntual, lo hace desde ahí. */
 const NAV_MAIN: NavItem[] = [
-  { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard, roles: ["owner", "admin"] },
-  { href: "/agenda", label: "Agenda", icon: Calendar },
-  { href: "/peritajes", label: "Peritajes", icon: ClipboardList },
-  { href: "/vehiculos", label: "Vehículos", icon: Car },
-  { href: "/propietarios", label: "Propietarios", icon: Contact },
-  { href: "/empresa", label: "Empresa", icon: Building2, roles: ["owner"] },
-  { href: "/usuarios", label: "Empleados", icon: Users, roles: ["owner"] },
-  { href: "/whatsapp", label: "WhatsApp", icon: MessageCircle, roles: ["owner"] },
-  { href: "/cuenta", label: "Mi cuenta", icon: UserCircle },
+  { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard, roles: ["owner", "admin"], tourId: "dashboard" },
+  { href: "/agenda", label: "Agenda", icon: Calendar, tourId: "agenda" },
+  { href: "/peritajes", label: "Peritajes", icon: ClipboardList, tourId: "peritajes" },
+  { href: "/vehiculos", label: "Vehículos", icon: Car, tourId: "vehiculos" },
+  { href: "/propietarios", label: "Propietarios", icon: Contact, tourId: "propietarios" },
+  { href: "/empresa", label: "Empresa", icon: Building2, roles: ["owner"], tourId: "empresa" },
+  { href: "/usuarios", label: "Empleados", icon: Users, roles: ["owner"], tourId: "empleados" },
+  { href: "/whatsapp", label: "WhatsApp", icon: MessageCircle, roles: ["owner"], tourId: "whatsapp" },
+  { href: "/cuenta", label: "Mi cuenta", icon: UserCircle, tourId: "cuenta" },
 ];
 
 /** Sección "Administrador" — solo el superuser técnico (Vestel) la ve. */
 const NAV_ADMIN: NavItem[] = [
-  { href: "/clientes", label: "Clientes", icon: Store, roles: ["admin"] },
+  { href: "/clientes", label: "Clientes", icon: Store, roles: ["admin"], tourId: "clientes" },
   { href: "/auditoria", label: "Auditoría", icon: ScrollText, roles: ["admin"] },
   { href: "/backup", label: "Backup", icon: DatabaseBackup, roles: ["admin"] },
   { href: "/admin/config", label: "Configuración", icon: Settings, roles: ["admin"] },
@@ -81,6 +83,7 @@ export function Sidebar({ user, open, onClose }: SidebarProps) {
         <Link
           href={item.href}
           onClick={onClose}
+          data-tour={item.tourId}
           className={cn(
             "flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors",
             active

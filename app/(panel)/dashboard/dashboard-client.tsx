@@ -210,13 +210,13 @@ export function DashboardClient() {
           </p>
         </div>
         <Button asChild size="sm">
-          <Link href="/intake">
+          <Link href="/intake" data-tour="dash-new">
             <Plus className="mr-1 h-4 w-4" /> Nuevo peritaje
           </Link>
         </Button>
       </div>
 
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+      <div data-tour="dash-metrics" className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
         <HeroStat
           label="Este mes"
           value={stats.thisMonth}
@@ -243,7 +243,7 @@ export function DashboardClient() {
         />
       </div>
 
-      <Card>
+      <Card data-tour="dash-trend">
         <CardHeader className="space-y-1">
           <CardTitle className="text-base">Tendencia mensual</CardTitle>
           <CardDescription>Últimos 6 meses.</CardDescription>
@@ -387,7 +387,7 @@ export function DashboardClient() {
           </CardContent>
         </Card>
 
-        <Card className="lg:col-span-2">
+        <Card data-tour="dash-recent" className="lg:col-span-2">
           <CardHeader className="flex flex-row items-center justify-between space-y-0">
             <div>
               <CardTitle className="text-base">Peritajes recientes</CardTitle>

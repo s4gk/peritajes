@@ -8,8 +8,10 @@ import {
   CurrentUserProvider,
   type PanelUser as CurrentPanelUser,
 } from "./current-user";
+import { SignatureGate } from "./signature-gate";
 import { Sidebar } from "./sidebar";
 import { Topbar } from "./topbar";
+import { ProductTour } from "./tour/product-tour";
 
 export type PanelUser = CurrentPanelUser;
 
@@ -29,8 +31,11 @@ export function PanelShell({
           <Sidebar user={user} open={open} onClose={() => setOpen(false)} />
           <div className="flex min-w-0 flex-1 flex-col">
             <Topbar user={user} onMenuClick={() => setOpen(true)} />
-            <main className="flex-1 px-20">{children}</main>
+            <main className="flex-1 px-4 sm:px-6 lg:px-12 xl:px-20">
+              <SignatureGate user={user}>{children}</SignatureGate>
+            </main>
           </div>
+          <ProductTour setDrawerOpen={setOpen} />
         </div>
       </UIPreferencesProvider>
     </CurrentUserProvider>
