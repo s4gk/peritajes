@@ -37,12 +37,12 @@ import { cn, makeId } from "@/lib/utils";
 import type { PeritajeKind, VehicleType } from "@/lib/types";
 
 const KIND_ICONS: Record<PeritajeKind, React.ComponentType<{ className?: string }>> = {
-  complete: ClipboardList,
-  quick: Gauge,
-  appraisal: DollarSign,
+  plus: ClipboardList,
+  pro: Gauge,
+  sencillo: DollarSign,
 };
 
-const KIND_ORDER: PeritajeKind[] = ["complete", "quick", "appraisal"];
+const KIND_ORDER: PeritajeKind[] = ["plus", "pro", "sencillo"];
 
 function blobToDataUrl(blob: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -146,7 +146,7 @@ export default function IntakePage() {
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-8">
-            <section className="space-y-2">
+            <section data-tour="intake-type" className="space-y-2">
               <div className="flex items-baseline gap-2">
                 <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-primary text-xs font-semibold text-primary-foreground">
                   1
@@ -187,7 +187,7 @@ export default function IntakePage() {
                   </span>
                 )}
               </div>
-              <div className="grid gap-3 md:grid-cols-3">
+              <div data-tour="intake-kind" className="grid gap-3 md:grid-cols-3">
                 {KIND_ORDER.map((k) => {
                   const def = PERITAJE_KINDS[k];
                   const Icon = KIND_ICONS[k];
@@ -257,6 +257,7 @@ export default function IntakePage() {
                 type="button"
                 onClick={startInspection}
                 size="lg"
+                data-tour="intake-start"
                 className="h-11"
                 disabled={!canStart}
               >

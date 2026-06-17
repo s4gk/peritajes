@@ -51,20 +51,46 @@ const CylinderEntry = z.object({
   images: Images.default([]),
 });
 
-const PeritajeKind = z.enum(["complete", "quick", "appraisal"]);
+// Compat: peritajes viejos guardaron los tipos como complete/quick/appraisal.
+// Los reescribimos a las claves nuevas plus/pro/sencillo al parsear para no
+// romper data histórica.
+const LEGACY_KIND_ALIASES: Record<string, string> = {
+  complete: "plus",
+  quick: "pro",
+  appraisal: "sencillo",
+};
 
-const VehicleType = z.enum([
-  "car_5doors",
-  "suv_2doors",
-  "suv_5doors",
-  "pickup_single",
-  "pickup_double",
-  "bus",
-  "heavy_panel",
-  "heavy_conventional",
-  "motorcycle",
-  "trailer",
-]);
+const PeritajeKind = z.preprocess(
+  (v) => (typeof v === "string" && LEGACY_KIND_ALIASES[v]) || v,
+  z.enum(["plus", "pro", "sencillo"]),
+);
+
+// Compat: peritajes viejos guardaron los camperos como "suv_2doors"/"suv_5doors".
+// Los reescribimos a las claves nuevas "campero_*" al parsear para no romper
+// data histórica (ni el render del PDF ni el wizard).
+const LEGACY_VEHICLE_TYPE_ALIASES: Record<string, string> = {
+  suv_2doors: "campero_2doors",
+  suv_5doors: "campero_5doors",
+};
+
+const VehicleType = z.preprocess(
+  (v) => (typeof v === "string" && LEGACY_VEHICLE_TYPE_ALIASES[v]) || v,
+  z.enum([
+    "car_5doors",
+    "hatchback",
+    "car_coupe",
+    "suv",
+    "campero_2doors",
+    "campero_5doors",
+    "pickup_single",
+    "pickup_double",
+    "bus",
+    "heavy_panel",
+    "heavy_conventional",
+    "motorcycle",
+    "trailer",
+  ]),
+);
 
 const VehicleInfo = z
   .object({

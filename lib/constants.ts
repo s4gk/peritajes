@@ -1,5 +1,14 @@
 import type { InspectionSectionDef, PeritajeKind, VehicleType } from "./types";
 
+/* NOTA HISTÓRICA: hubo dos constantes centinela aquí —
+ * LEGACY_DEFAULT_INSPECTOR ("Walter Smith Medina Umba") y su cédula— que
+ * marcaban el nombre "quemado" por defecto de versiones viejas para tratarlo
+ * como reemplazable. Se eliminaron: ese nombre resultó ser el de un perito
+ * REAL, así que comparar contra él pisaba su nombre legítimo con el de quien
+ * abriera el peritaje (cruce de nombres). La identidad del perito ahora se
+ * deriva SIEMPRE del dueño del peritaje (inspections.user_id → users) en
+ * applyRealInspector; el sembrado del wizard solo rellena campos vacíos. */
+
 /* -------------------------------------------------------------------------
  *  Wizard steps (UI) vs Data sections (buckets de InspectionData + PDF)
  *  -----------------------------------------------------------------------
@@ -28,6 +37,7 @@ export const WIZARD_STEPS = [
   { id: "leaks", label: "Fugas de fluidos", short: "Fugas" },
   { id: "underside", label: "Estructura e iluminación", short: "Estructura" },
   { id: "general", label: "Recorrido", short: "Recorrido" },
+  { id: "compression", label: "Compresión del motor", short: "Compresión" },
   { id: "roadTest", label: "Prueba de ruta", short: "Ruta" },
   { id: "extraPhotos", label: "Fotografías adicionales", short: "Fotos" },
   { id: "summary", label: "Resumen y conclusión", short: "Resumen" },
@@ -86,6 +96,23 @@ export const WALKAROUND_SECTIONS: readonly SectionId[] = [
   "accessories",
 ];
 
+/** Componentes globales (más allá de las secciones de inspección clásicas) que
+ *  un tipo de peritaje puede incluir o no. Gatean partes que antes salían
+ *  siempre: identificación, siniestros, antecedentes (Verifik), improntas
+ *  (fotos de números de chasis/motor/plaqueta) y la prueba de compresión. */
+export type PeritajeComponents = {
+  /** Sistemas de identificación: VIN, número de motor/chasis, placa. */
+  identification: boolean;
+  /** Reclamación de siniestros declarada. */
+  claims: boolean;
+  /** Antecedentes (RUNT/prendas/gravámenes vía Verifik). */
+  background: boolean;
+  /** Improntas: fotos obligatorias del n° de chasis, motor y plaqueta. */
+  improntas: boolean;
+  /** Prueba de compresión por cilindro. */
+  compression: boolean;
+};
+
 export type PeritajeKindDef = {
   id: PeritajeKind;
   label: string;
@@ -94,47 +121,79 @@ export type PeritajeKindDef = {
   /** Secciones de datos activas para este tipo de peritaje. Filtran qué
    *  items aparecen en el recorrido y qué secciones se renderizan en el PDF. */
   sections: readonly SectionId[];
+  /** Componentes globales activos (ver PeritajeComponents). */
+  components: PeritajeComponents;
 };
+
+// Secciones de inspección comunes a los 3 tipos. La eléctrica solo va en
+// Plus/Pro, y la revisión general de Motor no va en ninguno (solo la prueba
+// de compresión, que es un componente aparte gateado en Plus).
+const COMMON_SECTIONS: readonly SectionId[] = [
+  "bodywork",
+  "chassis",
+  "suspension",
+  "comfort",
+  "leaks",
+  "roadTest",
+  "tires",
+  "accessories",
+];
 
 export const PERITAJE_KINDS: Record<PeritajeKind, PeritajeKindDef> = {
-  complete: {
-    id: "complete",
-    label: "Peritaje completo",
-    short: "Completo",
+  plus: {
+    id: "plus",
+    label: "Peritaje Plus",
+    short: "Plus",
     description:
-      "Inspección integral: recorrido completo del vehículo + prueba de ruta. Para entregas formales.",
-    sections: [
-      "bodywork",
-      "chassis",
-      "suspension",
-      "engine",
-      "electrical",
-      "comfort",
-      "leaks",
-      "roadTest",
-      "tires",
-      "accessories",
-    ],
+      "El más completo: estructura, carrocería, identificación, siniestros, antecedentes, improntas, eléctrica y prueba de compresión del motor.",
+    sections: [...COMMON_SECTIONS, "electrical"],
+    components: {
+      identification: true,
+      claims: true,
+      background: true,
+      improntas: true,
+      compression: true,
+    },
   },
-  quick: {
-    id: "quick",
-    label: "Peritaje rápido",
-    short: "Rápido",
+  pro: {
+    id: "pro",
+    label: "Peritaje Pro",
+    short: "Pro",
     description:
-      "Pre-compra ágil. Carrocería, llantas, motor y prueba de ruta — lo justo para decidir si el carro vale la pena.",
-    sections: ["bodywork", "tires", "engine", "roadTest"],
+      "Igual que Plus pero sin la prueba de compresión del motor. Incluye eléctrica, antecedentes e improntas.",
+    sections: [...COMMON_SECTIONS, "electrical"],
+    components: {
+      identification: true,
+      claims: true,
+      background: true,
+      improntas: true,
+      compression: false,
+    },
   },
-  appraisal: {
-    id: "appraisal",
-    label: "Peritaje de avalúo",
-    short: "Avalúo",
+  sencillo: {
+    id: "sencillo",
+    label: "Peritaje Sencillo",
+    short: "Sencillo",
     description:
-      "Enfoque en valor comercial. Estado visual, llantas, motor y accesorios que mueven el precio.",
-    sections: ["bodywork", "tires", "engine", "accessories"],
+      "Lo esencial: estructura, carrocería, identificación y reclamación de siniestros. Sin eléctrica, antecedentes, improntas ni compresión.",
+    sections: [...COMMON_SECTIONS],
+    components: {
+      identification: true,
+      claims: true,
+      background: false,
+      improntas: false,
+      compression: false,
+    },
   },
 };
 
-export const DEFAULT_PERITAJE_KIND: PeritajeKind = "complete";
+export const DEFAULT_PERITAJE_KIND: PeritajeKind = "plus";
+
+/** Componentes globales activos para un tipo de peritaje. */
+export function componentsForKind(kind: PeritajeKind): PeritajeComponents {
+  return (PERITAJE_KINDS[kind] ?? PERITAJE_KINDS[DEFAULT_PERITAJE_KIND])
+    .components;
+}
 
 export function sectionsForKind(kind: PeritajeKind): readonly SectionId[] {
   return (PERITAJE_KINDS[kind] ?? PERITAJE_KINDS[DEFAULT_PERITAJE_KIND]).sections;
@@ -165,6 +224,14 @@ export const VEHICLE_TYPES: Record<VehicleType, VehicleTypeDef> = {
       "Carrocería autoportante: 4 puertas y tapa de baúl, o hatchback.",
     sections: ALL_SECTION_IDS,
   },
+  hatchback: {
+    id: "hatchback",
+    label: "Hatchback",
+    short: "Hatchback",
+    description:
+      "Carrocería autoportante con portón trasero: 4 puertas laterales y compuerta.",
+    sections: ALL_SECTION_IDS,
+  },
   car_coupe: {
     id: "car_coupe",
     label: "Coupé",
@@ -173,16 +240,24 @@ export const VEHICLE_TYPES: Record<VehicleType, VehicleTypeDef> = {
       "Carrocería autoportante de 2 puertas. Sin puertas traseras.",
     sections: ALL_SECTION_IDS,
   },
-  suv_2doors: {
-    id: "suv_2doors",
+  suv: {
+    id: "suv",
+    label: "SUV",
+    short: "SUV",
+    description:
+      "SUV/crossover de carrocería autoportante (unibody): 5 puertas con portón trasero. Sin chasis separado.",
+    sections: ALL_SECTION_IDS,
+  },
+  campero_2doors: {
+    id: "campero_2doors",
     label: "Campero 3 Puertas",
     short: "Campero 3P",
     description:
       "Chasis separado con 2 puertas laterales y portón trasero (3 puertas).",
     sections: ALL_SECTION_IDS,
   },
-  suv_5doors: {
-    id: "suv_5doors",
+  campero_5doors: {
+    id: "campero_5doors",
     label: "Campero 5 Puertas",
     short: "Campero 5P",
     description:
@@ -262,9 +337,11 @@ export const VEHICLE_TYPES: Record<VehicleType, VehicleTypeDef> = {
 
 export const VEHICLE_TYPE_ORDER: VehicleType[] = [
   "car_5doors",
+  "hatchback",
   "car_coupe",
-  "suv_2doors",
-  "suv_5doors",
+  "suv",
+  "campero_2doors",
+  "campero_5doors",
   "pickup_single",
   "pickup_double",
   "bus",
@@ -317,6 +394,9 @@ export function activeStepsFor(
   // Fallback: si la etapa "engine" no tuvo entries (raro en algunos tipos
   // de vehículo), igual insertamos "leaks" antes de roadTest para no perderlo.
   if (activeSet.has("leaks") && !steps.includes("leaks")) steps.push("leaks");
+  // La prueba de compresión es un componente del tipo de peritaje (solo Plus),
+  // no una sección del recorrido. Se inserta como step propio antes de ruta.
+  if (componentsForKind(kind).compression) steps.push("compression");
   if (activeSet.has("roadTest")) steps.push("roadTest");
   // El paso de fotos adicionales aparece siempre — es una galería libre, no
   // depende del tipo de peritaje ni del vehículo. Mejor pedirle al perito que
@@ -465,8 +545,8 @@ export const WALKAROUND_SEQUENCE_CAR_5DOORS: readonly WalkaroundEntry[] = [
   { kind: "tire", stage: "rear", label: "Llanta de repuesto", position: "spare" },
   { kind: "item", stage: "rear", label: "Stop izquierdo", sectionId: "bodywork", itemId: "taillight_l" },
   { kind: "item", stage: "rear", label: "Stop derecho", sectionId: "bodywork", itemId: "taillight_r" },
-  { kind: "item", stage: "rear", label: "Punta trasera izquierda", sectionId: "bodywork", itemId: "rear_corner_l" },
-  { kind: "item", stage: "rear", label: "Punta trasera derecha", sectionId: "bodywork", itemId: "rear_corner_r" },
+  { kind: "item", stage: "rear", label: "Punta trasera izquierda", sectionId: "chassis", itemId: "rear_corner_l" },
+  { kind: "item", stage: "rear", label: "Punta trasera derecha", sectionId: "chassis", itemId: "rear_corner_r" },
 
   // ───── Etapa 4: Costado derecho ─────
   { kind: "item", stage: "right", label: "Costado derecho", sectionId: "bodywork", itemId: "quarter_r" },
@@ -508,11 +588,16 @@ export const WALKAROUND_SEQUENCE_CAR_5DOORS: readonly WalkaroundEntry[] = [
   // ───── Etapa 7: Estructura e iluminación ─────
   { kind: "item", stage: "underside", label: "Piso de carrocería", sectionId: "chassis", itemId: "floor" },
   { kind: "item", stage: "underside", label: "Refuerzos de carrocería", sectionId: "chassis", itemId: "reinforcements" },
+  { kind: "item", stage: "underside", label: "Batería", sectionId: "electrical", itemId: "battery" },
+  { kind: "item", stage: "underside", label: "Alternador", sectionId: "electrical", itemId: "alternator" },
+  { kind: "item", stage: "underside", label: "Motor de arranque", sectionId: "electrical", itemId: "starter" },
+  { kind: "item", stage: "underside", label: "Sistema de carga", sectionId: "electrical", itemId: "charging_system" },
+  { kind: "item", stage: "underside", label: "Cableado / fusibles", sectionId: "electrical", itemId: "wiring_fuses" },
   { kind: "item", stage: "underside", label: "Estado iluminación vehículo", sectionId: "electrical", itemId: "lighting_overall" },
 ];
 
 /** Secuencia canónica de 63 items para camionetas, camperos y pickups de
- *  chasis independiente (suv_2doors, suv_5doors, pickup_single,
+ *  chasis independiente (campero_2doors, campero_5doors, pickup_single,
  *  pickup_double). Difiere de car_5doors en que recorre los largueros de
  *  chasis, el paral trasero de cabina y reemplaza la cuna del motor por el
  *  puente de suspensión. Las variantes 2p filtran las puertas traseras desde
@@ -596,6 +681,11 @@ export const WALKAROUND_SEQUENCE_CHASSIS_INDEPENDENT: readonly WalkaroundEntry[]
 
   // ───── Etapa 7: Estructura e iluminación ─────
   { kind: "item", stage: "underside", label: "Piso de carrocería", sectionId: "chassis", itemId: "floor" },
+  { kind: "item", stage: "underside", label: "Batería", sectionId: "electrical", itemId: "battery" },
+  { kind: "item", stage: "underside", label: "Alternador", sectionId: "electrical", itemId: "alternator" },
+  { kind: "item", stage: "underside", label: "Motor de arranque", sectionId: "electrical", itemId: "starter" },
+  { kind: "item", stage: "underside", label: "Sistema de carga", sectionId: "electrical", itemId: "charging_system" },
+  { kind: "item", stage: "underside", label: "Cableado / fusibles", sectionId: "electrical", itemId: "wiring_fuses" },
   { kind: "item", stage: "underside", label: "Iluminación del vehículo", sectionId: "electrical", itemId: "lighting_overall" },
 ];
 
@@ -620,7 +710,13 @@ export function walkaroundSequenceFor(
     return activeSet.has(e.sectionId);
   };
 
-  if (vehicleType === "car_5doors" || vehicleType === "car_coupe") {
+  if (
+    vehicleType === "car_5doors" ||
+    vehicleType === "car_coupe" ||
+    vehicleType === "suv"
+  ) {
+    // La SUV/crossover es autoportante de 5 puertas: comparte el recorrido de
+    // car_5doors y conserva las puertas traseras (solo el coupé las omite).
     const noRearDoors = vehicleType === "car_coupe";
     return WALKAROUND_SEQUENCE_CAR_5DOORS.filter((e) => {
       if (!filter(e)) return false;
@@ -636,19 +732,19 @@ export function walkaroundSequenceFor(
     });
   }
 
-  // SUVs y pickups comparten una secuencia única de chasis independiente. Para
-  // las variantes de 2 puertas (suv_2doors, pickup_single) filtramos las
-  // puertas traseras del recorrido — el perito no las ve aunque la secuencia
-  // base las incluya.
+  // Camperos y pickups comparten una secuencia única de chasis independiente.
+  // Para las variantes de 2 puertas (campero_2doors, pickup_single) filtramos
+  // las puertas traseras del recorrido — el perito no las ve aunque la
+  // secuencia base las incluya.
   const chassisIndependent: readonly VehicleType[] = [
-    "suv_5doors",
-    "suv_2doors",
+    "campero_5doors",
+    "campero_2doors",
     "pickup_single",
     "pickup_double",
   ];
   if (chassisIndependent.includes(vehicleType)) {
     const noRearDoors =
-      vehicleType === "suv_2doors" || vehicleType === "pickup_single";
+      vehicleType === "campero_2doors" || vehicleType === "pickup_single";
     return WALKAROUND_SEQUENCE_CHASSIS_INDEPENDENT.filter((e) => {
       if (!filter(e)) return false;
       if (
@@ -827,8 +923,6 @@ export const BODYWORK_SECTION: InspectionSectionDef = {
         { id: "trunk_floor", label: "Piso del baúl", kind: "bodywork" },
         { id: "taillight_l", label: "Stop izquierdo", kind: "light_unit" },
         { id: "taillight_r", label: "Stop derecho", kind: "light_unit" },
-        { id: "rear_corner_l", label: "Punta trasera izquierda", kind: "bodywork" },
-        { id: "rear_corner_r", label: "Punta trasera derecha", kind: "bodywork" },
       ],
     },
   ],
@@ -846,6 +940,8 @@ export const CHASSIS_SECTION: InspectionSectionDef = {
         { id: "reinforcements", label: "Refuerzos de carrocería", kind: "structural" },
         { id: "chassis_rail_l", label: "Larguero chasis izquierdo", kind: "structural" },
         { id: "chassis_rail_r", label: "Larguero chasis derecho", kind: "structural" },
+        { id: "rear_corner_l", label: "Punta trasera izquierda", kind: "structural" },
+        { id: "rear_corner_r", label: "Punta trasera derecha", kind: "structural" },
       ],
     },
   ],
@@ -915,10 +1011,36 @@ export const ENGINE_SECTION: InspectionSectionDef = {
   ],
 };
 
+/** Sección "virtual" para el step de Compresión: reusa el id "engine" (que
+ *  SectionAccordion reconoce para el grupo dinámico de cilindros) pero expone
+ *  SOLO el grupo de compresión, sin la revisión general del motor. */
+export const ENGINE_COMPRESSION_SECTION: InspectionSectionDef = {
+  id: "engine",
+  label: "Compresión del motor",
+  groups: [
+    {
+      id: "compression",
+      label: "Compresión por cilindro",
+      items: [],
+    },
+  ],
+};
+
 export const ELECTRICAL_SECTION: InspectionSectionDef = {
   id: "electrical",
   label: "Sistema eléctrico",
   groups: [
+    {
+      id: "charging",
+      label: "Carga y arranque",
+      items: [
+        { id: "battery", label: "Batería", kind: "mechanical" },
+        { id: "alternator", label: "Alternador", kind: "mechanical" },
+        { id: "starter", label: "Motor de arranque", kind: "mechanical" },
+        { id: "charging_system", label: "Sistema de carga", kind: "mechanical" },
+        { id: "wiring_fuses", label: "Cableado / fusibles", kind: "mechanical" },
+      ],
+    },
     {
       id: "lights",
       label: "Iluminación",
@@ -1053,6 +1175,8 @@ const CHASSIS_INDEPENDENT_STRUCTURAL_ITEMS = [
   { id: "pillar_b_r", label: "Paral central derecho", kind: "bodywork" as const },
   { id: "cabin_pillar_rear_l", label: "Paral trasero cabina izquierdo", kind: "bodywork" as const },
   { id: "cabin_pillar_rear_r", label: "Paral trasero cabina derecho", kind: "bodywork" as const },
+  { id: "rocker_l", label: "Estribo izquierdo", kind: "bodywork" as const },
+  { id: "rocker_r", label: "Estribo derecho", kind: "bodywork" as const },
   { id: "inner_fender_fl", label: "Guardapolvo metálico delantero izquierdo", kind: "bodywork" as const },
   { id: "inner_fender_fr", label: "Guardapolvo metálico delantero derecho", kind: "bodywork" as const },
   { id: "inner_fender_rl", label: "Guardapolvo metálico trasero izquierdo", kind: "bodywork" as const },
@@ -1085,8 +1209,6 @@ export const BODYWORK_SUV_5DOORS: InspectionSectionDef = {
         { id: "door_fr", label: "Puerta delantera derecha", kind: "bodywork", hasSealantCheck: true },
         { id: "door_rl", label: "Puerta trasera izquierda", kind: "bodywork", hasSealantCheck: true },
         { id: "door_rr", label: "Puerta trasera derecha", kind: "bodywork", hasSealantCheck: true },
-        { id: "rocker_l", label: "Estribo izquierdo", kind: "bodywork" },
-        { id: "rocker_r", label: "Estribo derecho", kind: "bodywork" },
         { id: "mirror_l", label: "Espejo izquierdo", kind: "bodywork" },
         { id: "mirror_r", label: "Espejo derecho", kind: "bodywork" },
         { id: "quarter_l", label: "Costado izquierdo", kind: "bodywork" },
@@ -1117,7 +1239,7 @@ export const BODYWORK_SUV_5DOORS: InspectionSectionDef = {
     },
     {
       id: "pillars_structure",
-      label: "Pilares y estructura",
+      label: "Estructura",
       items: CHASSIS_INDEPENDENT_STRUCTURAL_ITEMS,
     },
   ],
@@ -1146,8 +1268,6 @@ export const BODYWORK_SUV_2DOORS: InspectionSectionDef = {
       items: [
         { id: "door_fl", label: "Puerta delantera izquierda", kind: "bodywork", hasSealantCheck: true },
         { id: "door_fr", label: "Puerta delantera derecha", kind: "bodywork", hasSealantCheck: true },
-        { id: "rocker_l", label: "Estribo izquierdo", kind: "bodywork" },
-        { id: "rocker_r", label: "Estribo derecho", kind: "bodywork" },
         { id: "mirror_l", label: "Espejo izquierdo", kind: "bodywork" },
         { id: "mirror_r", label: "Espejo derecho", kind: "bodywork" },
         { id: "quarter_l", label: "Costado izquierdo", kind: "bodywork" },
@@ -1178,7 +1298,7 @@ export const BODYWORK_SUV_2DOORS: InspectionSectionDef = {
     },
     {
       id: "pillars_structure",
-      label: "Pilares y estructura",
+      label: "Estructura",
       items: CHASSIS_INDEPENDENT_STRUCTURAL_ITEMS,
     },
   ],
@@ -1207,8 +1327,6 @@ export const BODYWORK_PICKUP_SINGLE: InspectionSectionDef = {
       items: [
         { id: "door_fl", label: "Puerta delantera izquierda", kind: "bodywork", hasSealantCheck: true },
         { id: "door_fr", label: "Puerta delantera derecha", kind: "bodywork", hasSealantCheck: true },
-        { id: "rocker_l", label: "Estribo izquierdo", kind: "bodywork" },
-        { id: "rocker_r", label: "Estribo derecho", kind: "bodywork" },
         { id: "mirror_l", label: "Espejo izquierdo", kind: "bodywork" },
         { id: "mirror_r", label: "Espejo derecho", kind: "bodywork" },
         { id: "cabin_rear", label: "Pared trasera de cabina", kind: "bodywork" },
@@ -1241,7 +1359,7 @@ export const BODYWORK_PICKUP_SINGLE: InspectionSectionDef = {
     },
     {
       id: "pillars_structure",
-      label: "Pilares y estructura",
+      label: "Estructura",
       items: CHASSIS_INDEPENDENT_STRUCTURAL_ITEMS.filter((i) => i.id !== "rear_panel"),
     },
   ],
@@ -1272,8 +1390,6 @@ export const BODYWORK_PICKUP_DOUBLE: InspectionSectionDef = {
         { id: "door_fr", label: "Puerta delantera derecha", kind: "bodywork", hasSealantCheck: true },
         { id: "door_rl", label: "Puerta trasera izquierda", kind: "bodywork", hasSealantCheck: true },
         { id: "door_rr", label: "Puerta trasera derecha", kind: "bodywork", hasSealantCheck: true },
-        { id: "rocker_l", label: "Estribo izquierdo", kind: "bodywork" },
-        { id: "rocker_r", label: "Estribo derecho", kind: "bodywork" },
         { id: "mirror_l", label: "Espejo izquierdo", kind: "bodywork" },
         { id: "mirror_r", label: "Espejo derecho", kind: "bodywork" },
         { id: "cabin_rear", label: "Pared trasera de cabina", kind: "bodywork" },
@@ -1306,7 +1422,7 @@ export const BODYWORK_PICKUP_DOUBLE: InspectionSectionDef = {
     },
     {
       id: "pillars_structure",
-      label: "Pilares y estructura",
+      label: "Estructura",
       items: CHASSIS_INDEPENDENT_STRUCTURAL_ITEMS.filter((i) => i.id !== "rear_panel"),
     },
   ],
@@ -1513,9 +1629,11 @@ export const BODYWORK_TRAILER: InspectionSectionDef = {
 
 const BODYWORK_BY_VEHICLE_TYPE: Record<VehicleType, InspectionSectionDef> = {
   car_5doors: BODYWORK_5DOORS,
+  hatchback: BODYWORK_5DOORS,
   car_coupe: BODYWORK_5DOORS,
-  suv_2doors: BODYWORK_SUV_2DOORS,
-  suv_5doors: BODYWORK_SUV_5DOORS,
+  suv: BODYWORK_5DOORS,
+  campero_2doors: BODYWORK_SUV_2DOORS,
+  campero_5doors: BODYWORK_SUV_5DOORS,
   pickup_single: BODYWORK_PICKUP_SINGLE,
   pickup_double: BODYWORK_PICKUP_DOUBLE,
   bus: BODYWORK_BUS,

@@ -2,15 +2,17 @@ import type { VerifikSnapshot } from "./verifik/types";
 
 export type RiskLevel = "low" | "medium" | "high";
 
-export type PeritajeKind = "complete" | "quick" | "appraisal";
+export type PeritajeKind = "plus" | "pro" | "sencillo";
 
 /** Categoría comercial del vehículo. Determina qué pasos del wizard aplican y
  *  qué inventario de carrocería se usa. */
 export type VehicleType =
   | "car_5doors"          // Carrocería 5 Puertas (sedán/hatchback autoportante).
+  | "hatchback"           // Hatchback (carrocería autoportante, comparte recorrido con 5 puertas).
   | "car_coupe"           // Coupé autoportante: 2 puertas, sin puertas traseras.
-  | "suv_2doors"          // Campero 3 Puertas (2 laterales + portón trasero).
-  | "suv_5doors"          // Campero 5 Puertas.
+  | "suv"                 // SUV/crossover autoportante (unibody): 5 puertas.
+  | "campero_2doors"      // Campero 3 Puertas (2 laterales + portón trasero).
+  | "campero_5doors"      // Campero 5 Puertas.
   | "pickup_single"       // Pick Up Sencilla (cabina sencilla + platón).
   | "pickup_double"       // Pick Up Doble Cabina.
   | "bus"                 // Bus (>19 pasajeros).

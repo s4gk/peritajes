@@ -16,7 +16,7 @@ function okSection(sectionId: string): Record<string, InspectionEntry> {
 
 export function pristineInspection(): InspectionData {
   return {
-    kind: "complete",
+    kind: "plus",
     vehicleType: FALLBACK_VEHICLE_TYPE,
     vehicle: {
       plate: "ABC123",
