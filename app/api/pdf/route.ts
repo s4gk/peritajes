@@ -28,6 +28,9 @@ type Payload = {
   /** ID del peritaje en DB. Necesario para amarrar el PDF a un share token y
    *  embeber el QR de verificación. Si no se manda, el PDF sale sin QR. */
   inspectionId?: string;
+  /** Previsualización de borrador: cualquier usuario puede generarlo, pero sale
+   *  con marca de agua "PREVISUALIZACIÓN" y SIN QR/consecutivo oficial. */
+  preview?: boolean;
 };
 
 export async function POST(req: Request) {
@@ -104,33 +107,38 @@ export async function POST(req: Request) {
       } catch {
         reportNumber = null;
       }
-      try {
-        let token = await getActiveShareTokenForInspection(body.inspectionId);
-        if (!token) {
-          token = await createShareToken({
-            inspectionId: body.inspectionId,
-            createdBy: user.id,
-          });
+      // En previsualización NO generamos share token ni QR de verificación:
+      // el documento no es oficial, así que no debe tener enlace público.
+      if (!body.preview) {
+        try {
+          let token = await getActiveShareTokenForInspection(body.inspectionId);
+          if (!token) {
+            token = await createShareToken({
+              inspectionId: body.inspectionId,
+              createdBy: user.id,
+            });
+          }
+          const base = buildPublicBaseUrl(req);
+          verificationUrl = base ? `${base}/r/${token.token}` : `/r/${token.token}`;
+        } catch {
+          // Si falla la creación del token, el PDF sale sin QR. No bloqueamos al
+          // perito que solo quiere descargar.
+          verificationUrl = null;
         }
-        const base = buildPublicBaseUrl(req);
-        verificationUrl = base ? `${base}/r/${token.token}` : `/r/${token.token}`;
-      } catch {
-        // Si falla la creación del token, el PDF sale sin QR. No bloqueamos al
-        // perito que solo quiere descargar.
-        verificationUrl = null;
       }
     }
     // Si access.kind === "not_found" simplemente seguimos sin QR (puede ser
     // un peritaje aún no sincronizado al server).
   }
 
-  // Gate de preview: solo admin puede renderear borradores. Si llegamos hasta
-  // acá sin haber retornado el PDF stored, significa que el peritaje no está
-  // finalizado (o no existe en server). Sin este gate, el perito podía
-  // descargar el PDF y entregarlo al cliente sin finalizar nunca el
-  // peritaje — saltándose firma del cliente, consecutivo oficial y entrega
-  // automática por WhatsApp. Admin sigue pudiendo previsualizar para soporte.
-  if (user.role !== "admin") {
+  // Gate del PDF de borrador. Si llegamos hasta acá sin haber retornado el PDF
+  // stored, el peritaje no está finalizado (o no existe en server). Dos casos:
+  //   - preview=true: cualquier usuario puede generarlo, pero sale con marca de
+  //     agua "PREVISUALIZACIÓN" y sin QR/consecutivo — no es entregable.
+  //   - descarga "oficial" de un borrador: sigue restringida a admin. Sin esto
+  //     el perito podía entregar un PDF sin finalizar (saltándose firma del
+  //     cliente, consecutivo oficial y entrega automática por WhatsApp).
+  if (!body.preview && user.role !== "admin") {
     return new NextResponse(
       "El PDF solo se puede descargar después de finalizar el peritaje.",
       { status: 403 },
@@ -148,6 +156,7 @@ export async function POST(req: Request) {
       verificationUrl,
       reportNumber,
       orgId: renderOrgId,
+      preview: body.preview ?? false,
     });
     return new NextResponse(buffer as unknown as BodyInit, {
       status: 200,

@@ -8,6 +8,7 @@ import path, { join as pathJoin } from "node:path";
 import { buildDocumentNumber, getCompanyBranding } from "@/lib/company";
 import { getCompanyConfig } from "@/lib/server/company";
 import {
+  buildWatermarkLogo,
   shrinkImageForPdf,
   shrinkImageList,
   shrinkSectionImages,
@@ -167,6 +168,9 @@ export type RenderInspectionPdfOptions = {
   /** Org del peritaje. El branding (NIT, logo, teléfono) se toma de la
    *  config de esta org. Si es null, sale con defaults del platform. */
   orgId?: string | null;
+  /** Previsualización de borrador (peritaje no finalizado). Estampa la marca
+   *  de agua "PREVISUALIZACIÓN" para diferenciarlo del documento oficial. */
+  preview?: boolean;
 };
 
 export type RenderedPdf = {
@@ -233,6 +237,11 @@ export async function renderInspectionPdf(
       verificationQrDataUrl = null;
     }
   }
+  // Logo de la org pre-padeado para la marca de agua de fondo (mosaico que
+  // intercala herramientas + logo). Null si la org no tiene logo → cae al
+  // mosaico de solo herramientas.
+  const watermarkLogoDataUrl = await buildWatermarkLogo(branding.logoDataUrl);
+
   const html = renderReportHtml(data, report, {
     mode,
     branding,
@@ -241,6 +250,8 @@ export async function renderInspectionPdf(
     verificationUrl,
     verificationQrDataUrl,
     reportNumber: opts.reportNumber ?? null,
+    preview: opts.preview ?? false,
+    watermarkLogoDataUrl,
   });
 
   const docNumber =
@@ -249,17 +260,39 @@ export async function renderInspectionPdf(
   const plateLabel = data.vehicle.plate || "Sin placa";
   const plateSlug = (data.vehicle.plate || "inspeccion").replace(/[^A-Z0-9]/gi, "");
 
+  const brandName = branding.name?.trim() || "Peritajes del Llano";
+  // Datos de contacto para el footer: solo los campos que existan, separados
+  // por "·". Vacío si la org no configuró ninguno (no dejamos separadores sueltos).
+  const footerContact = [branding.address, branding.phone, branding.email]
+    .map((s) => s?.trim())
+    .filter(Boolean)
+    .join("  ·  ");
+  const footerRight = branding.website?.trim() || branding.tagline?.trim() || "";
+
   const headerTemplate = `
-    <div style="font-size:8pt; color:#475569; width:100%; padding:0 14mm; display:flex; align-items:center; justify-content:space-between;">
-      <div style="display:flex; align-items:center; gap:6pt;">
-        <span style="font-weight:700; color:#0f172a;">${escapeHtmlForTemplate(plateLabel)}</span>
-        <span style="color:#94a3b8;">·</span>
-        <span style="font-size:7.5pt;">${escapeHtmlForTemplate(docNumber)}</span>
+    <div style="font-size:8pt; color:#475569; width:100%; padding:0 14mm; box-sizing:border-box;">
+      <div style="border-bottom:0.75pt solid #e2e8f0; padding-bottom:4pt; display:flex; align-items:center; justify-content:space-between;">
+        <div style="display:flex; align-items:center; gap:6pt;">
+          <span style="font-weight:700; color:#0f172a;">${escapeHtmlForTemplate(brandName)}</span>
+          <span style="color:#cbd5e1;">|</span>
+          <span style="font-weight:600; color:#0f172a;">${escapeHtmlForTemplate(plateLabel)}</span>
+          <span style="color:#94a3b8;">·</span>
+          <span style="font-size:7.5pt;">${escapeHtmlForTemplate(docNumber)}</span>
+        </div>
+        <div>Pág. <span class="pageNumber"></span> / <span class="totalPages"></span></div>
       </div>
-      <div>Pág. <span class="pageNumber"></span> / <span class="totalPages"></span></div>
     </div>
   `;
-  const footerTemplate = `<div></div>`;
+  const footerTemplate = `
+    <div style="font-size:7pt; color:#94a3b8; width:100%; padding:0 14mm; box-sizing:border-box;">
+      <div style="border-top:0.75pt solid #e2e8f0; padding-top:4pt; display:flex; align-items:center; justify-content:space-between; gap:8pt;">
+        <span style="white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
+          <span style="font-weight:700; color:#475569;">${escapeHtmlForTemplate(brandName)}</span>${footerContact ? `<span style="color:#cbd5e1;">  ·  </span>${escapeHtmlForTemplate(footerContact)}` : ""}
+        </span>
+        ${footerRight ? `<span style="white-space:nowrap;">${escapeHtmlForTemplate(footerRight)}</span>` : ""}
+      </div>
+    </div>
+  `;
 
   // Topes para que un recurso lento (Gemini, fuente remota) no cuelgue el
   // request hasta el `maxDuration: 60` y devuelva 504 sin contexto. Mejor
@@ -301,7 +334,7 @@ export async function renderInspectionPdf(
       displayHeaderFooter: true,
       headerTemplate,
       footerTemplate,
-      margin: { top: "22mm", bottom: "16mm", left: "14mm", right: "14mm" },
+      margin: { top: "22mm", bottom: "18mm", left: "14mm", right: "14mm" },
       timeout: PDF_TIMEOUT_MS,
     });
     const compressed = await compressPdfWithGhostscript(Buffer.from(pdf));

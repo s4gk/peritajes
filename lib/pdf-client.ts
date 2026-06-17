@@ -15,12 +15,14 @@ export async function downloadInspectionPdf(
   data: InspectionData,
   mode: PdfDownloadMode = "executive",
   inspectionId?: string,
+  opts?: { preview?: boolean },
 ): Promise<void> {
   const report = analyze(data);
+  const preview = opts?.preview ?? false;
   const res = await apiFetch("/api/pdf", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ data, report, mode, inspectionId }),
+    body: JSON.stringify({ data, report, mode, inspectionId, preview }),
   });
   if (!res.ok) {
     const text = await res.text().catch(() => "");
@@ -31,7 +33,9 @@ export async function downloadInspectionPdf(
   const a = document.createElement("a");
   a.href = url;
   const plate = (data.vehicle.plate || "inspeccion").replace(/[^A-Z0-9]/gi, "");
-  a.download = `peritaje-${plate}.pdf`;
+  a.download = preview
+    ? `peritaje-${plate}-PREVISUALIZACION.pdf`
+    : `peritaje-${plate}.pdf`;
   document.body.appendChild(a);
   a.click();
   a.remove();

@@ -78,6 +78,57 @@ export async function shrinkImageForPdf(dataUrl: string): Promise<string> {
   }
 }
 
+/** Prepara el logo de la organización para la marca de agua de fondo del PDF:
+ *  lo escala chico y lo centra en un lienzo cuadrado transparente con amplio
+ *  margen. Así, al tilearse como capa de `background-image` (background-size
+ *  fijo de 52pt), el logo aparece pequeño y con aire — intercalado en damero
+ *  con el ícono de herramientas (ver buildBgWatermarkStyle en pdf-template).
+ *
+ *  Por qué pre-padear con sharp en vez de un wrapper SVG: Chromium NO rinde
+ *  `<image href="data:...">` embebido cuando el SVG se usa como background, así
+ *  que el logo tiene que ir como raster directo — y un raster CSS ocupa todo su
+ *  tile, sin forma de darle margen salvo metiéndoselo en el propio bitmap.
+ *
+ *  Acepta PNG/JPEG/SVG (sharp rasteriza el SVG). Devuelve un data URL PNG con
+ *  alpha, o null si no hay logo o si sharp falla (defensive — el PDF cae al
+ *  mosaico de solo herramientas). */
+export async function buildWatermarkLogo(
+  logoDataUrl: string | undefined | null,
+): Promise<string | null> {
+  const src = logoDataUrl?.trim();
+  if (!src || !src.startsWith("data:")) return null;
+  const input = dataUrlToBuffer(src);
+  if (!input) return null;
+
+  // Logo a 44px dentro de un lienzo de 110px (40%): mismo peso visual que la
+  // llave dentro de su celda de 52pt.
+  const INNER = 44;
+  const CANVAS = 110;
+  try {
+    const inner = await sharp(input, { failOn: "none" })
+      .resize(INNER, INNER, {
+        fit: "contain",
+        background: { r: 0, g: 0, b: 0, alpha: 0 },
+      })
+      .png()
+      .toBuffer();
+    const padded = await sharp({
+      create: {
+        width: CANVAS,
+        height: CANVAS,
+        channels: 4,
+        background: { r: 0, g: 0, b: 0, alpha: 0 },
+      },
+    })
+      .composite([{ input: inner, gravity: "center" }])
+      .png()
+      .toBuffer();
+    return `data:image/png;base64,${padded.toString("base64")}`;
+  } catch {
+    return null;
+  }
+}
+
 /** Procesa un array de `{ dataUrl, ... }` en paralelo. */
 export async function shrinkImageList<T extends { dataUrl: string }>(
   items: T[] | undefined | null,

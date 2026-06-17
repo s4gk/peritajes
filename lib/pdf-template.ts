@@ -8,6 +8,7 @@ import {
   bodyworkSectionFor,
   CHASSIS_SECTION,
   COMFORT_SECTION,
+  componentsForKind,
   ELECTRICAL_SECTION,
   ENGINE_SECTION,
   FALLBACK_VEHICLE_TYPE,
@@ -153,9 +154,72 @@ function tierLabel(pct: number | null): {
   tone: "success" | "warning" | "danger" | "muted";
 } {
   if (pct === null) return { label: "Sin inspeccionar", tone: "muted" };
-  if (pct >= 80) return { label: "Óptimo", tone: "success" };
-  if (pct >= 60) return { label: "Aceptable", tone: "warning" };
-  return { label: "Deficiente", tone: "danger" };
+  if (pct >= 80) return { label: "ESTÁNDAR", tone: "success" };
+  if (pct >= 60) return { label: "FUERA ESTÁNDAR", tone: "warning" };
+  return { label: "ASEGURABILIDAD SUJETA A POLÍTICAS", tone: "danger" };
+}
+
+/**
+ * Concepto a partir de la *condición general* que el perito eligió a mano en la
+ * conclusión técnica. Esta selección manda sobre el cálculo automático por
+ * puntaje: el concepto del peritaje debe ser exactamente el que el perito
+ * dictaminó. Devuelve null si no se seleccionó ninguna.
+ */
+function conceptoFromGeneralCondition(
+  value: string | undefined,
+): { label: string; tone: "success" | "warning" | "danger" | "muted"; meaning: string } | null {
+  const v = (value ?? "").trim();
+  if (!v) return null;
+  const norm = v.toUpperCase();
+  if (norm === "ESTÁNDAR" || norm === "ESTANDAR") {
+    return {
+      label: v,
+      tone: "success",
+      meaning: "El vehículo cumple con las condiciones estándar de aseguramiento.",
+    };
+  }
+  if (norm.startsWith("FUERA")) {
+    return {
+      label: v,
+      tone: "warning",
+      meaning:
+        "El vehículo presenta condiciones fuera del estándar; revise los hallazgos antes de asegurar.",
+    };
+  }
+  if (norm.includes("ASEGURABILIDAD")) {
+    return {
+      label: v,
+      tone: "danger",
+      meaning:
+        "La asegurabilidad del vehículo queda sujeta a las políticas de cada aseguradora.",
+    };
+  }
+  // Valor no reconocido (no debería pasar con el selector actual): lo mostramos
+  // tal cual, sin tono fuerte.
+  return { label: v, tone: "muted", meaning: "" };
+}
+
+/**
+ * Banner del concepto global en la portada — el titular del reporte. Muestra el
+ * concepto en grande (ESTÁNDAR / FUERA DE ESTÁNDAR / ASEGURABILIDAD SUJETA A
+ * POLÍTICAS), para que sea lo primero que vea el cliente.
+ *
+ * El concepto es SIEMPRE la condición general que el perito eligió a mano en la
+ * conclusión técnica. Nunca se deriva del puntaje ni de ningún cálculo
+ * automático. Si el perito no eligió una condición, no se muestra banner.
+ */
+function renderConceptoBanner(data: InspectionData): string {
+  const concepto = conceptoFromGeneralCondition(data.conclusion?.generalCondition);
+  if (!concepto) return "";
+  return `
+    <div class="concepto-banner tone-${concepto.tone}">
+      <div class="cb-main">
+        <div class="cb-overline">Concepto del peritaje</div>
+        <div class="cb-label">${escapeHtml(concepto.label)}</div>
+        <div class="cb-meaning">${escapeHtml(concepto.meaning)}</div>
+      </div>
+    </div>
+  `;
 }
 
 function renderPillarRow(pillar: PillarHealth): string {
@@ -242,7 +306,7 @@ function renderPillarSummary(
       </div>`;
 
   return `
-    <section style="margin-top:${options?.compact ? "6mm" : "14pt"};">
+    <section style="margin-top:${options?.compact ? "4mm" : "14pt"};">
       ${heading}
       ${globalBlock}
       <div class="summary-rows">
@@ -1039,7 +1103,12 @@ function renderEvidence(
 function renderMandatoryPhotosEvidence(data: InspectionData): string {
   const m = data.mandatoryPhotos;
   if (!m) return "";
-  const slots: { key: keyof InspectionData["mandatoryPhotos"]; label: string }[] = [
+  // Las 6 fotos obligatorias (incluidas las improntas) aplican a todos los
+  // tipos de peritaje. Se renderizan las que tengan al menos una foto.
+  const slots: {
+    key: keyof InspectionData["mandatoryPhotos"];
+    label: string;
+  }[] = [
     { key: "diagonalFrontLeft", label: "Diagonal Delantera Izquierda" },
     { key: "diagonalRearRight", label: "Diagonal Trasera Derecha" },
     { key: "innerCabin", label: "Habitáculo Interno" },
@@ -1149,7 +1218,7 @@ function renderTires(data: InspectionData, headingHtml: string): string {
     : "";
 
   return `
-    <section class="docs-section proc-section" style="page-break-before: always; break-before: page;">
+    <section class="docs-section proc-section">
       ${headingHtml}
       <div class="proc-hero tone-${heroTone}">
         <div class="proc-hero-text">
@@ -1354,7 +1423,7 @@ function renderDocumentation(
   const cTone = claimsTone(v.hasClaimsHistory);
 
   return `
-    <section class="page-break docs-section">
+    <section class="docs-section">
       ${headingHtml}
       <p class="muted" style="margin-bottom: 8pt;">
         Información administrativa del vehículo: propietario, papeles legales, póliza particular y reporte de siniestros.
@@ -1591,58 +1660,34 @@ function renderVehicleValue(
   `;
 }
 
-/* -----------------------------------------------------------
- *  Sección 4: Resumen de hallazgos del peritaje
- * --------------------------------------------------------- */
-
-function renderFindingsSummary(
-  report: RiskReport,
-  pillarReport: PillarReport,
-  headingHtml: string,
-): string {
-  const findings = report.findings.filter(
-    (f) => f.level === "critical" || f.level === "warning",
-  );
-  const total = findings.length;
-
-  const heroLabel = total === 0
-    ? "Sin hallazgos detectados"
-    : `${total} ${total === 1 ? "hallazgo detectado" : "hallazgos detectados"}`;
-  const heroMeta = total === 0
-    ? "El vehículo no presenta hallazgos en el peritaje."
-    : "Listado de observaciones encontradas durante la inspección.";
-
-  const globalPct = pillarReport.globalPct;
-
-  const cards = findings
-    .map(
-      (f) => `
-      <div class="proc-finding">
-        <div class="proc-finding-head">
-          <span class="proc-finding-group">${escapeHtml(f.section)}</span>
-          <span class="pill pill-neutral">${escapeHtml(f.item)}</span>
-        </div>
-        <div class="proc-finding-title">${escapeHtml(f.message)}</div>
-      </div>`,
-    )
-    .join("");
-
-  return `
-    <section class="docs-section proc-section findings-summary">
-      ${headingHtml}
-      <div class="proc-hero">
-        <div class="proc-hero-text">
-          <span class="proc-hero-label">${escapeHtml(heroLabel)}</span>
-          <span class="proc-hero-meta">${escapeHtml(heroMeta)}</span>
-        </div>
-        ${globalPct !== null ? `<span class="proc-hero-pct">${globalPct}%</span>` : ""}
-      </div>
-      ${total === 0 ? "" : `<div class="proc-findings">${cards}</div>`}
-    </section>
-  `;
-}
-
 export type PdfMode = "executive" | "detailed";
+
+/** Tile base de la marca de agua de fondo: el ícono de herramientas (llave)
+ *  en slate muy tenue, 48×48, estilo papel de seguridad. */
+const WRENCH_WATERMARK_TILE =
+  "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI0OCIgaGVpZ2h0PSI0OCIgdmlld0JveD0iMCAwIDQ4IDQ4Ij48ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSgxMiwxMikiIGZpbGw9IiMzMzQxNTUiPjxwYXRoIGQ9Ik01LjMyOTQzIDMuMjcxNThDNi41NjI1MiAyLjgzMzIgNy45OTIzIDMuMTA3NDkgOC45NzkyNyA0LjA5NDQ2QzkuOTY2NTIgNS4wODE3MSAxMC4yNDA3IDYuNTEyMDIgOS44MDE3OCA3Ljc0NTM1TDIwLjY0NjUgMTguNTkwMkwxOC41MjUyIDIwLjcxMTVMNy42NzkzNiA5Ljg2NzA5QzYuNDQ2MjcgMTAuMzA1NSA1LjAxNjQ5IDEwLjAzMTIgNC4wMjk1MiA5LjA0NDIxQzMuMDQyMjcgOC4wNTY5NiAyLjc2ODEgNi42MjY2NSAzLjIwNzAxIDUuMzkzMzJMNS40NDM3MyA3LjYzQzYuMDI5NTIgOC4yMTU3OCA2Ljk3OTI3IDguMjE1NzggNy41NjUwNSA3LjYzQzguMTUwODQgNy4wNDQyMSA4LjE1MDg0IDYuMDk0NDYgNy41NjUwNSA1LjUwODY4TDUuMzI5NDMgMy4yNzE1OFpNMTUuNjk2OCA1LjE1NTEyTDE4Ljg3ODggMy4zODczNkwyMC4yOTMgNC44MDE1N0wxOC41MjUyIDcuOTgzNTVMMTYuNzU3NCA4LjMzNzFMMTQuNjM2MSAxMC40NTg0TDEzLjIyMTkgOS4wNDQyMUwxNS4zNDMyIDYuOTIyODlMMTUuNjk2OCA1LjE1NTEyWk04LjYyNTcyIDEyLjkzMzNMMTAuNzQ3IDE1LjA1NDZMNS43OTcyOSAyMC4wMDQ0QzUuMjExNSAyMC41OTAyIDQuMjYxNzUgMjAuNTkwMiAzLjY3NTk3IDIwLjAwNDRDMy4xMjQ2NCAxOS40NTMgMy4wOTIyMSAxOC41NzkzIDMuNTc4NjcgMTcuOTlMMy42NzU5NyAxNy44ODNMOC42MjU3MiAxMi45MzMzWiIvPjwvZz48L3N2Zz4=";
+
+/** Estilo inline para la capa `.bg-watermark`. Si la organización tiene logo
+ *  (ya pre-padeado por `buildWatermarkLogo` en pdf-render), devuelve un mosaico
+ *  de DOS capas que intercala el ícono de herramientas y el logo en damero
+ *  diagonal: la llave en la sublattice (0,0) y el logo desfasado media celda
+ *  (26pt en ambos ejes). Sin logo, cae al tile clásico de solo herramientas.
+ *
+ *  El logo va como capa de background CSS independiente (raster directo) y NO
+ *  embebido dentro del SVG: Chromium NO rinde `<image href="data:...">` cuando
+ *  el SVG se usa como `background-image` (probado). Los data URLs van sin
+ *  comillas en `url()` — base64 no contiene espacios ni paréntesis — para no
+ *  chocar con las comillas del atributo `style`. */
+function buildBgWatermarkStyle(watermarkLogoDataUrl: string | null): string {
+  if (!watermarkLogoDataUrl) {
+    return `background-image:url(${WRENCH_WATERMARK_TILE});background-size:52pt 52pt;`;
+  }
+  return (
+    `background-image:url(${WRENCH_WATERMARK_TILE}),url(${watermarkLogoDataUrl});` +
+    `background-position:0 0,26pt 26pt;` +
+    `background-size:52pt 52pt,52pt 52pt;`
+  );
+}
 
 export function renderReportHtml(
   data: InspectionData,
@@ -1666,6 +1711,16 @@ export function renderReportHtml(
      *  viene, el PDF cae al docNumber derivado de placa+fecha — útil para
      *  previews de borradores que todavía no se finalizan. */
     reportNumber?: string | null;
+    /** Previsualización: el peritaje aún no está finalizado. Estampa una marca
+     *  de agua "PREVISUALIZACIÓN" en todas las páginas y un banner en la
+     *  portada, para que el documento no pueda confundirse con el oficial. */
+    preview?: boolean;
+    /** Logo de la organización ya pre-procesado para la marca de agua de fondo
+     *  (centrado en lienzo transparente con margen). Si está set, el mosaico
+     *  de `.bg-watermark` intercala el ícono de herramientas con el logo en
+     *  damero diagonal. Si es null/undefined, cae al tile de solo herramientas.
+     *  Lo genera `buildWatermarkLogo` en pdf-render (requiere sharp, async). */
+    watermarkLogoDataUrl?: string | null;
   },
 ): string {
   // `options.mode` se acepta en el tipo por compatibilidad con callers
@@ -1678,13 +1733,18 @@ export function renderReportHtml(
   const verificationUrl = options?.verificationUrl ?? null;
   const verificationQrDataUrl = options?.verificationQrDataUrl ?? null;
   const verifiable = !!(verificationUrl && verificationQrDataUrl);
+  const preview = options?.preview ?? false;
+  const bgWatermarkStyle = buildBgWatermarkStyle(
+    options?.watermarkLogoDataUrl ?? null,
+  );
   const docNumber =
     options?.reportNumber || buildDocumentNumber(v.plate, v.date);
-  const kindDef = PERITAJE_KINDS[data.kind] ?? PERITAJE_KINDS.complete;
+  const kindDef = PERITAJE_KINDS[data.kind] ?? PERITAJE_KINDS.plus;
   const vehicleType = data.vehicleType ?? FALLBACK_VEHICLE_TYPE;
   const vehicleTypeDef =
     VEHICLE_TYPES[vehicleType] ?? VEHICLE_TYPES[FALLBACK_VEHICLE_TYPE];
   const activeSectionIds = new Set(activeSectionsFor(data.kind, vehicleType));
+  const components = componentsForKind(data.kind);
   const bodyworkSectionForPdf = bodyworkSectionFor(vehicleType);
 
   // El grupo "Compresión" del motor es dinámico: el perito agrega cilindros uno
@@ -1734,6 +1794,35 @@ export function renderReportHtml(
     { sectionId: "roadTest", title: "Prueba de ruta", def: ROAD_TEST_SECTION, data: data.roadTest },
   ];
   const sections = allSections.filter((s) => activeSectionIds.has(s.sectionId));
+  // La revisión general del motor no va en ningún tipo, pero la prueba de
+  // compresión es un componente gateado (Plus). Si está activa y hay cilindros,
+  // la insertamos como sección propia (sin los grupos generales del motor),
+  // justo después de suspensión (donde iría el motor).
+  if (components.compression && cylinders.length > 0) {
+    const compressionSection: (typeof allSections)[number] = {
+      sectionId: "engine",
+      title: "Compresión del motor",
+      def: {
+        id: "engine",
+        label: "Compresión del motor",
+        groups: [
+          {
+            id: "compression",
+            label: "Compresión por cilindro",
+            items: cylinders.map((c) => ({
+              id: c.id,
+              label: c.label,
+              kind: "mechanical" as const,
+            })),
+          },
+        ],
+      },
+      data: engineDataForPdf,
+    };
+    const insertAt = sections.findIndex((s) => s.sectionId === "suspension");
+    if (insertAt >= 0) sections.splice(insertAt + 1, 0, compressionSection);
+    else sections.push(compressionSection);
+  }
   const showTires = activeSectionIds.has("tires");
   const showAccessories = activeSectionIds.has("accessories");
   const roadTestSkipped = data.roadTestSkipped === true;
@@ -1828,14 +1917,14 @@ export function renderReportHtml(
   p { margin: 0 0 6pt 0; }
   .muted { color: #475569; font-size: 9.5pt; }
 
-  .cover { page-break-after: always; display: flex; flex-direction: column; padding-top: 0; }
+  .cover { padding-top: 0; }
   /* Vehicle hero: license-plate visual + vehicle info + risk pill */
   .vehicle-hero {
     display: grid;
     grid-template-columns: auto 1fr;
     gap: 14pt;
     align-items: center;
-    margin-top: 6mm;
+    margin-top: 4mm;
     padding: 2pt 0;
   }
   .plate-frame {
@@ -1920,7 +2009,7 @@ export function renderReportHtml(
     font-weight: 700;
   }
   .vehicle-specs {
-    margin-top: 7mm;
+    margin-top: 4mm;
     display: flex;
     flex-direction: column;
     gap: 5mm;
@@ -2272,6 +2361,62 @@ export function renderReportHtml(
     z-index: 0;
   }
 
+  /* Marca de agua de fondo — mosaico muy tenue en todas las páginas (estilo
+     papel de seguridad). El tile va inline en el atributo style del div: solo
+     el ícono de herramientas, o herramientas + logo de la org intercalados en
+     damero (ver buildBgWatermarkStyle). */
+  .bg-watermark {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-repeat: repeat;
+    opacity: 0.05;
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  /* Marca de agua de PREVISUALIZACIÓN — texto diagonal repetido en cada página
+     mientras el peritaje no esté finalizado. Imposible de confundir con el
+     documento oficial. */
+  .preview-watermark {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%) rotate(-30deg);
+    font-size: 64pt;
+    font-weight: 800;
+    letter-spacing: 6pt;
+    color: #dc2626;
+    opacity: 0.10;
+    white-space: nowrap;
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  /* Banner de aviso de previsualización en la portada */
+  .preview-banner {
+    border: 1.5pt dashed #dc2626;
+    background: #fef2f2;
+    color: #b91c1c;
+    border-radius: 6pt;
+    padding: 8pt 12pt;
+    margin-bottom: 6mm;
+    page-break-inside: avoid;
+  }
+  .preview-banner .pb-title {
+    font-size: 11pt;
+    font-weight: 800;
+    letter-spacing: 1pt;
+    text-transform: uppercase;
+  }
+  .preview-banner .pb-text {
+    font-size: 8.5pt;
+    margin-top: 2pt;
+    color: #7f1d1d;
+  }
+
   /* Branded header on the cover page */
   .brand-header {
     display: grid;
@@ -2280,7 +2425,7 @@ export function renderReportHtml(
     align-items: flex-start;
     padding: 7pt 0 10pt;
     border-bottom: 2pt solid #0f172a;
-    margin-bottom: 6mm;
+    margin-bottom: 4mm;
     page-break-inside: avoid;
   }
   .brand-header .brand-logo {
@@ -2338,6 +2483,74 @@ export function renderReportHtml(
     margin-bottom: 4pt;
   }
   /* Global score block */
+  /* Concepto global — el titular del reporte en la portada. Grande y a color
+     para que sea lo primero que el cliente identifique. */
+  .concepto-banner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10pt;
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-left: 4pt solid #94a3b8;
+    border-radius: 6pt;
+    padding: 7pt 11pt;
+    margin: 6pt 0 5pt;
+  }
+  .concepto-banner.tone-success { border-color: #bbf7d0; border-left-color: #16a34a; background: #f0fdf4; }
+  .concepto-banner.tone-warning { border-color: #fde68a; border-left-color: #f59e0b; background: #fffbeb; }
+  .concepto-banner.tone-danger  { border-color: #fecaca; border-left-color: #dc2626; background: #fef2f2; }
+  .concepto-banner.tone-muted   { border-color: #e2e8f0; border-left-color: #94a3b8; background: #f8fafc; }
+  .concepto-banner .cb-main { flex: 1; min-width: 0; }
+  .concepto-banner .cb-overline {
+    font-size: 8pt;
+    letter-spacing: 1.4px;
+    text-transform: uppercase;
+    color: #64748b;
+    font-weight: 700;
+    margin-bottom: 3pt;
+  }
+  .concepto-banner .cb-label {
+    font-size: 13pt;
+    font-weight: 800;
+    line-height: 1.1;
+    letter-spacing: -0.3px;
+    color: #0f172a;
+  }
+  .concepto-banner.tone-success .cb-label { color: #15803d; }
+  .concepto-banner.tone-warning .cb-label { color: #b45309; }
+  .concepto-banner.tone-danger  .cb-label { color: #b91c1c; }
+  .concepto-banner .cb-meaning {
+    font-size: 8.5pt;
+    color: #475569;
+    margin-top: 4pt;
+    line-height: 1.35;
+  }
+  .concepto-banner .cb-score {
+    text-align: center;
+    flex-shrink: 0;
+    padding-left: 12pt;
+    border-left: 1px solid rgba(15, 23, 42, 0.08);
+  }
+  .concepto-banner .cb-pct {
+    font-size: 20pt;
+    font-weight: 800;
+    line-height: 1;
+    letter-spacing: -0.8px;
+    color: #0f172a;
+  }
+  .concepto-banner.tone-success .cb-pct { color: #15803d; }
+  .concepto-banner.tone-warning .cb-pct { color: #b45309; }
+  .concepto-banner.tone-danger  .cb-pct { color: #b91c1c; }
+  .concepto-banner .cb-pct-label {
+    font-size: 7pt;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    color: #94a3b8;
+    font-weight: 700;
+    margin-top: 3pt;
+  }
+
   .summary-global {
     display: flex;
     align-items: center;
@@ -2396,7 +2609,7 @@ export function renderReportHtml(
   }
   .prog-row-main {
     display: grid;
-    grid-template-columns: 130pt 1fr 32pt 80pt;
+    grid-template-columns: 130pt 1fr 32pt 104pt;
     align-items: center;
     gap: 8pt;
   }
@@ -2437,9 +2650,12 @@ export function renderReportHtml(
   .gates-list li:last-child { margin-bottom: 0; }
   .gates-list strong { color: #991b1b; font-weight: 700; }
   .prog-tier {
-    font-size: 9pt;
-    font-weight: 600;
-    letter-spacing: 0.3px;
+    font-size: 7.5pt;
+    font-weight: 700;
+    letter-spacing: 0.2px;
+    line-height: 1.15;
+    text-align: right;
+    text-transform: uppercase;
   }
   .prog-tier.tone-success { color: #166534; }
   .prog-tier.tone-warning { color: #92400e; }
@@ -2723,7 +2939,7 @@ export function renderReportHtml(
   }
 
   /* Llantas */
-  .tire-grid { grid-template-columns: repeat(5, 1fr); }
+  .tire-grid { grid-template-columns: repeat(5, 1fr); page-break-inside: avoid; break-inside: avoid; }
   .tire-cell { gap: 3pt; }
   .tire-pct {
     font-size: 14pt;
@@ -2905,8 +3121,8 @@ export function renderReportHtml(
 
   /* Aviso legal */
   .legal-notice {
-    page-break-before: always;
     margin-top: 6mm;
+    page-break-inside: avoid;
     border: 1pt solid #cbd5e1;
     border-radius: 6pt;
     padding: 7mm 8mm;
@@ -3006,15 +3222,19 @@ export function renderReportHtml(
   .page-break { page-break-before: always; }
 
   /* Indivisible blocks: never split these mid-page.
-     .proc-section: cada sección del recorrido (Carrocería, Interior delantero,
-     etc.) intenta caber entera en una página — evita que la tabla quede
-     cortada por un page-break a la mitad. Si una sección no entra en una
-     hoja (Carrocería con muchos ítems), el motor de impresión ignora la
-     regla y la rompe igual, que sigue siendo el comportamiento aceptable. */
-  .proc-section,
+     OJO: .proc-section NO va acá a propósito. Antes cada sección del recorrido
+     (Carrocería, Chasis, etc.) llevaba page-break-inside: avoid e intentaba
+     caber entera en una página; como cada una mide ~media hoja, si no cabía en
+     el espacio restante se empujaba completa a la siguiente y dejaba media
+     página en blanco. Ahora las secciones fluyen y llenan la página: lo que
+     debe quedar intacto son los bloques atómicos pequeños — el badge de
+     resumen (.proc-hero), la cabecera descriptiva (.section-intro) y cada fila
+     de tabla (.section-table tr) — todos con su propio avoid. La tabla puede
+     continuar en la página siguiente repitiendo el thead. */
   .proc-finding,
   .sig-block,
   .conclusion { page-break-inside: avoid; break-inside: avoid; }
+  .proc-hero { page-break-inside: avoid; break-inside: avoid; }
   /* Avoid orphan headings (a h2 stranded at the bottom of a page) */
   h2, h3, .section-h { page-break-after: avoid; }
 
@@ -3100,11 +3320,20 @@ export function renderReportHtml(
 </head>
 <body>
 
-  ${brand.logoDataUrl ? `<img class="watermark" src="${brand.logoDataUrl}" alt="" />` : ""}
+  <div class="bg-watermark" style="${bgWatermarkStyle}"></div>
+  ${preview ? `<div class="preview-watermark">PREVISUALIZACIÓN</div>` : ""}
 
   <!-- COVER -->
   <section class="cover">
     <div>
+      ${
+        preview
+          ? `<div class="preview-banner">
+        <div class="pb-title">Previsualización — Documento no oficial</div>
+        <div class="pb-text">Este documento es un borrador para revisión. No es válido para entrega ni tiene consecutivo oficial. Finalice el peritaje para emitir el documento definitivo.</div>
+      </div>`
+          : ""
+      }
       <!-- BRANDED HEADER -->
       <div class="brand-header">
         <img class="brand-logo" src="${brand.logoDataUrl}" alt="${escapeHtml(brand.name)}" />
@@ -3142,6 +3371,8 @@ export function renderReportHtml(
         ? `<div class="vehicle-render-banner"><img src="${vehicleRenderDataUrl}" alt="${esc(v.make)} ${esc(v.model)} ${esc(v.year)}" /></div>`
         : ""}
 
+      ${renderConceptoBanner(data)}
+
       ${renderPillarSummary(pillarReport, {
         heading: "Calificación por pilares",
         compact: true,
@@ -3178,16 +3409,13 @@ export function renderReportHtml(
             <span class="vspec-owner-val">${esc(v.owner) || "—"}${v.ownerDocument ? ` <span class="vspec-owner-doc">· ${esc(v.ownerDocument)}</span>` : ""}</span>
           </div>
         </div>
-        ${renderLegalAdmin(data.verifik)}
+        ${components.background ? renderLegalAdmin(data.verifik) : ""}
       </div>
     </div>
   </section>
 
   <!-- DOCUMENTACIÓN -->
   ${renderDocumentation(data, heading("Documentación"))}
-
-  <!-- HALLAZGOS DEL PERITAJE -->
-  ${renderFindingsSummary(report, pillarReport, heading("Hallazgos del peritaje"))}
 
   <!-- DETAILED SECTIONS -->
   ${sections.map(renderOneSection).join("")}
@@ -3275,7 +3503,7 @@ export function renderReportHtml(
   ${renderLegalDisclaimer(brand)}
 
   <div class="doc-footer">
-    <span>${escapeHtml(brand.address)} · ${escapeHtml(brand.email)} · ${escapeHtml(brand.phone)}${brand.website ? ` · ${escapeHtml(brand.website)}` : ""}</span>
+    <span>Documento generado por ${escapeHtml(brand.name)}</span>
     <span>Generado el ${new Date().toLocaleString("es-CO")}</span>
   </div>
 
