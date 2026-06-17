@@ -19,7 +19,10 @@ import { useCurrentUser } from "@/components/panel/current-user";
 import { listKnownVehicles } from "@/lib/inspections-store";
 import type { VehicleInfo } from "@/lib/types";
 import { cn, makeId } from "@/lib/utils";
-import { CardPhotoCapture } from "../card-photo-capture";
+import {
+  OwnershipCardScanner,
+  type ExtractedFields,
+} from "../ownership-card-scanner";
 import { useInspection } from "../inspection-context";
 import { VerifikMismatchBanner } from "../verifik-mismatch-banner";
 
@@ -122,15 +125,19 @@ export function VehicleInfoStep() {
     setKnown(listKnownVehicles().filter((x) => x.plate));
   }, [currentId]);
 
-  // Seed perito name + license from the logged-in user's profile when this
-  // peritaje doesn't have them yet. Only fills empty fields — never overwrites
-  // a value the perito (or admin in /usuarios) typed by hand.
+  // Seed perito name + license from the logged-in user's profile SOLO cuando el
+  // campo está vacío — es decir, en un peritaje nuevo, donde el usuario logueado
+  // es quien lo crea. NUNCA pisamos un valor ya puesto: antes reemplazábamos
+  // cualquier nombre igual a un centinela quemado ("Walter Smith Medina Umba"),
+  // pero ese era el nombre legítimo de un perito real, así que al abrir su
+  // peritaje otro usuario (p.ej. el admin) le sobrescribía el nombre con el suyo
+  // y el autosave lo persistía (cruce de nombres). La identidad autoritativa la
+  // resuelve el servidor a partir del dueño del peritaje (user_id).
   React.useEffect(() => {
     if (!currentUser) return;
     setData((prev) => {
       const needsName = !prev.vehicle.inspector && !!currentUser.fullName;
-      const needsLicense =
-        !prev.vehicle.inspectorId && !!currentUser.licenseId;
+      const needsLicense = !prev.vehicle.inspectorId && !!currentUser.licenseId;
       if (!needsName && !needsLicense) return prev;
       return {
         ...prev,
@@ -251,6 +258,46 @@ export function VehicleInfoStep() {
     }));
   }
 
+  // Vuelca al formulario los campos que el OCR del frente extrajo de la tarjeta
+  // y guarda la foto como evidencia del frente. Solo pisa lo que el OCR
+  // devolvió no-nulo; lo demás conserva lo que ya hubiera.
+  function applyOcrFields(fields: ExtractedFields, imageDataUrl: string | null) {
+    setData((prev) => {
+      const v = prev.vehicle;
+      const next: VehicleInfo = {
+        ...v,
+        plate: fields.plate ?? v.plate,
+        vin: fields.vin ?? v.vin,
+        chassisNumber: fields.chassisNumber ?? v.chassisNumber,
+        engineNumber: fields.engineNumber ?? v.engineNumber,
+        make: fields.make ?? v.make,
+        model: fields.model ?? v.model,
+        year: fields.year ?? v.year,
+        color: fields.color ?? v.color,
+        bodyType: fields.bodyType ?? v.bodyType,
+        fuel: fields.fuel ?? v.fuel,
+        transmission: fields.transmission ?? v.transmission,
+        vehicleClass: fields.vehicleClass ?? v.vehicleClass,
+        nationality: fields.nationality ?? v.nationality,
+        serviceType: fields.serviceType ?? v.serviceType,
+        cylinderCapacity: fields.cylinderCapacity ?? v.cylinderCapacity,
+        owner: fields.owner ?? v.owner,
+        ownerDocument: fields.ownerDocument ?? v.ownerDocument,
+        propertyCardStatus: fields.propertyCardStatus ?? v.propertyCardStatus,
+      };
+      return {
+        ...prev,
+        vehicle: next,
+        documents: imageDataUrl
+          ? {
+              ...prev.documents,
+              ownershipCardFront: [{ id: makeId(), dataUrl: imageDataUrl }],
+            }
+          : prev.documents,
+      };
+    });
+  }
+
 
   function prefillFrom(source: VehicleInfo) {
     setData((prev) => ({
@@ -338,12 +385,26 @@ export function VehicleInfoStep() {
 
   return (
     <div className="space-y-6">
+      {/* Identidad de la sesión: tomada del usuario logueado (cookie → server),
+          no del campo editable. Hace imposible registrar un peritaje sin notar
+          con qué cuenta se está trabajando — si acá no aparece tu nombre,
+          cerrá sesión y volvé a entrar con el tuyo. */}
+      {currentUser ? (
+        <div className="flex items-center gap-2 rounded-lg border border-primary/30 bg-primary/5 px-3 py-2 text-sm">
+          <UserCheck className="h-4 w-4 shrink-0 text-primary" />
+          <span className="text-muted-foreground">
+            Registrando como perito:
+          </span>
+          <span className="font-semibold">{currentUser.fullName}</span>
+        </div>
+      ) : null}
       <Card>
         <CardHeader>
           <CardTitle>Tarjeta de propiedad / Licencia de tránsito *</CardTitle>
           <CardDescription>
-            Fotografía las dos caras de la tarjeta de propiedad. Las dos son obligatorias
-            y cuentan como las dos primeras fotos del peritaje.
+            Escanea las dos caras. El frente extrae datos por OCR y rellena el formulario;
+            el reverso solo se guarda como evidencia. Las dos caras son obligatorias y
+            cuentan como las dos primeras fotos del peritaje.
           </CardDescription>
         </CardHeader>
         <CardContent className="grid gap-4 sm:grid-cols-2">
@@ -366,10 +427,15 @@ export function VehicleInfoStep() {
                 Sin captura
               </div>
             )}
-            <CardPhotoCapture
-              side="front"
-              buttonLabel={front ? "Re-fotografiar frente" : "Fotografiar frente"}
-              onCapture={(dataUrl) => saveDocImage("front", dataUrl)}
+            <OwnershipCardScanner
+              onApply={applyOcrFields}
+              buttonLabel={front ? "Re-escanear frente" : "Escanear frente (OCR)"}
+              buttonLabelShort={front ? "Re-escanear frente" : "Escanear frente"}
+              expectedSide="front"
+              // Si el OCR detecta que la foto es el REVERSO, ofrecemos
+              // guardarla directo en el slot del reverso. Evita que el perito
+              // tenga que cancelar, ir al otro botón y volver a tomar la foto.
+              onWrongSide={(dataUrl) => saveDocImage("back", dataUrl)}
             />
           </div>
           <div className="space-y-2">
@@ -391,10 +457,11 @@ export function VehicleInfoStep() {
                 Sin captura
               </div>
             )}
-            <CardPhotoCapture
-              side="back"
-              buttonLabel={back ? "Re-fotografiar reverso" : "Fotografiar reverso"}
-              onCapture={(dataUrl) => saveDocImage("back", dataUrl)}
+            <OwnershipCardScanner
+              onApply={(_fields, dataUrl) => saveDocImage("back", dataUrl)}
+              runOcr={false}
+              buttonLabel={back ? "Re-capturar reverso" : "Capturar reverso"}
+              buttonLabelShort={back ? "Re-capturar reverso" : "Capturar reverso"}
             />
           </div>
         </CardContent>

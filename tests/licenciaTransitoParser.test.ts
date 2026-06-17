@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  applyLayoutIndependentFallback,
   detectSide,
+  type LicenciaTransito,
   type OcrLine,
   parseLicenciaTransito,
   parseLicenciaTransitoFromOcr,
@@ -383,5 +385,50 @@ describe("Validadores individuales", () => {
     // contiene I (prohibido en VIN ISO-3779)
     expect(validateVIN("1HGCM82633I123456").valid).toBe(false);
     expect(validateVIN(undefined).valid).toBe(false);
+  });
+});
+
+describe("applyLayoutIndependentFallback — respaldo sin etiquetas", () => {
+  it("rescata placa, VIN/chasis y cédula cuando el parser columnar falló", () => {
+    // Texto sin NINGÚN encabezado legible — el parser columnar devolvería {}.
+    const raw = `xxxx ruido ilegible
+BPA481 algo
+1HGCM82633A004352
+propietario C.C. 1006534746`;
+    const data: LicenciaTransito = {};
+    applyLayoutIndependentFallback(data, raw);
+    expect(data.placa).toBe("BPA481");
+    expect(data.vin).toBe("1HGCM82633A004352");
+    expect(data.numeroChasis).toBe("1HGCM82633A004352");
+    expect(data.identificacion).toBe("1006534746");
+  });
+
+  it("corrige confusiones de OCR en la placa (8↔B, 0↔O)", () => {
+    const data: LicenciaTransito = {};
+    applyLayoutIndependentFallback(data, "placa: BPA4B1 leida mal");
+    expect(data.placa).toBe("BPA481");
+  });
+
+  it("NO pisa campos ya detectados por el parser columnar", () => {
+    const data: LicenciaTransito = { placa: "ABC123", vin: null };
+    applyLayoutIndependentFallback(data, "BPA481 1HGCM82633A004352");
+    // placa preexistente intacta; vin === null (censurado) NO se sobrescribe.
+    expect(data.placa).toBe("ABC123");
+    expect(data.vin).toBeNull();
+  });
+
+  it("no inventa nada si el texto no tiene patrones reconocibles", () => {
+    const data: LicenciaTransito = {};
+    applyLayoutIndependentFallback(data, "texto totalmente ilegible sin datos");
+    expect(data.placa).toBeUndefined();
+    expect(data.vin).toBeUndefined();
+    expect(data.identificacion).toBeUndefined();
+  });
+
+  it("integración: parseLicenciaTransito rescata placa aunque no haya headers", () => {
+    // Sin filas de encabezados con labels → el parser columnar no asigna nada,
+    // pero el fallback debe rescatar la placa del texto crudo.
+    const { data } = parseLicenciaTransito("foto borrosa\nBPA481\nmás ruido");
+    expect(data.placa).toBe("BPA481");
   });
 });

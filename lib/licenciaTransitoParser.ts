@@ -538,6 +538,77 @@ function isJunkToken(text: string): boolean {
   return false;
 }
 
+// -----------------------------------------------------------------------------
+// Respaldo independiente del layout
+//
+// El parser columnar (text-based y espacial) depende de poder LEER las
+// etiquetas (PLACA, MARCA, …) para ubicar las columnas. Cuando Tesseract lee
+// los encabezados demasiado mal para matchear —o la tarjeta tiene un layout
+// distinto al esperado, p.ej. la tarjeta plástica RUNT vs la hoja de papel— el
+// parser devuelve CERO campos y el perito ve "no detecté datos", aunque en el
+// texto crudo sí estén la placa o el VIN perfectamente legibles.
+//
+// Esta pasada escanea el rawText completo buscando patrones de ALTA confianza
+// (forma inequívoca) sin depender de etiquetas ni columnas. Solo RELLENA campos
+// que el parser dejó vacíos; nunca pisa lo ya detectado. Es estrictamente
+// aditiva: en el peor caso no encuentra nada y deja el resultado igual.
+//
+// Deliberadamente NO inferimos acá licencia (10 dígitos, se confunde con la
+// cédula) ni cilindraje/año si hay ambigüedad — preferimos dejar esos campos
+// vacíos para que el perito los complete antes que meter un valor equivocado.
+// -----------------------------------------------------------------------------
+
+export function applyLayoutIndependentFallback(
+  data: LicenciaTransito,
+  rawText: string,
+): void {
+  const upper = rawText.toUpperCase();
+
+  // --- Placa (carro AAA000 o moto AAA00A) -----------------------------------
+  // Toleramos confusiones de OCR en la parte numérica; fixPlaca + validatePlaca
+  // descartan cualquier match que no quede con forma de placa real. Las word
+  // boundaries evitan capturar fragmentos de tokens largos (VIN, motor).
+  if (!data.placa) {
+    const carRe = /\b[A-Z]{3}[\s-]?[A-Z0-9]{3}\b/g;
+    let m: RegExpExecArray | null;
+    while ((m = carRe.exec(upper)) !== null) {
+      const candidate = fixPlaca(m[0]);
+      if (validatePlaca(candidate).valid) {
+        data.placa = candidate;
+        break;
+      }
+    }
+  }
+
+  // --- VIN / chasis (17 chars alfanuméricos) --------------------------------
+  // data.vin === null es legítimo (tarjeta con ******): no lo pisamos. En CO el
+  // VIN y el chasis suelen coincidir; si ambos faltan, rellenamos los dos con
+  // el primer token válido de 17 chars (el perito verifica antes de aplicar).
+  if (data.vin === undefined || !data.numeroChasis) {
+    const idRe = /\b[A-Z0-9]{17}\b/g;
+    let m: RegExpExecArray | null;
+    while ((m = idRe.exec(upper)) !== null) {
+      const candidate = correctVinForbiddenChars(m[0]);
+      if (validateVIN(candidate).valid) {
+        if (data.vin === undefined) data.vin = candidate;
+        if (!data.numeroChasis) data.numeroChasis = candidate;
+        break;
+      }
+    }
+  }
+
+  // --- Identificación del propietario (prefijo C.C./NIT) --------------------
+  if (!data.identificacion) {
+    const idMatch = upper.match(
+      /\b(?:C\.?\s*C\.?|NIT)[:.\s-]*([0-9OQILSBZ.\s]{6,15})/,
+    );
+    if (idMatch) {
+      const id = digitsOnly(idMatch[1]);
+      if (validateIdentificacion(id).valid) data.identificacion = id;
+    }
+  }
+}
+
 /**
  * Parsea el texto crudo del OCR a un objeto estructurado + warnings + score.
  * Nunca lanza: si no puede extraer nada, devuelve `data` vacío y
@@ -636,6 +707,10 @@ export function parseLicenciaTransito(rawOcrText: string): ParseResult {
       i++;
     }
   }
+
+  // Respaldo: si el parser columnar dejó campos clave vacíos (típico cuando el
+  // OCR no pudo leer los encabezados), intentamos rescatarlos del texto crudo.
+  applyLayoutIndependentFallback(data, rawOcrText);
 
   // --- Validación + confidence ---
   const warnings: string[] = [];
@@ -934,6 +1009,14 @@ export function parseLicenciaTransitoFromOcr(
     }
     i += 2;
   }
+
+  // Respaldo independiente del layout. Reconstruimos el texto crudo a partir de
+  // las palabras (una línea por OcrLine) y rescatamos placa/VIN/cédula si el
+  // alineado por columnas no los detectó.
+  const reconstructed = useful
+    .map((l) => l.words.map((w) => w.text).join(" "))
+    .join("\n");
+  applyLayoutIndependentFallback(data, reconstructed);
 
   // Validación + confidence (mismo bloque que el parser text-based)
   const warnings: string[] = [];

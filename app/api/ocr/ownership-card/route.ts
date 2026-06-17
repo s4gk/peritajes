@@ -5,6 +5,10 @@ import { requireUser } from "@/lib/server/auth";
 import { logAudit } from "@/lib/server/db";
 import { extractOwnershipCard } from "@/lib/server/tesseract-ocr";
 import {
+  extractOwnershipCardVision,
+  isVisionOcrConfigured,
+} from "@/lib/server/vision-ocr";
+import {
   rateLimitMaybeSweep,
   rateLimitTake,
 } from "@/lib/server/rate-limit";
@@ -30,10 +34,13 @@ export const maxDuration = 60;
  * POST /api/ocr/ownership-card
  * Body: { imageDataUrl: "data:image/jpeg;base64,..." }
  *
- * Corre Tesseract en el server para extraer texto y un parser por etiquetas
- * lo convierte en campos estructurados de la tarjeta RUNT. Sin IA externa,
- * sin quota, sin costo por uso. Igual mantenemos rate-limit para evitar que
- * un usuario sature el server con CPU.
+ * Proveedor primario: modelo de visión (GPT-4o) cuando `OPENAI_API_KEY` está
+ * configurada — más robusto a fotos torcidas/mal iluminadas y a la tarjeta
+ * plástica RUNT. Fallback: Tesseract en el server (sin IA, sin costo) cuando
+ * no hay key o si la llamada al modelo falla. Rate-limit en ambos casos.
+ *
+ * Responde { fields, side? }: `side` ("front"/"back"/"unknown") solo viene por
+ * el proveedor de visión.
  */
 
 const OCR_LIMIT = { windowMs: 60 * 60 * 1000, max: 30 };
@@ -108,9 +115,28 @@ export async function POST(req: Request) {
     );
   }
 
+  // Proveedor de visión (GPT-4o) si está configurado. Si la llamada falla
+  // (quota, red, respuesta rara), caemos a Tesseract en vez de devolver error:
+  // el perito siempre obtiene algo, y peor caso completa a mano.
+  if (isVisionOcrConfigured()) {
+    try {
+      const { fields, side } = await extractOwnershipCardVision(dataUrl);
+      void logAudit(
+        user.id,
+        "ocr.ownership_card",
+        JSON.stringify({ provider: "vision", fields: Object.keys(fields).length, side }),
+      );
+      return NextResponse.json({ fields, side });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Error desconocido";
+      console.warn("[ocr] vision falló, fallback a Tesseract:", message);
+      // sigue al bloque Tesseract de abajo
+    }
+  }
+
   try {
     const fields = await extractOwnershipCard({ base64, mimeType });
-    void logAudit(user.id, "ocr.ownership_card", JSON.stringify({ fields: Object.keys(fields).length }));
+    void logAudit(user.id, "ocr.ownership_card", JSON.stringify({ provider: "tesseract", fields: Object.keys(fields).length }));
     return NextResponse.json({ fields });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Error desconocido";
