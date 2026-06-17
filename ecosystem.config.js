@@ -3,7 +3,7 @@ module.exports = {
     {
       name: "perito",
       script: "server.js",
-      cwd: "/root/perito",
+      cwd: "/home/dev/perito",
       instances: 1,
       autorestart: true,
       watch: false,
