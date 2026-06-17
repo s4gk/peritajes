@@ -2,6 +2,7 @@
 
 import * as React from "react";
 
+import { useCurrentUser } from "@/components/panel/current-user";
 import {
   DEFAULT_PERITAJE_KIND,
   FALLBACK_VEHICLE_TYPE,
@@ -101,8 +102,19 @@ type ContextValue = {
   notFound: boolean;
   saveStatus: SaveStatus;
   lastSavedAt: number | null;
-  /** True when data.status === "completed". Inputs should be disabled. */
+  /** True cuando los inputs deben estar deshabilitados (finalizado sin
+   *  destrabar, o sin permiso para editar finalizados). */
   isReadOnly: boolean;
+  /** True cuando el peritaje ya fue finalizado (informe entregado). */
+  isCompleted: boolean;
+  /** True si el usuario actual (dueño/admin) tiene permiso para editar un
+   *  peritaje finalizado. El perito (employee) no. */
+  canEditCompleted: boolean;
+  /** True cuando el usuario ya confirmó el aviso y destrabó la edición de un
+   *  informe finalizado. */
+  editUnlocked: boolean;
+  /** Confirma el aviso y destraba la edición de un peritaje finalizado. */
+  unlockEdit: () => void;
   /** Consecutivo oficial asignado por el server al finalizar. undefined
    *  mientras el peritaje sigue en borrador. */
   reportNumber: string | undefined;
@@ -125,10 +137,6 @@ export function InspectionProvider({ id, children }: Props) {
   const [lastSavedAt, setLastSavedAt] = React.useState<number | null>(null);
   const [reportNumber, setReportNumber] = React.useState<string | undefined>(undefined);
   const dirtyRef = React.useRef(false);
-  // True cuando el status "completed" ya quedó persistido (IDB + encolado).
-  // No lo derivamos de `data.status` porque eso bloquearía la save que
-  // transiciona draft → completed (la única forma de cerrar el peritaje).
-  const savedAsCompletedRef = React.useRef(false);
 
   // Load on mount / when id changes — ensure IDB-backed store is ready first.
   // El initStore() resuelve apenas IDB está cargado (instantáneo). Si la
@@ -187,20 +195,31 @@ export function InspectionProvider({ id, children }: Props) {
     return () => window.removeEventListener("perito:inspection-synced", onSynced);
   }, [id]);
 
-  const isReadOnly = data.status === "completed";
+  // Política de edición de FINALIZADOS:
+  //  - Borradores: editables por quien tenga acceso (flujo normal de captura).
+  //  - Finalizados (informe ya entregado al cliente): solo el DUEÑO o el ADMIN
+  //    pueden editarlos, y recién después de confirmar el aviso ("Editar
+  //    informe") que destraba los campos. El PERITO (employee) los ve en
+  //    solo-lectura. El server enforcea lo mismo (defensa en profundidad).
+  const currentUser = useCurrentUser();
+  const isCompleted = data.status === "completed";
+  const canEditCompleted =
+    currentUser?.role === "admin" || currentUser?.role === "owner";
+  // Confirmación del aviso para destrabar la edición de un informe entregado.
+  // Arranca en false cada vez que se abre el peritaje — editar es deliberado.
+  const [editUnlocked, setEditUnlocked] = React.useState(false);
+  const unlockEdit = React.useCallback(() => setEditUnlocked(true), []);
 
-  // Debounced persist with save-status indicator. Una vez que el completed
-  // queda persistido marcamos `savedAsCompletedRef` y bloqueamos cualquier
-  // save posterior — el server rechazaría con 423 y solo generaríamos ruido
-  // en la sync queue.
+  const isReadOnly = isCompleted && (!canEditCompleted || !editUnlocked);
+
+  // Debounced persist with save-status indicator. Funciona igual para
+  // borradores y finalizados — al editar un peritaje cerrado el server
+  // conserva el estado "completed" y regenera el PDF oficial.
   React.useEffect(() => {
     if (!isHydrated || notFound) return;
-    if (savedAsCompletedRef.current) return;
     if (!dirtyRef.current) {
-      // Initial render after hydration — no save needed. Si ya viene
-      // finalizado del store, marcamos el ref para no volver a guardar.
+      // Initial render after hydration — no save needed.
       dirtyRef.current = true;
-      if (isReadOnly) savedAsCompletedRef.current = true;
       return;
     }
     setSaveStatus("pending");
@@ -208,7 +227,6 @@ export function InspectionProvider({ id, children }: Props) {
       setSaveStatus("saving");
       try {
         saveInspectionData(id, data);
-        if (data.status === "completed") savedAsCompletedRef.current = true;
         const now = Date.now();
         setLastSavedAt(now);
         setSaveStatus("saved");
@@ -217,7 +235,7 @@ export function InspectionProvider({ id, children }: Props) {
       }
     }, SAVE_DEBOUNCE_MS);
     return () => window.clearTimeout(timer);
-  }, [id, data, isHydrated, notFound, isReadOnly]);
+  }, [id, data, isHydrated, notFound]);
 
   const setData = React.useCallback((updater: Updater<InspectionData>) => {
     setDataState((prev) => updater(prev));
@@ -233,9 +251,27 @@ export function InspectionProvider({ id, children }: Props) {
       saveStatus,
       lastSavedAt,
       isReadOnly,
+      isCompleted,
+      canEditCompleted,
+      editUnlocked,
+      unlockEdit,
       reportNumber,
     }),
-    [id, data, setData, isHydrated, notFound, saveStatus, lastSavedAt, isReadOnly, reportNumber],
+    [
+      id,
+      data,
+      setData,
+      isHydrated,
+      notFound,
+      saveStatus,
+      lastSavedAt,
+      isReadOnly,
+      isCompleted,
+      canEditCompleted,
+      editUnlocked,
+      unlockEdit,
+      reportNumber,
+    ],
   );
 
   return <InspectionContext.Provider value={value}>{children}</InspectionContext.Provider>;

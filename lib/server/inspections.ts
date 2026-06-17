@@ -52,8 +52,16 @@ function scopeWhere(
     return { sql: "TRUE", params: [], nextIdx: 1 };
   }
   if (actor.role === "owner") {
+    // Visibilidad del owner: SOLO lo de su org — completados de cualquiera de
+    // su equipo + sus propios borradores.
+    //
+    // OJO: ya NO incluimos los peritajes "legacy" sin org (org_id NULL). El
+    // backfill multi-tenant (backfillOrganizations) ya asignó a su org todo el
+    // histórico que le pertenecía; los peritajes que quedan con org_id NULL hoy
+    // son los creados desde la cuenta admin/Vestel y NO deben verse desde la
+    // org del cliente (era una fuga: el owner veía peritajes del admin).
     return {
-      sql: `${p}org_id = $1 AND (${p}status = 'completed' OR ${p}user_id = $2)`,
+      sql: `(${p}org_id = $1 AND (${p}status = 'completed' OR ${p}user_id = $2))`,
       params: [actor.orgId, actor.id],
       nextIdx: 3,
     };
@@ -190,7 +198,12 @@ export async function checkInspectionAccess(
   if (user.role === "admin") return { kind: "ok" };
   const row = r.rows[0];
   if (user.role === "owner") {
-    return row.org_id === user.orgId ? { kind: "ok" } : { kind: "forbidden" };
+    // Un owner accede SOLO a los peritajes de su org. Los peritajes sin org
+    // (org_id NULL) son de la cuenta admin/Vestel y no deben verse desde la
+    // org del cliente (ver nota en scopeWhere — antes era una fuga).
+    return row.org_id === user.orgId
+      ? { kind: "ok" }
+      : { kind: "forbidden" };
   }
   // employee
   return row.user_id === user.id ? { kind: "ok" } : { kind: "forbidden" };
@@ -237,31 +250,36 @@ export type UpdateInspectionResult =
   | { kind: "ok"; inspection: StoredInspection; justLocked: boolean }
   | { kind: "not_found" }
   | { kind: "locked"; inspection: StoredInspection }
+  | { kind: "forbidden_completed"; inspection: StoredInspection }
   | { kind: "missing_phone" };
 
 export async function updateInspectionServer(
   id: string,
   data: InspectionData,
-  userId: string | null,
+  actor: { id: string | null; role: string },
 ): Promise<UpdateInspectionResult> {
+  const userId = actor.id;
   const existing = await query<InspectionRow>(
     "SELECT * FROM inspections WHERE id = $1",
     [id],
   );
   if (existing.rowCount === 0) return { kind: "not_found" };
   const existingRow = existing.rows[0];
-  // Lock total: una vez finalizado el peritaje es inmutable. Defensa en
-  // profundidad — el UI ya bloquea la edición, pero alguien con un PUT a mano
-  // no debe poder pisar la fila. Cubrimos también filas legacy (status =
-  // completed sin locked_at) por si acaso.
-  const isLocked =
+  // Los peritajes finalizados ya no son inmutables, PERO solo el dueño o el
+  // admin pueden corregirlos: un informe finalizado ya fue entregado al cliente
+  // y el perito no debe poder alterarlo. (Finalizar su PROPIO borrador sí está
+  // permitido — eso es la transición justLocking de abajo, no una re-edición.)
+  const wasCompleted =
     existingRow.locked_at !== null || existingRow.status === "completed";
-  if (isLocked) {
-    return { kind: "locked", inspection: rowToStored(existingRow) };
+  if (wasCompleted && actor.role !== "admin" && actor.role !== "owner") {
+    return { kind: "forbidden_completed", inspection: rowToStored(existingRow) };
   }
 
   const nextStatus = data.status === "completed" ? "completed" : "draft";
-  const justLocking = nextStatus === "completed";
+  // justLocking = SOLO la transición real borrador→finalizado (primera vez).
+  // Editar un peritaje que YA estaba finalizado no re-asigna consecutivo, no
+  // re-exige teléfono ni re-dispara la entrega por WhatsApp.
+  const justLocking = nextStatus === "completed" && !wasCompleted;
 
   // En la finalización exigimos teléfono del cliente: la política es "PDF se
   // entrega sí o sí al cerrar", y sin celular no tenemos a quién mandarlo. La
@@ -285,6 +303,10 @@ export async function updateInspectionServer(
     );
   }
 
+  // Al editar invalidamos el PDF oficial guardado: lo regeneramos bajo demanda
+  // (ensureCompletedPdf en el render lazy) para que refleje los cambios. En la
+  // finalización (justLocking) estos campos están null igual y el route corre
+  // ensureCompletedPdf justo después.
   const r = await query<InspectionRow>(
     `UPDATE inspections
      SET data = $2::jsonb,
@@ -292,6 +314,9 @@ export async function updateInspectionServer(
          plate = $4,
          report_number = COALESCE(report_number, $5),
          locked_at = CASE WHEN $3 = 'completed' THEN COALESCE(locked_at, now()) ELSE locked_at END,
+         pdf_path = NULL,
+         pdf_sha256 = NULL,
+         pdf_size = NULL,
          updated_at = now()
      WHERE id = $1
      RETURNING *`,
@@ -322,12 +347,14 @@ export type UpdateInspectionForUserResult =
   | { kind: "ok"; inspection: StoredInspection; justLocked: boolean }
   | { kind: "not_found" }
   | { kind: "forbidden" }
+  | { kind: "forbidden_completed"; inspection: StoredInspection }
   | { kind: "locked"; inspection: StoredInspection }
   | { kind: "missing_phone" };
 
 /**
- * Update con ownership check: solo dueño o admin. Cierra el IDOR de PUT
- * en `/api/inspections/[id]`.
+ * Update con ownership check (cierra el IDOR de PUT en /api/inspections/[id]) +
+ * política de edición de finalizados: un informe ya entregado solo lo edita el
+ * dueño o el admin (el perito no), enforced dentro de updateInspectionServer.
  */
 export async function updateInspectionForUser(
   id: string,
@@ -337,7 +364,7 @@ export async function updateInspectionForUser(
   const access = await checkInspectionAccess(id, user);
   if (access.kind === "not_found") return { kind: "not_found" };
   if (access.kind === "forbidden") return { kind: "forbidden" };
-  return updateInspectionServer(id, data, user.id);
+  return updateInspectionServer(id, data, user);
 }
 
 export async function deleteInspectionServer(
@@ -404,6 +431,72 @@ export async function deleteInspectionForUser(
 }
 
 /**
+ * Devuelve la data del peritaje con la identidad del perito (nombre/cédula/firma)
+ * tomada del dueño real (user_id → users), reemplazando lo guardado solo cuando
+ * hace falta:
+ *  - nombre/cédula: si están vacíos o son el default legacy quemado.
+ *  - firma: si el peritaje no capturó una firma propia, se inyecta la que el
+ *    perito configuró en su perfil (users.signature_data_url). Sin esto, un
+ *    peritaje sin firma capturada caía al archivo global public/firma-perito.png
+ *    y mostraba la firma de otra persona.
+ * Si no hay user_id o el usuario no tiene nombre, devuelve la data sin tocar.
+ */
+export async function applyRealInspector(
+  data: InspectionData,
+  userId: string | null,
+): Promise<InspectionData> {
+  if (!userId) return data;
+  const ures = await query<{
+    full_name: string;
+    license_id: string | null;
+    signature_data_url: string | null;
+  }>(
+    "SELECT full_name, license_id, signature_data_url FROM users WHERE id = $1",
+    [userId],
+  );
+  const u = ures.rows[0];
+  if (!u?.full_name) return data;
+
+  const v = data.vehicle;
+  // El dueño del peritaje (user_id → users) es la fuente de verdad de la
+  // identidad del perito. Antes comparábamos contra un nombre/cédula centinela
+  // quemados para detectar el "default viejo filtrado", pero ese centinela
+  // resultó ser el nombre legítimo de un perito real: su propio nombre se
+  // trataba como obsoleto y se pisaba con el de quien abriera el peritaje
+  // (cruce de nombres). Ahora el nombre se deriva siempre del dueño; la cédula
+  // del dueño si la tiene en su perfil, y si no, se respeta la que ya tenga el
+  // peritaje (no borramos una licencia escrita a mano).
+  const ownerName = u.full_name.trim();
+  const ownerLicense = u.license_id?.trim() || "";
+  const nextInspector = ownerName || v.inspector;
+  const nextInspectorId = ownerLicense || v.inspectorId;
+  // Solo sembramos la firma del perfil cuando el peritaje no trae una propia,
+  // para que una firma puesta a mano en el wizard o una firma remota siga
+  // ganando sobre la del perfil.
+  const profileSig = u.signature_data_url?.trim() || "";
+  const seedSig = !data.conclusion?.inspectorSignature?.trim() && !!profileSig;
+
+  if (
+    nextInspector === v.inspector &&
+    nextInspectorId === v.inspectorId &&
+    !seedSig
+  )
+    return data;
+
+  return {
+    ...data,
+    vehicle: {
+      ...v,
+      inspector: nextInspector,
+      inspectorId: nextInspectorId,
+    },
+    conclusion: seedSig
+      ? { ...data.conclusion, inspectorSignature: profileSig }
+      : data.conclusion,
+  };
+}
+
+/**
  * Asegura que un peritaje finalizado tenga su PDF persistido en disco. Si la
  * fila ya tiene pdf_path/pdf_sha256, no hace nada (verificación opcional).
  * Si no, lo renderiza, lo guarda y actualiza la fila con los metadatos.
@@ -456,8 +549,15 @@ export async function ensureCompletedPdf(opts: {
     verificationUrl = null;
   }
 
+  // El nombre del perito en el PDF debe venir del dueño real del peritaje
+  // (user_id → users), NO del texto copiado en data.vehicle.inspector, que en
+  // peritajes viejos quedó con un default quemado y además se desactualiza si
+  // el peritaje se reasigna. Solo sobrescribimos cuando el valor guardado está
+  // vacío o es el default legacy — así respetamos un nombre tecleado a mano.
+  const dataForPdf = await applyRealInspector(r.data, r.user_id);
+
   const { buffer } = await renderInspectionPdf({
-    data: r.data,
+    data: dataForPdf,
     verificationUrl,
     reportNumber: r.report_number ?? null,
     orgId: r.org_id,

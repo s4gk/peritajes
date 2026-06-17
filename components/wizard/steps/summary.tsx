@@ -5,11 +5,11 @@ import {
   AlertTriangle,
   CheckCircle2,
   Download,
+  Eye,
   FileText,
   Info,
   Lock,
   MessageCircle,
-  PenLine,
   RefreshCw,
   Send,
 } from "lucide-react";
@@ -64,10 +64,12 @@ function appendText(existing: string, added: string): string {
 }
 
 const CONDITION_OPTIONS = [
-  { value: "mech_optimal", label: "Óptima" },
-  { value: "mech_noise_light", label: "Aceptable con observaciones menores" },
-  { value: "mech_play_in_tolerance", label: "Regular — requiere mantenimiento" },
-  { value: "mech_no_response", label: "Deficiente — requiere intervención" },
+  { value: "ESTÁNDAR", label: "ESTÁNDAR" },
+  { value: "FUERA DE ESTÁNDAR", label: "FUERA DE ESTÁNDAR" },
+  {
+    value: "ASEGURABILIDAD SUJETA A POLÍTICAS",
+    label: "ASEGURABILIDAD SUJETA A POLÍTICAS",
+  },
 ];
 
 export function SummaryStep() {
@@ -247,18 +249,24 @@ export function SummaryStep() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentUser?.signatureDataUrl, data.status, data.conclusion.inspectorSignature]);
 
-  async function generatePdf(mode: "executive" | "detailed") {
+  // Previsualización del PDF antes de finalizar. Sale con marca de agua
+  // "PREVISUALIZACIÓN" y sin QR/consecutivo oficial, así que no se puede
+  // confundir con el documento entregable. Disponible para todos los roles.
+  async function generatePreviewPdf() {
     setGenerating(true);
     try {
-      await downloadInspectionPdf(data, mode, inspectionId);
+      await downloadInspectionPdf(data, "detailed", inspectionId, {
+        preview: true,
+      });
       toast.show({
-        title: `PDF ${mode === "executive" ? "ejecutivo" : "detallado"} generado`,
+        title: "Previsualización generada",
+        description: "Borrador con marca de agua. No es el documento oficial.",
         variant: "success",
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : "Error desconocido";
       toast.show({
-        title: "No se pudo generar el PDF",
+        title: "No se pudo generar la previsualización",
         description: message,
         variant: "danger",
       });
@@ -315,14 +323,6 @@ export function SummaryStep() {
       toast.show({
         title: "Falta la condición general",
         description: "Selecciona la condición general antes de finalizar.",
-        variant: "warning",
-      });
-      return;
-    }
-    if (!data.conclusion.inspectorSignature) {
-      toast.show({
-        title: "Falta tu firma de perito",
-        description: "Cárgala una vez en Mi cuenta → Firma del perito y vuelve.",
         variant: "warning",
       });
       return;
@@ -633,55 +633,13 @@ export function SummaryStep() {
 
       <Card>
         <CardHeader>
-          <CardTitle>Firmas</CardTitle>
+          <CardTitle>Firma del cliente</CardTitle>
           <CardDescription>
-            La firma del perito se toma automáticamente de tu perfil. El cliente
+            La firma del perito se toma automáticamente del sistema. El cliente
             firma desde esta pantalla o escanea el QR para firmar en su celular.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
-          <div className="space-y-2">
-            <div className="flex items-center gap-1.5 text-sm font-medium">
-              <PenLine className="h-4 w-4 text-muted-foreground" />
-              {data.vehicle.inspector
-                ? `Firma de ${data.vehicle.inspector}`
-                : "Firma del perito"}
-            </div>
-            {data.conclusion.inspectorSignature ? (
-              <div className="space-y-1.5">
-                <div className="flex aspect-[3/1] w-full items-center justify-center overflow-hidden rounded-lg border bg-white">
-                  <img
-                    src={data.conclusion.inspectorSignature}
-                    alt="Firma del perito"
-                    className="max-h-full max-w-full object-contain"
-                  />
-                </div>
-                <p className="text-xs text-muted-foreground">
-                  Cargada desde tu perfil. Para cambiarla, ve a{" "}
-                  <a href="/cuenta" className="underline underline-offset-2">
-                    Mi cuenta → Firma del perito
-                  </a>
-                  .
-                </p>
-              </div>
-            ) : (
-              <div className="flex flex-col gap-2 rounded-lg border border-warning/40 bg-warning/10 p-3 text-sm sm:flex-row sm:items-center sm:justify-between">
-                <div className="flex items-start gap-2 text-warning">
-                  <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-                  <div>
-                    <div className="font-semibold">No tienes firma cargada</div>
-                    <div className="text-xs text-warning/90">
-                      Subila o dibujala una vez en tu perfil y se va a usar en
-                      todos tus peritajes.
-                    </div>
-                  </div>
-                </div>
-                <Button asChild type="button" size="sm" variant="secondary">
-                  <a href="/cuenta">Configurar firma</a>
-                </Button>
-              </div>
-            )}
-          </div>
           <ClientSignatureCapture
             label={data.vehicle.owner ? `Firma de ${data.vehicle.owner}` : "Firma del cliente"}
             hint={
@@ -764,14 +722,14 @@ export function SummaryStep() {
             )}
           </Button>
         )}
-        {data.status !== "completed" && currentUser?.role === "admin" && (
+        {data.status !== "completed" && (
           <Button
             type="button"
-            onClick={() => generatePdf("detailed")}
+            onClick={generatePreviewPdf}
             disabled={generating}
             size="lg"
             variant="outline"
-            title="Solo admin: preview del PDF antes de finalizar"
+            title="Ver el PDF antes de finalizar (sale con marca de agua de previsualización)"
           >
             {generating ? (
               <>
@@ -780,8 +738,8 @@ export function SummaryStep() {
               </>
             ) : (
               <>
-                <Download className="mr-2 h-4 w-4" />
-                Preview PDF (admin)
+                <Eye className="mr-2 h-4 w-4" />
+                Previsualizar PDF
               </>
             )}
           </Button>

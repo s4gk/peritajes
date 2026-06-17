@@ -109,6 +109,19 @@ export async function PUT(
   if (result.kind === "forbidden") {
     return NextResponse.json({ error: "Sin permisos" }, { status: 403 });
   }
+  if (result.kind === "forbidden_completed") {
+    // El peritaje ya fue finalizado (entregado al cliente) y solo el dueño o el
+    // admin pueden editarlo. Devolvemos la versión canónica para que el cliente
+    // reemplace su copia local y muestre el modo solo-lectura sin perder datos.
+    return NextResponse.json(
+      {
+        error:
+          "Este informe ya fue entregado. Solo el dueño o el administrador pueden editarlo.",
+        inspection: result.inspection,
+      },
+      { status: 403 },
+    );
+  }
   if (result.kind === "not_found") {
     return NextResponse.json({ error: "No encontrado" }, { status: 404 });
   }

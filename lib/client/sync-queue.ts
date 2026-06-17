@@ -279,6 +279,20 @@ async function applyMutation(m: PendingMutation): Promise<{ ok: boolean; error?:
         }
         return { ok: true };
       }
+      // 403 Forbidden: el server rechazó la edición por permisos — típicamente
+      // un perito intentando editar un informe ya finalizado (solo dueño/admin
+      // pueden). Reintentar nunca va a funcionar; descartamos la mutación y, si
+      // el server mandó la versión canónica, la aplicamos para que el wizard se
+      // reabra en solo-lectura con los datos reales.
+      if (res.status === 403) {
+        try {
+          const json = (await res.json()) as { inspection?: StoredInspection };
+          if (json.inspection && syncedHandler) syncedHandler(json.inspection);
+        } catch {
+          /* sin cuerpo canónico (forbidden genérico) — igual descartamos */
+        }
+        return { ok: true };
+      }
       // Si el server dice 404, probablemente el create se quedó atrás. Lo
       // forzamos a create (idempotente) y reintentamos en la próxima vuelta.
       if (res.status === 404) {

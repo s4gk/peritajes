@@ -3,12 +3,14 @@
 import * as React from "react";
 import { useRouter } from "next/navigation";
 import {
+  AlertTriangle,
   ArrowLeft,
   ArrowRight,
   CheckCircle2,
   ChevronLeft,
   Download,
   Keyboard,
+  Pencil,
 } from "lucide-react";
 
 import { ErrorBoundary } from "@/components/shared/error-boundary";
@@ -37,7 +39,7 @@ import {
 } from "@/lib/constants";
 import { findOption, minPhotosFor } from "@/lib/findings-catalog";
 import { downloadInspectionPdf } from "@/lib/pdf-client";
-import { formatDate } from "@/lib/utils";
+import { cn, formatDate } from "@/lib/utils";
 import type { InspectionData, InspectionEntry } from "@/lib/types";
 
 import { InspectionProvider, useInspection } from "./inspection-context";
@@ -48,6 +50,7 @@ import { VehicleInfoStep } from "./steps/vehicle-info";
 import { RoadTestStep } from "./steps/road-test";
 import { ExtraPhotosStep } from "./steps/extra-photos";
 import { LeaksStep } from "./steps/leaks";
+import { CompressionStep } from "./steps/compression";
 import { WalkaroundStep } from "./steps/walkaround";
 import { SummaryStep } from "./steps/summary";
 
@@ -212,7 +215,12 @@ function validateStep(step: StepId, data: InspectionData): ValidateResult {
 
   if (step === "extraPhotos") {
     const m = data.mandatoryPhotos;
-    const slots: { key: keyof InspectionData["mandatoryPhotos"]; label: string }[] = [
+    // Las 6 fotos obligatorias (incluidas las improntas: n° chasis/motor/
+    // plaqueta) se exigen para TODOS los tipos de peritaje, incluido Sencillo.
+    const slots: {
+      key: keyof InspectionData["mandatoryPhotos"];
+      label: string;
+    }[] = [
       { key: "diagonalFrontLeft", label: "Diagonal Delantera Izquierda" },
       { key: "diagonalRearRight", label: "Diagonal Trasera Derecha" },
       { key: "innerCabin", label: "Habitáculo Interno" },
@@ -327,7 +335,17 @@ function isStepComplete(step: StepId, data: InspectionData): boolean {
 }
 
 function WizardInner() {
-  const { data, setData, isHydrated, notFound, isReadOnly, id: inspectionId } = useInspection();
+  const {
+    data,
+    setData,
+    isHydrated,
+    notFound,
+    isReadOnly,
+    canEditCompleted,
+    editUnlocked,
+    unlockEdit,
+    id: inspectionId,
+  } = useInspection();
   const [current, setCurrent] = React.useState<StepId>("vehicle");
   const [shortcutsOpen, setShortcutsOpen] = React.useState(false);
   const [pdfBusy, setPdfBusy] = React.useState(false);
@@ -572,16 +590,36 @@ function WizardInner() {
         steps={activeSteps}
       />
 
-      {isReadOnly && (
-        <div className="flex flex-col gap-3 rounded-lg border border-success/40 bg-success/10 p-3 text-sm sm:flex-row sm:items-center sm:justify-between">
-          <div className="flex items-start gap-2 text-success">
-            <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" />
+      {data.status === "completed" && (
+        <div
+          className={cn(
+            "flex flex-col gap-3 rounded-lg border p-3 text-sm sm:flex-row sm:items-center sm:justify-between",
+            isReadOnly
+              ? "border-success/40 bg-success/10"
+              : "border-warning/50 bg-warning/10",
+          )}
+        >
+          <div className="flex items-start gap-2">
+            {isReadOnly ? (
+              <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-success" />
+            ) : (
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
+            )}
             <div>
-              <div className="font-semibold">Peritaje finalizado</div>
+              <div className="font-semibold">
+                {isReadOnly
+                  ? "Peritaje finalizado"
+                  : "Editando un informe ya entregado"}
+              </div>
               <div className="text-xs text-muted-foreground">
                 {data.completedAt
-                  ? `Cerrado el ${formatDate(data.completedAt.slice(0, 10))} · inmutable`
-                  : "Inmutable — sólo lectura"}
+                  ? `Cerrado el ${formatDate(data.completedAt.slice(0, 10))}. `
+                  : ""}
+                {!isReadOnly
+                  ? "Al guardar los cambios se regenera el PDF oficial del cliente."
+                  : canEditCompleted
+                    ? "Este informe ya fue entregado al cliente. Para corregirlo, toca “Editar informe”."
+                    : "Este informe ya fue entregado. Solo el dueño o el administrador pueden editarlo."}
               </div>
             </div>
           </div>
@@ -597,6 +635,16 @@ function WizardInner() {
               <Download className="mr-1.5 h-4 w-4" />
               {pdfBusy ? "Generando…" : "Descargar PDF"}
             </Button>
+            {canEditCompleted && !editUnlocked && (
+              <Button
+                type="button"
+                size="sm"
+                onClick={unlockEdit}
+                className="h-9"
+              >
+                <Pencil className="mr-1.5 h-4 w-4" /> Editar informe
+              </Button>
+            )}
           </div>
         </div>
       )}
@@ -607,6 +655,7 @@ function WizardInner() {
           <WalkaroundStep stage={current as WalkaroundStageStepId} />
         )}
         {current === "leaks" && <LeaksStep />}
+        {current === "compression" && <CompressionStep />}
         {current === "roadTest" && <RoadTestStep />}
         {current === "extraPhotos" && <ExtraPhotosStep />}
         {current === "summary" && <SummaryStep />}

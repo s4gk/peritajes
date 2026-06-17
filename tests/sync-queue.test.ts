@@ -16,6 +16,8 @@ const fakeQueue: Map<number, PendingMutation> = new Map();
 let nextId = 1;
 const apiResponses: MockApiResponse[] = [];
 
+const fakeInspections: Map<string, unknown> = new Map();
+
 vi.mock("@/lib/client/idb", () => ({
   idbListMutations: vi.fn(async () => Array.from(fakeQueue.values())),
   idbCountMutations: vi.fn(async () => fakeQueue.size),
@@ -24,6 +26,11 @@ vi.mock("@/lib/client/idb", () => ({
   }),
   idbUpdateMutation: vi.fn(async (m: PendingMutation) => {
     if (m.id !== undefined) fakeQueue.set(m.id, m);
+  }),
+  // sync-queue también lee/escribe inspecciones en IDB (manejo de 422/403/423).
+  idbGetInspection: vi.fn(async (id: string) => fakeInspections.get(id)),
+  idbPutInspection: vi.fn(async (insp: { id: string }) => {
+    fakeInspections.set(insp.id, insp);
   }),
 }));
 
@@ -60,11 +67,19 @@ function seed(
     ...partial,
   };
   fakeQueue.set(id, m);
+  // Registramos también la inspección en el "IDB" mock: flushSyncQueue descarta
+  // mutations huérfanas (inspección ausente en IDB), así que sin esto cualquier
+  // update/create se borraría antes de procesarse y los tests de reintento no
+  // verían la mutation en cola.
+  if (m.kind !== "delete") {
+    fakeInspections.set(m.inspectionId, { id: m.inspectionId, data: m.data ?? {} });
+  }
   return m;
 }
 
 beforeEach(() => {
   fakeQueue.clear();
+  fakeInspections.clear();
   nextId = 1;
   apiResponses.length = 0;
 });
