@@ -15,6 +15,14 @@ import {
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { wipeLocalUserData } from "@/lib/inspections-store";
+
+// Guarda el id del último usuario que se autenticó en ESTE navegador. Si entra
+// uno distinto, su estado local (drafts en IDB, cola de sync, cachés del SW)
+// se limpia antes de continuar — así el trabajo pendiente de un perito que no
+// cerró sesión NO termina sincronizándose bajo la cuenta del siguiente (era el
+// origen de los peritajes que quedaban a nombre de otro).
+const ACTIVE_UID_KEY = "perito_active_uid";
 
 export function LoginForm() {
   const router = useRouter();
@@ -38,6 +46,35 @@ export function LoginForm() {
         setError(data?.error || "No se pudo iniciar sesión");
         setBusy(false);
         return;
+      }
+      // Detectar cambio de usuario en este dispositivo. /api/auth/me ahora va
+      // siempre a red (el SW no lo cachea), así que devuelve la identidad real
+      // recién autenticada.
+      try {
+        const me = await fetch("/api/auth/me", { credentials: "same-origin" })
+          .then((r) => (r.ok ? r.json() : null))
+          .catch(() => null);
+        const newUid: string | null = me?.user?.id ?? null;
+        let prevUid: string | null = null;
+        try {
+          prevUid = localStorage.getItem(ACTIVE_UID_KEY);
+        } catch {
+          /* localStorage no disponible */
+        }
+        if (newUid && prevUid && prevUid !== newUid) {
+          // Usuario distinto al anterior → botar su estado local para no
+          // heredar ni resincronizar nada suyo bajo esta cuenta.
+          await wipeLocalUserData().catch(() => {});
+        }
+        if (newUid) {
+          try {
+            localStorage.setItem(ACTIVE_UID_KEY, newUid);
+          } catch {
+            /* ignore */
+          }
+        }
+      } catch {
+        /* best-effort: si algo falla, seguimos al panel igual */
       }
       router.replace("/dashboard");
       router.refresh();

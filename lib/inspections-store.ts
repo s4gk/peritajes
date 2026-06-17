@@ -2,6 +2,7 @@
 
 import { apiFetch } from "./client/api-client";
 import {
+  idbClearAll,
   idbDeleteInspection,
   idbEnqueueMutation,
   idbListInspections,
@@ -79,8 +80,19 @@ function isInspectionLocked(insp: StoredInspection | null | undefined): boolean 
 function mergeDefaults(inspection: StoredInspection): StoredInspection {
   const base = emptyInspection();
   const d = (inspection?.data ?? {}) as Partial<InspectionData>;
+  // Compat: drafts viejos guardaron complete/quick/appraisal. Los mapeamos a
+  // las claves nuevas plus/pro/sencillo.
+  const LEGACY_KIND_ALIASES: Record<string, PeritajeKind> = {
+    complete: "plus",
+    quick: "pro",
+    appraisal: "sencillo",
+  };
+  const rawKind = d.kind as string | undefined;
+  const aliasedKind = (rawKind && LEGACY_KIND_ALIASES[rawKind]) || rawKind;
   const kind: PeritajeKind =
-    d.kind && d.kind in PERITAJE_KINDS ? d.kind : DEFAULT_PERITAJE_KIND;
+    aliasedKind && aliasedKind in PERITAJE_KINDS
+      ? (aliasedKind as PeritajeKind)
+      : DEFAULT_PERITAJE_KIND;
   const vehicleType: VehicleType =
     d.vehicleType && d.vehicleType in VEHICLE_TYPES
       ? d.vehicleType
@@ -315,18 +327,9 @@ export function isLocked(id: string): boolean {
 
 export function saveInspectionData(id: string, data: InspectionData) {
   const existing = memory.get(id);
-  // Si el peritaje ya está finalizado, ignoramos la mutación. Es defensa en
-  // profundidad: la UI debería ya estar en modo solo-lectura, pero un
-  // autosave pendiente o un caller mal portado no debe pisar la fila.
-  if (isInspectionLocked(existing)) {
-    if (typeof console !== "undefined") {
-      console.warn(
-        "[inspections-store] saveInspectionData ignorado: peritaje finalizado",
-        id,
-      );
-    }
-    return;
-  }
+  // Los peritajes finalizados ahora SON editables: ya no descartamos la
+  // mutación. El estado "completed" se conserva (badge/consecutivo) y el
+  // server regenera el PDF oficial al recibir el cambio.
   const updated: StoredInspection = {
     ...(existing ?? {}),
     id,
@@ -409,6 +412,47 @@ export async function resetStore(): Promise<void> {
   memory.clear();
   initialized = false;
   initPromise = null;
+}
+
+/**
+ * Borra TODO el estado local del usuario que cierra sesión. Crítico en
+ * dispositivos compartidos (un taller con una sola tablet y varios peritos):
+ * sin esto, los peritajes y la cola de mutaciones del usuario anterior
+ * sobreviven en IndexedDB y se mezclan con la sesión del siguiente. Como el
+ * listado de empleados muestra el inspector desde `data.vehicle.inspector`
+ * (sembrado del perfil al crear) y no remapea por user_id, esos peritajes
+ * heredados aparecen "a nombre del otro". También botamos los caches del SW:
+ *   - runtime: HTML del panel con la identidad del usuario embebida.
+ *   - api: respuesta de /api/inspections servida stale-while-revalidate.
+ * El cache `static` (assets con hash, sin PII) se deja intacto.
+ *
+ * IMPORTANTE: el caller debe haber intentado `flushSyncQueue()` ANTES de
+ * llamar esto (mientras la cookie del usuario sigue viva), porque acá se
+ * borran las mutaciones pendientes — si no, se reenviarían bajo la sesión del
+ * próximo usuario y crearían sus peritajes con el dueño equivocado.
+ */
+export async function wipeLocalUserData(): Promise<void> {
+  memory.clear();
+  initialized = false;
+  initPromise = null;
+  serverFetchPromise = null;
+  try {
+    await idbClearAll();
+  } catch {
+    /* IDB no disponible — nada que limpiar */
+  }
+  if (typeof caches !== "undefined") {
+    try {
+      const keys = await caches.keys();
+      await Promise.all(
+        keys
+          .filter((k) => k.includes("-runtime-") || k.includes("-api-"))
+          .map((k) => caches.delete(k)),
+      );
+    } catch {
+      /* Cache API no disponible — no es fatal */
+    }
+  }
 }
 
 /**

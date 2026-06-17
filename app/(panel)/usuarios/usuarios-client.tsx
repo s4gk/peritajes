@@ -158,7 +158,7 @@ export function UsuariosClient({
               return (
                 <div
                   key={u.id}
-                  className="flex flex-col gap-3  py-3 sm:flex-row sm:items-center sm:justify-between"
+                  className="flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:px-6"
                 >
                   <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-2">

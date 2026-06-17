@@ -353,14 +353,14 @@ export function ClienteDetailClient({
                   onClick={() => impersonate(owner.id)}
                   disabled={busy === "impersonate"}
                   className="gap-1.5"
-                  title="Entrar al panel viendo lo que ve el dueño (sesión de soporte)"
+                  title={`Ingresar al panel de ${org.name} viendo lo que ve el cliente (sesión de soporte)`}
                 >
                   {busy === "impersonate" ? (
                     <Loader2 className="h-3.5 w-3.5 animate-spin" />
                   ) : (
                     <UserCheck className="h-3.5 w-3.5" />
                   )}
-                  Entrar como
+                  Ingresar a {org.name}
                 </Button>
               </div>
             ) : (

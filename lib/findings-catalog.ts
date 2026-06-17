@@ -356,7 +356,7 @@ const LEAK_CATALOG: FindingCatalog = {
 const FLUID_LEVEL_CATALOG: FindingCatalog = {
   quick: [
     { value: "fluid_full", label: "Full", tone: "success" },
-    { value: "na", label: "No aplica", tone: "neutral", risks: ["na"] },
+    { value: "na", label: "N/A", tone: "neutral", risks: ["na"] },
   ],
   categories: [
     {

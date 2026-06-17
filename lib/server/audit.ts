@@ -45,6 +45,13 @@ function rowToEntry(row: Row): AuditEntry {
 
 export type AuditFilter = {
   userId?: string | null;
+  /**
+   * Filtra por la organización del usuario que ejecutó la acción (join a
+   * users.org_id). `audit_log.org_id` no se puebla al insertar, así que
+   * derivamos la org desde el actor — funciona retroactivamente para todo el
+   * histórico. Las acciones de admin (sin org) no matchean ninguna org.
+   */
+  orgId?: string | null;
   /** Filtro por acción exacta o por prefijo si termina en `.*` (ej. "user.*"). */
   action?: string | null;
   /** ISO date (YYYY-MM-DD) inclusivo. */
@@ -70,6 +77,10 @@ export async function listAuditLog(filter: AuditFilter): Promise<AuditPage> {
   if (filter.userId) {
     wheres.push(`a.user_id = $${i++}`);
     params.push(filter.userId);
+  }
+  if (filter.orgId) {
+    wheres.push(`u.org_id = $${i++}`);
+    params.push(filter.orgId);
   }
   if (filter.action) {
     if (filter.action.endsWith(".*")) {

@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 
 import { getCurrentUser, listUsers } from "@/lib/server/auth";
 import { listAuditActions, listAuditLog } from "@/lib/server/audit";
+import { listOrganizations } from "@/lib/server/orgs";
 
 import { AuditoriaClient } from "./auditoria-client";
 
@@ -20,9 +21,10 @@ export default async function AuditoriaPage() {
     );
   }
 
-  const [initialPage, users, actions] = await Promise.all([
+  const [initialPage, users, orgs, actions] = await Promise.all([
     listAuditLog({ limit: 100 }),
     listUsers(user),
+    listOrganizations(),
     listAuditActions(),
   ]);
 
@@ -31,6 +33,7 @@ export default async function AuditoriaPage() {
       <AuditoriaClient
         initialPage={initialPage}
         users={users.map((u) => ({ id: u.id, fullName: u.fullName, username: u.username }))}
+        orgs={orgs.map((o) => ({ id: o.id, name: o.name }))}
         actions={actions}
       />
     </div>

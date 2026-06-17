@@ -1,6 +1,9 @@
 import { NextResponse } from "next/server";
 
-import { getInspectionServer } from "@/lib/server/inspections";
+import {
+  applyRealInspector,
+  getInspectionServer,
+} from "@/lib/server/inspections";
 import { renderInspectionPdf } from "@/lib/server/pdf-render";
 import { buildPublicBaseUrl } from "@/lib/server/qr";
 import {
@@ -118,8 +121,15 @@ export async function GET(req: Request, ctx: { params: { token: string } }) {
   try {
     const base = buildPublicBaseUrl(req);
     const verificationUrl = base ? `${base}/r/${token}` : `/r/${token}`;
+    // Misma corrección de identidad que en ensureCompletedPdf: el PDF público
+    // debe mostrar el nombre/cédula/firma del dueño real, no el texto legacy
+    // copiado ni la firma global de disco.
+    const dataForPdf = await applyRealInspector(
+      stored.data,
+      stored.userId ?? null,
+    );
     const { buffer, plateSlug } = await renderInspectionPdf({
-      data: stored.data,
+      data: dataForPdf,
       verificationUrl,
       reportNumber: stored.reportNumber ?? null,
       // Render público: usa la org del peritaje, no la del visitante (no

@@ -57,6 +57,10 @@ const MANDATORY_SLOTS: MandatorySlot[] = [
 export function ExtraPhotosStep() {
   const { data, setData } = useInspection();
   const photos = data.extraPhotos ?? [];
+  // Las fotos obligatorias (estas 6 + las 2 caras de la tarjeta de propiedad en
+  // datos del vehículo = 8 en total) se exigen para TODOS los tipos de peritaje,
+  // incluido Sencillo. No se filtran por improntas.
+  const slots = MANDATORY_SLOTS;
 
   const setPhotos = React.useCallback(
     (next: InspectedImage[]) => {
@@ -86,14 +90,15 @@ export function ExtraPhotosStep() {
             <div className="min-w-0">
               <CardTitle>Fotografías obligatorias</CardTitle>
               <CardDescription>
-                Estas seis tomas son requeridas para cerrar el peritaje. Cada
-                slot debe tener al menos una foto antes de avanzar al resumen.
+                Estas {slots.length} tomas son requeridas para cerrar el
+                peritaje. Cada slot debe tener al menos una foto antes de
+                avanzar al resumen.
               </CardDescription>
             </div>
           </div>
         </CardHeader>
         <CardContent className="grid gap-4 sm:grid-cols-2">
-          {MANDATORY_SLOTS.map((slot) => {
+          {slots.map((slot) => {
             const list = data.mandatoryPhotos?.[slot.key] ?? [];
             return (
               <div key={slot.key} className="rounded-lg border bg-muted/30 p-3">

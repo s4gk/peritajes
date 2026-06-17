@@ -17,7 +17,8 @@ describe("analyze: clean baseline", () => {
     expect(r.score).toBe(0);
     expect(r.counters.repainted).toBe(0);
     expect(r.counters.structuralHits).toBe(0);
-    expect(r.headline).toMatch(/Riesgo bajo/i);
+    // El headline es descriptivo (no opina sobre riesgo): "sin hallazgos críticos".
+    expect(r.headline).toMatch(/sin hallazgos/i);
   });
 });
 
@@ -73,7 +74,7 @@ describe("analyze: structural escalation", () => {
 describe("analyze: leaks", () => {
   it("a single heavy leak forces high risk", () => {
     const data = pristineInspection();
-    setLeak(data, "engine_oil", "leak_puddle");
+    setLeak(data, "engine_oil", "leak_heavy");
     const r = analyze(data);
     expect(r.counters.criticalLeaks).toBe(1);
     expect(r.level).toBe("high");

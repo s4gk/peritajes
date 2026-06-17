@@ -126,8 +126,11 @@ export function emptyInspection(): InspectionData {
         sibgaCode: "",
         depreciationPct: "",
         depreciationNotes: "",
-        inspector: "Walter Smith Medina Umba",
-        inspectorId: "1.122.652.951",
+        // Se siembran desde el perfil del usuario logueado (ver vehicle-info).
+        // NO quemar un nombre acá: el default viejo se propagaba a todos los
+        // peritajes sin importar quién los hacía.
+        inspector: "",
+        inspectorId: "",
         location: "",
         date: new Date().toISOString().slice(0, 10),
       },

@@ -18,7 +18,7 @@
 // dispositivos (después de cambios grandes en el bundle, p.ej. reemplazo de
 // Gemini OCR por Tesseract). En `activate` borramos los caches que no estén
 // en la versión actual, así los chunks viejos se botan.
-const VERSION = "v9";
+const VERSION = "v19";
 const STATIC_CACHE = `perito-static-${VERSION}`;
 const RUNTIME_CACHE = `perito-runtime-${VERSION}`;
 const API_CACHE = `perito-api-${VERSION}`;
@@ -213,6 +213,17 @@ function isStaticAsset(url) {
 
 function isApiGet(req, url) {
   return req.method === "GET" && url.pathname.startsWith("/api/");
+}
+
+// Endpoints autenticados cuya respuesta es ESPECÍFICA del usuario logueado
+// (identidad, CSRF, listas por dueño/tenant). NUNCA deben cachearse en el SW:
+// la clave de cache es solo la URL, así que un segundo usuario en el mismo
+// navegador recibiría la identidad/datos del anterior servidos del cache —
+// fue exactamente lo que hizo que peritajes hechos por un perito quedaran a
+// nombre de otro. Estos van siempre a red (passthrough); offline, la app cae a
+// su propio store de IndexedDB, que sí está aislado por registro.
+function isUserSpecificApi(url) {
+  return url.pathname.startsWith("/api/");
 }
 
 /**
@@ -549,6 +560,9 @@ self.addEventListener("fetch", (event) => {
     return;
   }
   if (isApiGet(req, url)) {
+    // Datos por-usuario → passthrough a red, jamás cache compartido (evita el
+    // cruce de identidad entre usuarios en un mismo navegador).
+    if (isUserSpecificApi(url)) return;
     event.respondWith(staleWhileRevalidate(event));
     return;
   }

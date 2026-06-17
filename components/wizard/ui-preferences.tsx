@@ -27,27 +27,36 @@ function applyTheme(theme: Theme) {
   if (theme === "outdoor") root.classList.add("contrast-high");
 }
 
-export function UIPreferencesProvider({ children }: { children: React.ReactNode }) {
-  const [prefs, setPrefsState] = React.useState<Prefs>(DEFAULTS);
-
-  // Load from storage on mount
-  React.useEffect(() => {
-    try {
-      const raw = localStorage.getItem(STORAGE_KEY);
-      if (!raw) return;
-      const parsed = JSON.parse(raw) as Record<string, unknown>;
-      if (typeof parsed.theme === "string" && ["light", "dark", "outdoor"].includes(parsed.theme)) {
-        setPrefsState({ theme: parsed.theme as Theme });
-      } else if (parsed.contrastHigh === true) {
-        // migrate legacy preference name
-        setPrefsState({ theme: "outdoor" });
-      }
-    } catch {
-      // ignore
+// Read the stored preference synchronously so the initial render already has the
+// correct theme. This avoids a race between a "load" effect and a "persist" effect
+// where the persist effect would momentarily re-apply DEFAULTS (light) and clobber
+// the stored value on a full reload (e.g. Ctrl+Shift+R). Keep this in sync with the
+// themeBootstrap script in app/layout.tsx.
+function readStoredPrefs(): Prefs {
+  if (typeof window === "undefined") return DEFAULTS;
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return DEFAULTS;
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    if (typeof parsed.theme === "string" && ["light", "dark", "outdoor"].includes(parsed.theme)) {
+      return { theme: parsed.theme as Theme };
     }
-  }, []);
+    if (parsed.contrastHigh === true) {
+      // migrate legacy preference name
+      return { theme: "outdoor" };
+    }
+  } catch {
+    // ignore
+  }
+  return DEFAULTS;
+}
 
-  // Sync to <html> class + persist
+export function UIPreferencesProvider({ children }: { children: React.ReactNode }) {
+  const [prefs, setPrefsState] = React.useState<Prefs>(readStoredPrefs);
+
+  // Sync to <html> class + persist whenever prefs change. The initial value already
+  // comes from storage, so the first run just re-asserts the correct theme (the
+  // themeBootstrap script set it before paint) without ever flashing to default.
   React.useEffect(() => {
     applyTheme(prefs.theme);
     try {

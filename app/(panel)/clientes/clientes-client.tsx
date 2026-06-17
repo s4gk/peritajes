@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import Link from "next/link";
-import { ClipboardList, Loader2, Pause, Plus, Store, Users } from "lucide-react";
+import { ClipboardList, LogIn, Loader2, Pause, Plus, Store, Users } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 
@@ -35,14 +35,55 @@ type OrgSummary = {
 };
 
 export function ClientesClient({ initialOrgs }: { initialOrgs: OrgSummary[] }) {
+  const toast = useToast();
   const [orgs, setOrgs] = React.useState<OrgSummary[]>(initialOrgs);
   const [createOpen, setCreateOpen] = React.useState(false);
+  const [impersonatingId, setImpersonatingId] = React.useState<string | null>(null);
 
   async function refresh() {
     const res = await fetch("/api/orgs");
     if (res.ok) {
       const data = await res.json();
       setOrgs(data.orgs ?? []);
+    }
+  }
+
+  // Ingresar al panel del cliente: abrimos una sesión de impersonation sobre
+  // su dueño. Al volcar la cookie, todo el panel (peritajes, vehículos,
+  // propietarios, etc.) se reescopea a esa empresa. Funciona incluso si la
+  // empresa está suspendida — útil para soporte/auditoría.
+  async function ingresar(ownerUserId: string | null, orgName: string) {
+    if (!ownerUserId) {
+      toast.show({
+        title: "Empresa sin dueño",
+        description: "No tiene un dueño asignado al cual ingresar.",
+        variant: "warning",
+      });
+      return;
+    }
+    setImpersonatingId(ownerUserId);
+    try {
+      const res = await apiFetch(`/api/admin/impersonate/${ownerUserId}`, {
+        method: "POST",
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        toast.show({
+          title: "No se pudo ingresar",
+          description: data?.error,
+          variant: "danger",
+        });
+        return;
+      }
+      toast.show({
+        title: `Ingresando a ${orgName}`,
+        description: "Verás el panel tal como lo ve el cliente.",
+        variant: "success",
+      });
+      // Navegación dura: el panel re-monta con la sesión nueva.
+      window.location.href = "/dashboard";
+    } finally {
+      setImpersonatingId(null);
     }
   }
 
@@ -72,48 +113,72 @@ export function ClientesClient({ initialOrgs }: { initialOrgs: OrgSummary[] }) {
           ) : (
             <div className="divide-y">
               {orgs.map((o) => (
-                <Link
+                <div
                   key={o.id}
-                  href={`/clientes/${o.id}`}
-                  className="flex flex-col gap-2  py-3 transition-colors hover:bg-muted/40 sm:flex-row sm:items-center sm:justify-between"
+                  className="flex items-center gap-3 px-4 py-3 transition-colors hover:bg-muted/40"
                 >
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-2">
-                      <Store className="h-4 w-4 text-muted-foreground" />
-                      <span className="font-medium">{o.name}</span>
-                      {!o.active && (
-                        <Badge variant="danger" className="gap-1 text-[10px]">
-                          <Pause className="h-2.5 w-2.5" /> Suspendida
-                        </Badge>
-                      )}
+                  <Link
+                    href={`/clientes/${o.id}`}
+                    className="flex min-w-0 flex-1 flex-col gap-2 sm:flex-row sm:items-center sm:justify-between"
+                  >
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <Store className="h-4 w-4 text-muted-foreground" />
+                        <span className="font-medium">{o.name}</span>
+                        {!o.active && (
+                          <Badge variant="danger" className="gap-1 text-[10px]">
+                            <Pause className="h-2.5 w-2.5" /> Suspendida
+                          </Badge>
+                        )}
+                      </div>
+                      <div className="text-xs text-muted-foreground">
+                        Dueño:{" "}
+                        {o.ownerFullName
+                          ? `${o.ownerFullName} (@${o.ownerUsername})`
+                          : "— sin asignar —"}
+                        {" · creada "}
+                        {formatDate(o.createdAt)}
+                      </div>
                     </div>
-                    <div className="text-xs text-muted-foreground">
-                      Dueño:{" "}
-                      {o.ownerFullName
-                        ? `${o.ownerFullName} (@${o.ownerUsername})`
-                        : "— sin asignar —"}
-                      {" · creada "}
-                      {formatDate(o.createdAt)}
+                    <div className="flex items-center gap-4 text-xs text-muted-foreground sm:mr-4">
+                      <span
+                        className="inline-flex items-center gap-1"
+                        title="Empleados activos en la empresa"
+                      >
+                        <Users className="h-3.5 w-3.5" />
+                        {o.employeesCount} empleado
+                        {o.employeesCount === 1 ? "" : "s"}
+                      </span>
+                      <span
+                        className="inline-flex items-center gap-1"
+                        title="Peritajes creados este mes"
+                      >
+                        <ClipboardList className="h-3.5 w-3.5" />
+                        {o.inspectionsThisMonth} este mes
+                      </span>
                     </div>
-                  </div>
-                  <div className="flex items-center gap-4 text-xs text-muted-foreground">
-                    <span
-                      className="inline-flex items-center gap-1"
-                      title="Empleados activos en la empresa"
-                    >
-                      <Users className="h-3.5 w-3.5" />
-                      {o.employeesCount} empleado
-                      {o.employeesCount === 1 ? "" : "s"}
-                    </span>
-                    <span
-                      className="inline-flex items-center gap-1"
-                      title="Peritajes creados este mes"
-                    >
-                      <ClipboardList className="h-3.5 w-3.5" />
-                      {o.inspectionsThisMonth} este mes
-                    </span>
-                  </div>
-                </Link>
+                  </Link>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    onClick={() => ingresar(o.ownerUserId, o.name)}
+                    disabled={impersonatingId !== null || !o.ownerUserId}
+                    className="shrink-0 gap-1.5"
+                    title={
+                      o.ownerUserId
+                        ? `Ingresar al panel de ${o.name}`
+                        : "Sin dueño asignado"
+                    }
+                  >
+                    {impersonatingId === o.ownerUserId ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <LogIn className="h-3.5 w-3.5" />
+                    )}
+                    <span className="hidden sm:inline">Ingresar</span>
+                  </Button>
+                </div>
               ))}
             </div>
           )}

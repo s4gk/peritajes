@@ -92,7 +92,6 @@ export const ImageUpload = React.forwardRef<ImageUploadHandle, Props>(
             ref={inputRef}
             type="file"
             accept="image/*"
-            capture="environment"
             multiple
             hidden
             onChange={(e) => handleFiles(e.target.files)}

@@ -32,21 +32,24 @@ type Page = {
 };
 
 type UserOption = { id: string; fullName: string; username: string };
+type OrgOption = { id: string; name: string };
 
 type Props = {
   initialPage: Page;
   users: UserOption[];
+  orgs: OrgOption[];
   actions: string[];
 };
 
 type Filters = {
   userId: string;
+  orgId: string;
   action: string;
   from: string;
   to: string;
 };
 
-const EMPTY: Filters = { userId: "", action: "", from: "", to: "" };
+const EMPTY: Filters = { userId: "", orgId: "", action: "", from: "", to: "" };
 
 /**
  * Acciones que distinguimos visualmente con un tono — el resto cae a neutral.
@@ -74,6 +77,7 @@ function fmtDateTime(iso: string): string {
 function buildQuery(filters: Filters, before: string | null): string {
   const sp = new URLSearchParams();
   if (filters.userId) sp.set("userId", filters.userId);
+  if (filters.orgId) sp.set("orgId", filters.orgId);
   if (filters.action) sp.set("action", filters.action);
   if (filters.from) sp.set("from", filters.from);
   if (filters.to) sp.set("to", filters.to);
@@ -81,7 +85,7 @@ function buildQuery(filters: Filters, before: string | null): string {
   return sp.toString();
 }
 
-export function AuditoriaClient({ initialPage, users, actions }: Props) {
+export function AuditoriaClient({ initialPage, users, orgs, actions }: Props) {
   const [entries, setEntries] = React.useState<AuditEntry[]>(initialPage.entries);
   const [cursor, setCursor] = React.useState<string | null>(initialPage.nextCursor);
   const [filters, setFilters] = React.useState<Filters>(EMPTY);
@@ -148,7 +152,30 @@ export function AuditoriaClient({ initialPage, users, actions }: Props) {
           </CardTitle>
         </CardHeader>
         <CardContent>
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+            {orgs.length > 0 && (
+              <div className="space-y-1.5">
+                <Label htmlFor="audit-org">Empresa</Label>
+                <Select
+                  value={filters.orgId || "__all__"}
+                  onValueChange={(v) =>
+                    setFilters((f) => ({ ...f, orgId: v === "__all__" ? "" : v }))
+                  }
+                >
+                  <SelectTrigger id="audit-org">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__all__">Todas</SelectItem>
+                    {orgs.map((o) => (
+                      <SelectItem key={o.id} value={o.id}>
+                        {o.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
             <div className="space-y-1.5">
               <Label htmlFor="audit-user">Usuario</Label>
               <Select

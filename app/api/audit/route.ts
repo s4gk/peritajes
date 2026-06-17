@@ -24,6 +24,7 @@ export async function GET(req: Request) {
   const url = new URL(req.url);
   const result = await listAuditLog({
     userId: url.searchParams.get("userId") || null,
+    orgId: url.searchParams.get("orgId") || null,
     action: url.searchParams.get("action") || null,
     from: url.searchParams.get("from") || null,
     to: url.searchParams.get("to") || null,
