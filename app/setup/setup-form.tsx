@@ -88,13 +88,21 @@ export function SetupForm() {
             </p>
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="email">Email (opcional)</Label>
+            <Label htmlFor="email">Correo electrónico</Label>
             <Input
               id="email"
               type="email"
+              inputMode="email"
+              autoComplete="email"
+              autoCapitalize="none"
+              spellCheck={false}
+              required
               value={email}
               onChange={(e) => setEmail(e.target.value)}
             />
+            <p className="text-xs text-muted-foreground">
+              Es a donde llega el enlace si olvidas la contraseña.
+            </p>
           </div>
           <div className="space-y-1.5">
             <Label htmlFor="password">Contraseña</Label>

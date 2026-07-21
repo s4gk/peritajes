@@ -440,13 +440,21 @@ function CreateUserDialog({
             </div>
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="cu-email">Email (opcional)</Label>
+            <Label htmlFor="cu-email">Correo electrónico</Label>
             <Input
               id="cu-email"
               type="email"
+              inputMode="email"
+              autoComplete="email"
+              autoCapitalize="none"
+              spellCheck={false}
+              required
               value={email}
               onChange={(e) => setEmail(e.target.value)}
             />
+            <p className="text-xs text-muted-foreground">
+              A este correo le llega el enlace si olvida la contraseña.
+            </p>
           </div>
           <div className="space-y-1.5">
             <Label htmlFor="cu-pw">Contraseña</Label>

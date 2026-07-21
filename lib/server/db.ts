@@ -99,6 +99,30 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS org_id TEXT REFERENCES organizations(
 ALTER TABLE users ADD COLUMN IF NOT EXISTS parent_user_id TEXT REFERENCES users(id) ON DELETE SET NULL;
 CREATE INDEX IF NOT EXISTS idx_users_org ON users(org_id);
 
+-- 2026-07: el email pasa a ser identificador de recuperación de contraseña
+-- ("olvidé mi contraseña" busca por correo), así que necesita ser único e
+-- insensible a mayúsculas/espacios. Sigue siendo NULLable por los usuarios
+-- históricos que se crearon sin correo.
+--
+-- Se crea de forma defensiva: esta SQL corre en el arranque de CADA proceso,
+-- así que si hubiera duplicados históricos un CREATE UNIQUE INDEX pelado
+-- tumbaría la app entera al bootear. Preferimos avisar y seguir sin índice.
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM users
+    WHERE email IS NOT NULL AND btrim(email) <> ''
+    GROUP BY lower(btrim(email))
+    HAVING count(*) > 1
+  ) THEN
+    RAISE WARNING 'users.email tiene duplicados: no se creo idx_users_email_unique. Resolvelos y reinicia el proceso.';
+  ELSE
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_unique
+      ON users (lower(btrim(email)))
+      WHERE email IS NOT NULL AND btrim(email) <> '';
+  END IF;
+END $$;
+
 CREATE TABLE IF NOT EXISTS sessions (
   id TEXT PRIMARY KEY,
   user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,

@@ -211,6 +211,37 @@ export async function getUserById(id: string): Promise<User | null> {
   return row ? rowToUser(row) : null;
 }
 
+/**
+ * Valida y normaliza un correo. La normalización (trim + minúsculas) tiene que
+ * ser LA MISMA que usa el índice único `idx_users_email_unique`, o se colarían
+ * duplicados que difieren solo en mayúsculas.
+ *
+ * La regex es deliberadamente laxa: validar correos "bien" es imposible y lo
+ * único que prueba de verdad que un correo existe es mandarle un mensaje.
+ */
+export function normalizeEmail(raw: string): string | null {
+  const email = raw.trim().toLowerCase();
+  if (!email) return null;
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email)) return null;
+  return email;
+}
+
+/**
+ * Busca por correo, con la misma normalización del índice único.
+ *
+ * Lo usa el flujo de "olvidé mi contraseña". Devuelve la fila cruda porque el
+ * caller necesita `active` para decidir, sin exponer el usuario a nadie.
+ */
+export async function getUserByEmail(email: string): Promise<UserRow | null> {
+  const normalized = normalizeEmail(email);
+  if (!normalized) return null;
+  const r = await query<UserRow>(
+    "SELECT * FROM users WHERE lower(btrim(email)) = $1",
+    [normalized],
+  );
+  return r.rows[0] ?? null;
+}
+
 export type CreateUserInput = {
   username: string;
   password: string;
@@ -236,6 +267,22 @@ export async function createUser(input: CreateUserInput): Promise<User> {
   }
   if (!input.fullName.trim()) {
     throw new Error("El nombre completo es requerido.");
+  }
+
+  // El correo dejó de ser opcional: es la única forma de que la persona
+  // recupere su cuenta sola (ver /recuperar). Los usuarios históricos sin
+  // correo siguen funcionando, pero no se crean nuevos así.
+  const email = normalizeEmail(input.email ?? "");
+  if (!email) {
+    throw new Error(
+      input.email?.trim()
+        ? "El correo no parece válido."
+        : "El correo es requerido: es lo que permite recuperar la contraseña.",
+    );
+  }
+  const emailTaken = await getUserByEmail(email);
+  if (emailTaken) {
+    throw new Error("Ya hay una cuenta con ese correo.");
   }
 
   const role = input.role ?? "owner";
@@ -265,7 +312,7 @@ export async function createUser(input: CreateUserInput): Promise<User> {
       username,
       hash,
       input.fullName.trim(),
-      input.email?.trim() || null,
+      email,
       role,
       orgId,
       input.parentUserId ?? null,
@@ -344,8 +391,24 @@ export async function updateUserProfile(
     params.push(trimmed);
   }
   if (patch.email !== undefined) {
+    // El correo identifica la cuenta para recuperar la contraseña, así que se
+    // valida y se normaliza igual que en createUser. La unicidad se chequea
+    // acá (excluyendo la propia fila) para dar un mensaje entendible: sin
+    // esto, el índice idx_users_email_unique reventaría con un 23505 crudo.
+    const raw = patch.email?.trim() ?? "";
+    if (!raw) {
+      throw new Error(
+        "El correo es requerido: es lo que permite recuperar la contraseña.",
+      );
+    }
+    const email = normalizeEmail(raw);
+    if (!email) throw new Error("El correo no parece válido.");
+    const taken = await getUserByEmail(email);
+    if (taken && taken.id !== id) {
+      throw new Error("Ya hay una cuenta con ese correo.");
+    }
     sets.push(`email = $${i++}`);
-    params.push(patch.email?.trim() || null);
+    params.push(email);
   }
   if (patch.licenseId !== undefined) {
     sets.push(`license_id = $${i++}`);

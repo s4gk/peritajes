@@ -88,6 +88,10 @@ function isPanelPath(pathname: string): boolean {
 const EXEMPT_EXACT = new Set([
   "/api/auth/login",
   "/api/auth/setup",
+  // Solicitud de recuperación de contraseña: es pre-sesión, igual que login,
+  // así que no hay cookie CSRF que exigir. Va protegido por rate limit y por
+  // no revelar nunca si el correo existe.
+  "/api/auth/forgot",
   "/api/health",
   "/api/webhooks/whatsapp",
   "/api/webhooks/twilio",

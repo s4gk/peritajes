@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 
+import { AuthShell } from "@/components/auth/auth-shell";
 import { countUsers, getCurrentUser } from "@/lib/server/auth";
 
 import { LoginForm } from "./login-form";
@@ -12,8 +13,8 @@ export default async function LoginPage() {
   if ((await countUsers()) === 0) redirect("/setup");
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-muted/30 px-4 py-8">
+    <AuthShell>
       <LoginForm />
-    </div>
+    </AuthShell>
   );
 }
