@@ -1,6 +1,6 @@
 import * as React from "react";
 import Image from "next/image";
-import { CheckCircle2, ShieldCheck, WifiOff } from "lucide-react";
+import { CheckCircle2, ShieldCheck } from "lucide-react";
 
 /**
  * Marco compartido de las pantallas sin sesión (login, recuperar contraseña).
@@ -28,11 +28,6 @@ const PILLARS = [
     body: "Cada peritaje se entrega firmado, con consecutivo oficial y un enlace público para que el cliente lo valide.",
   },
   {
-    icon: WifiOff,
-    title: "Funciona sin señal",
-    body: "La inspección se captura completa en el celular y se sincroniza sola cuando vuelve la conexión.",
-  },
-  {
     icon: CheckCircle2,
     title: "Calificación consistente",
     body: "El puntaje sale de un motor de reglas, no del criterio del día: dos peritos, el mismo resultado.",
@@ -49,7 +44,7 @@ export function AuthShell({
   return (
     <div className="min-h-screen lg:grid lg:grid-cols-[1.05fr_1fr]">
       {/* Panel de marca — solo desktop */}
-      <aside className="relative hidden bg-slate-900 text-slate-50 lg:flex lg:flex-col lg:justify-between lg:p-12">
+      <aside className="relative hidden bg-slate-900 text-slate-50 lg:flex lg:flex-col lg:p-12">
         <div className="flex items-center gap-3">
           <Image
             src="/logo.jpg"
@@ -64,7 +59,8 @@ export function AuthShell({
           </span>
         </div>
 
-        <div className="max-w-md">
+        {/* my-auto: el logo queda arriba y el mensaje centrado en lo que sobra. */}
+        <div className="my-auto max-w-md">
           <h2 className="text-3xl font-semibold leading-tight tracking-tight">
             El peritaje vehicular, hecho como debe ser.
           </h2>
@@ -86,9 +82,6 @@ export function AuthShell({
           </ul>
         </div>
 
-        <p className="text-xs opacity-60">
-          Una plataforma de Vestel · {new Date().getFullYear()}
-        </p>
       </aside>
 
       {/* Formulario */}
