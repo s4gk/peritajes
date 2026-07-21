@@ -15,8 +15,17 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import type { AccessoryEntry } from "@/lib/types";
 import { makeId } from "@/lib/utils";
+import { formatCop } from "@/lib/scoring";
 
 import { useInspection } from "../inspection-context";
+
+/** Suma de los valores (COP) de los accesorios con monto válido. */
+function accessoriesTotal(list: AccessoryEntry[]): number {
+  return list.reduce((sum, a) => {
+    const n = Number(a.value);
+    return sum + (Number.isFinite(n) && n > 0 ? n : 0);
+  }, 0);
+}
 
 const PRESETS = [
   "Tapetes",
@@ -67,6 +76,7 @@ export function AccessoriesStep() {
   }
 
   const total = data.accessories.length;
+  const totalValue = accessoriesTotal(data.accessories);
   const missingPresets = PRESETS.filter(
     (p) => !data.accessories.some((a) => a.name.toLowerCase() === p.toLowerCase()),
   );
@@ -87,6 +97,11 @@ export function AccessoriesStep() {
               Total
             </div>
             <div className="text-lg font-semibold tabular-nums">{total}</div>
+            {totalValue > 0 && (
+              <div className="text-xs font-medium tabular-nums text-muted-foreground">
+                {formatCop(totalValue)}
+              </div>
+            )}
           </div>
         </div>
       </CardHeader>
@@ -164,6 +179,11 @@ function AccessoryRow({
             </div>
           )}
         </div>
+        {entry.value && Number(entry.value) > 0 && (
+          <span className="shrink-0 text-sm font-semibold tabular-nums">
+            {formatCop(Number(entry.value))}
+          </span>
+        )}
         {!disabled && (
           <div className="flex shrink-0 items-center gap-1">
             <Button
@@ -211,6 +231,20 @@ function AccessoryRow({
         >
           <Trash2 className="h-4 w-4 text-danger" />
         </Button>
+      </div>
+      <div className="space-y-1.5">
+        <Input
+          inputMode="numeric"
+          value={entry.value ?? ""}
+          onChange={(e) => onChange({ value: e.target.value.replace(/\D/g, "") })}
+          placeholder="Valor estimado (COP)"
+          className="h-10"
+        />
+        {entry.value && Number(entry.value) > 0 && (
+          <p className="text-[11px] text-muted-foreground">
+            {formatCop(Number(entry.value))}
+          </p>
+        )}
       </div>
       <Textarea
         value={entry.notes ?? ""}

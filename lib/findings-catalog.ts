@@ -1,4 +1,4 @@
-import type { ItemKind } from "./types";
+import type { EconomicImpactLevel, ItemKind, RiskLevel } from "./types";
 
 export type Tone = "success" | "warning" | "danger" | "neutral";
 
@@ -30,6 +30,19 @@ export type FindingOption = {
   tone: Tone;
   severity?: 1 | 2 | 3;
   risks?: RiskTag[];
+  /**
+   * Override EXPLÍCITO del nivel de riesgo de este hallazgo. Opcional: si no se
+   * declara, `classifyFinding` (rules-engine) lo deriva del tono/severidad/tags
+   * según la sección. Úsalo solo cuando la derivación por defecto no represente
+   * bien el hallazgo en su catálogo específico (p.ej. catálogos de frenos/ABS).
+   */
+  riskLevel?: RiskLevel;
+  /**
+   * Override EXPLÍCITO del impacto económico. Misma lógica que `riskLevel`: si
+   * falta, se deriva. Mantenible: opciones nuevas heredan el default sin tener
+   * que recordar asignarlo.
+   */
+  economicImpact?: EconomicImpactLevel;
 };
 
 export type FindingCategory = {

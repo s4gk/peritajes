@@ -42,9 +42,10 @@ Tres roles, jerarquía por organización (tenant):
 ### Mensajería WhatsApp (proveedor enchufable)
 - Todo pasa por el **dispatcher** `lib/server/messaging.ts`, que elige proveedor según `MESSAGING_PROVIDER`:
   - `"twilio"` → `lib/server/whatsapp-twilio.ts` (webhook en `app/api/webhooks/twilio/`)
-  - default → `lib/server/whatsapp-meta.ts` (Meta Cloud API, webhook en `app/api/webhooks/whatsapp/`)
+  - `"kapso"` → **proxy de la API oficial de Meta** ([kapso.com](https://kapso.com)); lo maneja el **mismo** `lib/server/whatsapp-meta.ts` porque habla el protocolo de Meta calcado — solo cambia base URL (`api.kapso.ai`) y auth (`X-API-Key`). Ver `.env.kapso.example`. Recomendado como alternativa fácil/barata a Meta directo (setup rápido + free tier, sin riesgo de baneo). El PDF se adjunta por **link público** (no subida de bytes), así que el caller debe proveer `publicUrl`.
+  - default → `lib/server/whatsapp-meta.ts` (Meta Cloud API directo, webhook en `app/api/webhooks/whatsapp/`)
 - La lógica de negocio (`lib/server/whatsapp-notifications.ts`) habla **solo** con el dispatcher. Cambiar de proveedor = flippear una env var, no tocar negocio.
-- No reintroducir el viejo socket/Baileys (`whatsapp.ts` fue eliminado). Ver `.env.twilio.example`.
+- No reintroducir el viejo socket/Baileys (`whatsapp.ts` fue eliminado): es WhatsApp Web no oficial con riesgo de baneo. Para el caso "fácil/barato" usar **Kapso**, que es oficial.
 
 ### OCR de tarjeta de propiedad
 Dos modos (ver `app/api/ocr/ownership-card/route.ts` y `lib/server/vision-ocr.ts`):

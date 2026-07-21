@@ -1,4 +1,5 @@
 import { analyze } from "./rules-engine";
+import { economicLevelLabel, formatCostRange, riskLevelLabel } from "./scoring";
 import type { StoredInspection } from "./types";
 
 type AppointmentRow = {
@@ -68,6 +69,8 @@ export function inspectionsToCsv(rows: StoredInspection[]): string {
     "Fecha inspección",
     "Hallazgos",
     "Riesgo",
+    "Impacto económico",
+    "Costo estimado reparación",
     "Creado",
     "Actualizado",
   ];
@@ -75,10 +78,14 @@ export function inspectionsToCsv(rows: StoredInspection[]): string {
     const v = r.data.vehicle;
     let findings = 0;
     let risk = "—";
+    let economic = "—";
+    let cost = "—";
     try {
       const report = analyze(r.data);
       findings = report.findings.length;
-      risk = report.level === "low" ? "Bajo" : report.level === "medium" ? "Medio" : "Alto";
+      risk = riskLevelLabel(report.level);
+      economic = economicLevelLabel(report.economicImpact);
+      cost = formatCostRange(report.estimatedRepairCost);
     } catch {
       /* análisis no esencial para el CSV */
     }
@@ -96,6 +103,8 @@ export function inspectionsToCsv(rows: StoredInspection[]): string {
       v.date,
       findings,
       risk,
+      economic,
+      cost,
       r.createdAt,
       r.updatedAt,
     ];

@@ -124,6 +124,9 @@ export function emptyInspection(): InspectionData {
         claimsValue: "",
         propertyCardStatus: "",
         sibgaCode: "",
+        fasecoldaValue: "",
+        fasecoldaCode: "",
+        llanoValue: "",
         depreciationPct: "",
         depreciationNotes: "",
         // Se siembran desde el perfil del usuario logueado (ver vehicle-info).
@@ -210,6 +213,9 @@ export function emptyInspection(): InspectionData {
       claimsValue: "0",
       propertyCardStatus: "Original",
       sibgaCode: "TY-CRC-23-XEI20",
+      fasecoldaValue: "64200000",
+      fasecoldaCode: "08042177",
+      llanoValue: "62000000",
       depreciationPct: "12",
       depreciationNotes:
         "Depreciación moderada: 2 años de uso, kilometraje bajo (28.500 km), sin reparaciones estructurales ni reportes de siniestros.",

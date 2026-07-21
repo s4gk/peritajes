@@ -512,7 +512,7 @@ export const WALKAROUND_SEQUENCE_CAR_5DOORS: readonly WalkaroundEntry[] = [
   // ───── Etapa 1: Frente y delantero izquierdo ─────
   { kind: "item", stage: "front", label: "Capó", sectionId: "bodywork", itemId: "hood" },
   { kind: "item", stage: "front", label: "Bomper delantero", sectionId: "bodywork", itemId: "bumper_front" },
-  { kind: "item", stage: "front", label: "Punta delantera izquierda", sectionId: "bodywork", itemId: "front_corner_l" },
+  { kind: "item", stage: "front", label: "Punta delantera izquierda", sectionId: "chassis", itemId: "front_corner_l" },
   { kind: "item", stage: "front", label: "Guardapolvo metálico delantero izquierdo", sectionId: "bodywork", itemId: "inner_fender_fl" },
   { kind: "item", stage: "front", label: "Torre delantera izquierda", sectionId: "suspension", itemId: "strut_tower_l" },
   { kind: "item", stage: "front", label: "Guardafangos delantero izquierdo", sectionId: "bodywork", itemId: "fender_fl" },
@@ -523,13 +523,13 @@ export const WALKAROUND_SEQUENCE_CAR_5DOORS: readonly WalkaroundEntry[] = [
   { kind: "item", stage: "left", label: "Retrovisor izquierdo", sectionId: "bodywork", itemId: "mirror_l" },
   { kind: "item", stage: "left", label: "Panorámico delantero (vista izquierda)", sectionId: "bodywork", itemId: "windshield_l" },
   { kind: "item", stage: "left", label: "Puerta delantera izquierda (sellante, carteras, estado interno)", sectionId: "bodywork", itemId: "door_fl" },
-  { kind: "item", stage: "left", label: "Paral puerta delantera izquierda", sectionId: "bodywork", itemId: "door_pillar_fl" },
-  { kind: "item", stage: "left", label: "Paral panorámico izquierdo", sectionId: "bodywork", itemId: "windshield_pillar_l" },
-  { kind: "item", stage: "left", label: "Larguero capota izquierdo", sectionId: "bodywork", itemId: "roof_rail_l" },
+  { kind: "item", stage: "left", label: "Paral puerta delantera izquierda", sectionId: "chassis", itemId: "door_pillar_fl" },
+  { kind: "item", stage: "left", label: "Paral parabrisas izquierdo", sectionId: "chassis", itemId: "windshield_pillar_l" },
+  { kind: "item", stage: "left", label: "Larguero capota izquierdo", sectionId: "chassis", itemId: "roof_rail_l" },
   { kind: "item", stage: "left", label: "Techo lado izquierdo", sectionId: "bodywork", itemId: "roof" },
-  { kind: "item", stage: "left", label: "Paral central izquierdo", sectionId: "bodywork", itemId: "pillar_b_l" },
+  { kind: "item", stage: "left", label: "Paral central izquierdo", sectionId: "chassis", itemId: "pillar_b_l" },
   { kind: "compound", stage: "left", label: "Estado interior sección delantera", compoundKey: "interior_delantera" },
-  { kind: "item", stage: "left", label: "Estribo izquierdo", sectionId: "bodywork", itemId: "rocker_l" },
+  { kind: "item", stage: "left", label: "Estribo izquierdo", sectionId: "chassis", itemId: "rocker_l" },
   { kind: "item", stage: "left", label: "Puerta trasera izquierda", sectionId: "bodywork", itemId: "door_rl" },
   { kind: "item", stage: "left", label: "Costado izquierdo", sectionId: "bodywork", itemId: "quarter_l" },
   { kind: "item", stage: "left", label: "Guardapolvo metálico trasero izquierdo", sectionId: "bodywork", itemId: "inner_fender_rl" },
@@ -552,13 +552,13 @@ export const WALKAROUND_SEQUENCE_CAR_5DOORS: readonly WalkaroundEntry[] = [
   { kind: "item", stage: "right", label: "Costado derecho", sectionId: "bodywork", itemId: "quarter_r" },
   { kind: "item", stage: "right", label: "Amortiguador trasero derecho", sectionId: "suspension", itemId: "shock_rr" },
   { kind: "tire", stage: "right", label: "Llanta trasera derecha", position: "rr" },
-  { kind: "item", stage: "right", label: "Larguero capota derecho", sectionId: "bodywork", itemId: "roof_rail_r" },
+  { kind: "item", stage: "right", label: "Larguero capota derecho", sectionId: "chassis", itemId: "roof_rail_r" },
   { kind: "item", stage: "right", label: "Capó (verificación lado derecho)", sectionId: "bodywork", itemId: "hood_2nd" },
-  { kind: "item", stage: "right", label: "Paral central derecho", sectionId: "bodywork", itemId: "pillar_b_r" },
+  { kind: "item", stage: "right", label: "Paral central derecho", sectionId: "chassis", itemId: "pillar_b_r" },
   { kind: "item", stage: "right", label: "Puerta trasera derecha", sectionId: "bodywork", itemId: "door_rr" },
-  { kind: "item", stage: "right", label: "Paral panorámico derecho", sectionId: "bodywork", itemId: "windshield_pillar_r" },
-  { kind: "item", stage: "right", label: "Paral puerta derecha", sectionId: "bodywork", itemId: "door_pillar_fr" },
-  { kind: "item", stage: "right", label: "Estribo derecho", sectionId: "bodywork", itemId: "rocker_r" },
+  { kind: "item", stage: "right", label: "Paral parabrisas derecho", sectionId: "chassis", itemId: "windshield_pillar_r" },
+  { kind: "item", stage: "right", label: "Paral puerta derecha", sectionId: "chassis", itemId: "door_pillar_fr" },
+  { kind: "item", stage: "right", label: "Estribo derecho", sectionId: "chassis", itemId: "rocker_r" },
   { kind: "item", stage: "right", label: "Puerta delantera derecha", sectionId: "bodywork", itemId: "door_fr" },
   { kind: "item", stage: "right", label: "Retrovisor derecho", sectionId: "bodywork", itemId: "mirror_r" },
   { kind: "item", stage: "right", label: "Panorámico delantero (vista derecha)", sectionId: "bodywork", itemId: "windshield_r" },
@@ -567,13 +567,13 @@ export const WALKAROUND_SEQUENCE_CAR_5DOORS: readonly WalkaroundEntry[] = [
   { kind: "item", stage: "right", label: "Guardapolvo metálico delantero derecho", sectionId: "bodywork", itemId: "inner_fender_fr" },
   { kind: "item", stage: "right", label: "Amortiguador delantero derecho", sectionId: "suspension", itemId: "shock_fr" },
   { kind: "tire", stage: "right", label: "Llanta delantera derecha", position: "fr" },
-  { kind: "item", stage: "right", label: "Punta delantera derecha", sectionId: "bodywork", itemId: "front_corner_r" },
+  { kind: "item", stage: "right", label: "Punta delantera derecha", sectionId: "chassis", itemId: "front_corner_r" },
 
   // ───── Etapa 5: Motor y accesorios ─────
   { kind: "item", stage: "engine", label: "Estado motor (fugas, ruidos, aceite, filtros, líquidos)", sectionId: "engine", itemId: "general_check" },
   { kind: "compound", stage: "engine", label: "Accesorios", compoundKey: "accessories" },
   { kind: "item", stage: "engine", label: "Barra estabilizadora", sectionId: "suspension", itemId: "stabilizer" },
-  { kind: "item", stage: "engine", label: "Cuna del motor", sectionId: "engine", itemId: "cradle" },
+  { kind: "item", stage: "engine", label: "Cuna del motor", sectionId: "chassis", itemId: "cradle" },
   { kind: "item", stage: "engine", label: "Soporte de motor", sectionId: "engine", itemId: "engine_mounts" },
   { kind: "item", stage: "engine", label: "Cárter", sectionId: "engine", itemId: "oil_pan" },
   { kind: "item", stage: "engine", label: "Farola delantera izquierda", sectionId: "bodywork", itemId: "headlight_l" },
@@ -596,17 +596,21 @@ export const WALKAROUND_SEQUENCE_CAR_5DOORS: readonly WalkaroundEntry[] = [
   { kind: "item", stage: "underside", label: "Estado iluminación vehículo", sectionId: "electrical", itemId: "lighting_overall" },
 ];
 
-/** Secuencia canónica de 63 items para camionetas, camperos y pickups de
- *  chasis independiente (campero_2doors, campero_5doors, pickup_single,
- *  pickup_double). Difiere de car_5doors en que recorre los largueros de
- *  chasis, el paral trasero de cabina y reemplaza la cuna del motor por el
- *  puente de suspensión. Las variantes 2p filtran las puertas traseras desde
- *  walkaroundSequenceFor. */
+/** Secuencia base para camionetas, camperos y pickups de chasis independiente
+ *  (campero_2doors, campero_5doors, pickup_single, pickup_double). Difiere de
+ *  car_5doors en el paral trasero de cabina y en reemplazar la cuna del motor
+ *  por el puente de suspensión. Incluye TANTO los largueros de chasis como las
+ *  4 puntas; walkaroundSequenceFor deja solo el set que aplica: largueros para
+ *  camperos y pickup doble (vehicleHasChassisRails), puntas para la pickup
+ *  sencilla. Las variantes 2p filtran además las puertas traseras. */
 export const WALKAROUND_SEQUENCE_CHASSIS_INDEPENDENT: readonly WalkaroundEntry[] = [
   // ───── Etapa 1: Frente y delantero izquierdo ─────
   { kind: "item", stage: "front", label: "Capó", sectionId: "bodywork", itemId: "hood" },
   { kind: "item", stage: "front", label: "Bomper delantero", sectionId: "bodywork", itemId: "bumper_front" },
   { kind: "item", stage: "front", label: "Larguero chasis izquierdo", sectionId: "chassis", itemId: "chassis_rail_l" },
+  // Punta delantera izquierda — alternativa al larguero para los tipos sin
+  // largueros (filtrada en walkaroundSequenceFor según vehicleHasChassisRails).
+  { kind: "item", stage: "front", label: "Punta delantera izquierda", sectionId: "chassis", itemId: "front_corner_l" },
   { kind: "item", stage: "front", label: "Guardapolvo metálico delantero izquierdo", sectionId: "bodywork", itemId: "inner_fender_fl" },
   { kind: "item", stage: "front", label: "Torre delantera izquierda", sectionId: "suspension", itemId: "strut_tower_l" },
   { kind: "item", stage: "front", label: "Amortiguador delantero izquierdo", sectionId: "suspension", itemId: "shock_fl" },
@@ -617,14 +621,14 @@ export const WALKAROUND_SEQUENCE_CHASSIS_INDEPENDENT: readonly WalkaroundEntry[]
   { kind: "item", stage: "left", label: "Retrovisor izquierdo", sectionId: "bodywork", itemId: "mirror_l" },
   { kind: "item", stage: "left", label: "Panorámico delantero (vista izquierda)", sectionId: "bodywork", itemId: "windshield_l" },
   { kind: "item", stage: "left", label: "Puerta delantera izquierda", sectionId: "bodywork", itemId: "door_fl" },
-  { kind: "item", stage: "left", label: "Paral puerta izquierda", sectionId: "bodywork", itemId: "door_pillar_fl" },
-  { kind: "item", stage: "left", label: "Paral parabrisas izquierdo", sectionId: "bodywork", itemId: "windshield_pillar_l" },
-  { kind: "item", stage: "left", label: "Larguero capota izquierdo", sectionId: "bodywork", itemId: "roof_rail_l" },
+  { kind: "item", stage: "left", label: "Paral puerta izquierda", sectionId: "chassis", itemId: "door_pillar_fl" },
+  { kind: "item", stage: "left", label: "Paral parabrisas izquierdo", sectionId: "chassis", itemId: "windshield_pillar_l" },
+  { kind: "item", stage: "left", label: "Larguero capota izquierdo", sectionId: "chassis", itemId: "roof_rail_l" },
   { kind: "item", stage: "left", label: "Techo lado izquierdo", sectionId: "bodywork", itemId: "roof" },
-  { kind: "item", stage: "left", label: "Paral central izquierdo", sectionId: "bodywork", itemId: "pillar_b_l" },
-  { kind: "item", stage: "left", label: "Paral trasero cabina izquierdo", sectionId: "bodywork", itemId: "cabin_pillar_rear_l" },
+  { kind: "item", stage: "left", label: "Paral central izquierdo", sectionId: "chassis", itemId: "pillar_b_l" },
+  { kind: "item", stage: "left", label: "Paral trasero cabina izquierdo", sectionId: "chassis", itemId: "cabin_pillar_rear_l" },
   { kind: "compound", stage: "left", label: "Estado interior sección delantera", compoundKey: "interior_delantera" },
-  { kind: "item", stage: "left", label: "Estribo izquierdo", sectionId: "bodywork", itemId: "rocker_l" },
+  { kind: "item", stage: "left", label: "Estribo izquierdo", sectionId: "chassis", itemId: "rocker_l" },
   { kind: "item", stage: "left", label: "Puerta trasera izquierda", sectionId: "bodywork", itemId: "door_rl" },
   { kind: "item", stage: "left", label: "Costado izquierdo", sectionId: "bodywork", itemId: "quarter_l" },
   { kind: "item", stage: "left", label: "Guardapolvo metálico trasero izquierdo", sectionId: "bodywork", itemId: "inner_fender_rl" },
@@ -640,20 +644,23 @@ export const WALKAROUND_SEQUENCE_CHASSIS_INDEPENDENT: readonly WalkaroundEntry[]
   { kind: "tire", stage: "rear", label: "Llanta de repuesto", position: "spare" },
   { kind: "item", stage: "rear", label: "Stop izquierdo", sectionId: "bodywork", itemId: "taillight_l" },
   { kind: "item", stage: "rear", label: "Stop derecho", sectionId: "bodywork", itemId: "taillight_r" },
+  // Puntas traseras — alternativa a los largueros para los tipos sin largueros.
+  { kind: "item", stage: "rear", label: "Punta trasera izquierda", sectionId: "chassis", itemId: "rear_corner_l" },
+  { kind: "item", stage: "rear", label: "Punta trasera derecha", sectionId: "chassis", itemId: "rear_corner_r" },
 
   // ───── Etapa 4: Costado derecho ─────
   { kind: "tire", stage: "right", label: "Llanta trasera derecha", position: "rr" },
   { kind: "item", stage: "right", label: "Guardapolvo metálico trasero derecho", sectionId: "bodywork", itemId: "inner_fender_rr" },
   { kind: "item", stage: "right", label: "Costado derecho", sectionId: "bodywork", itemId: "quarter_r" },
-  { kind: "item", stage: "right", label: "Paral trasero cabina derecho", sectionId: "bodywork", itemId: "cabin_pillar_rear_r" },
-  { kind: "item", stage: "right", label: "Larguero capota derecho", sectionId: "bodywork", itemId: "roof_rail_r" },
+  { kind: "item", stage: "right", label: "Paral trasero cabina derecho", sectionId: "chassis", itemId: "cabin_pillar_rear_r" },
+  { kind: "item", stage: "right", label: "Larguero capota derecho", sectionId: "chassis", itemId: "roof_rail_r" },
   { kind: "item", stage: "right", label: "Capó (verificación lado derecho)", sectionId: "bodywork", itemId: "hood_2nd" },
-  { kind: "item", stage: "right", label: "Paral central derecho", sectionId: "bodywork", itemId: "pillar_b_r" },
+  { kind: "item", stage: "right", label: "Paral central derecho", sectionId: "chassis", itemId: "pillar_b_r" },
   { kind: "item", stage: "right", label: "Puerta trasera derecha", sectionId: "bodywork", itemId: "door_rr" },
   { kind: "item", stage: "right", label: "Puerta delantera derecha", sectionId: "bodywork", itemId: "door_fr" },
-  { kind: "item", stage: "right", label: "Paral parabrisas derecho", sectionId: "bodywork", itemId: "windshield_pillar_r" },
-  { kind: "item", stage: "right", label: "Paral puerta derecho", sectionId: "bodywork", itemId: "door_pillar_fr" },
-  { kind: "item", stage: "right", label: "Estribo derecho", sectionId: "bodywork", itemId: "rocker_r" },
+  { kind: "item", stage: "right", label: "Paral parabrisas derecho", sectionId: "chassis", itemId: "windshield_pillar_r" },
+  { kind: "item", stage: "right", label: "Paral puerta derecho", sectionId: "chassis", itemId: "door_pillar_fr" },
+  { kind: "item", stage: "right", label: "Estribo derecho", sectionId: "chassis", itemId: "rocker_r" },
   { kind: "item", stage: "right", label: "Retrovisor derecho", sectionId: "bodywork", itemId: "mirror_r" },
   { kind: "item", stage: "right", label: "Panorámico delantero (vista derecha)", sectionId: "bodywork", itemId: "windshield_r" },
   { kind: "item", stage: "right", label: "Guardafango delantero derecho", sectionId: "bodywork", itemId: "fender_fr" },
@@ -662,6 +669,8 @@ export const WALKAROUND_SEQUENCE_CHASSIS_INDEPENDENT: readonly WalkaroundEntry[]
   { kind: "item", stage: "right", label: "Amortiguador delantero derecho", sectionId: "suspension", itemId: "shock_fr" },
   { kind: "tire", stage: "right", label: "Llanta delantera derecha", position: "fr" },
   { kind: "item", stage: "right", label: "Larguero chasis derecho", sectionId: "chassis", itemId: "chassis_rail_r" },
+  // Punta delantera derecha — alternativa al larguero para los tipos sin largueros.
+  { kind: "item", stage: "right", label: "Punta delantera derecha", sectionId: "chassis", itemId: "front_corner_r" },
 
   // ───── Etapa 5: Motor y accesorios ─────
   { kind: "item", stage: "engine", label: "Estado motor (fugas, ruidos, aceite, filtros, líquidos)", sectionId: "engine", itemId: "general_check" },
@@ -688,6 +697,50 @@ export const WALKAROUND_SEQUENCE_CHASSIS_INDEPENDENT: readonly WalkaroundEntry[]
   { kind: "item", stage: "underside", label: "Cableado / fusibles", sectionId: "electrical", itemId: "wiring_fuses" },
   { kind: "item", stage: "underside", label: "Iluminación del vehículo", sectionId: "electrical", itemId: "lighting_overall" },
 ];
+
+/** Vehículos cuya estructura se califica por LARGUEROS DE CHASIS (chasis
+ *  independiente con rieles longitudinales): camperos y pickup doble cabina. El
+ *  resto del parque (incluida la pickup sencilla) se califica por las 4 PUNTAS
+ *  del vehículo. Decisión de negocio — controla qué ítem estructural entra al
+ *  recorrido, al PDF y a la calificación. Largueros y puntas son mutuamente
+ *  excluyentes por vehículo. */
+const CHASSIS_RAIL_VEHICLE_TYPES: readonly VehicleType[] = [
+  "campero_2doors",
+  "campero_5doors",
+  "pickup_double",
+];
+
+export function vehicleHasChassisRails(type: VehicleType): boolean {
+  return CHASSIS_RAIL_VEHICLE_TYPES.includes(type);
+}
+
+/** Vehículos sin tren motriz propio: no se les inspecciona la cuna del motor. */
+const MOTORLESS_VEHICLE_TYPES: readonly VehicleType[] = ["trailer"];
+
+const CHASSIS_RAIL_ITEM_IDS: readonly string[] = ["chassis_rail_l", "chassis_rail_r"];
+const VEHICLE_CORNER_ITEM_IDS: readonly string[] = [
+  "front_corner_l",
+  "front_corner_r",
+  "rear_corner_l",
+  "rear_corner_r",
+];
+const CABIN_REAR_PILLAR_ITEM_IDS: readonly string[] = [
+  "cabin_pillar_rear_l",
+  "cabin_pillar_rear_r",
+];
+
+/** ¿El ítem estructural NO aplica a este tipo de vehículo? Reglas de negocio:
+ *  - largueros de chasis: solo vehículos con rieles (camperos + pickup doble);
+ *  - las 4 puntas: solo los que NO tienen rieles;
+ *  - paral trasero de cabina: solo pickup doble cabina.
+ *  El resto de ítems estructurales (parales, piso, refuerzos) nunca se excluyen. */
+function isStructuralItemExcluded(itemId: string, vehicleType: VehicleType): boolean {
+  const hasRails = vehicleHasChassisRails(vehicleType);
+  if (CHASSIS_RAIL_ITEM_IDS.includes(itemId)) return !hasRails;
+  if (VEHICLE_CORNER_ITEM_IDS.includes(itemId)) return hasRails;
+  if (CABIN_REAR_PILLAR_ITEM_IDS.includes(itemId)) return vehicleType !== "pickup_double";
+  return false;
+}
 
 /** Construye el recorrido para un tipo de vehículo. Para car_5doors usa la
  *  secuencia canónica de carrocería autoportante. Para SUVs y pickups (chasis
@@ -755,6 +808,11 @@ export function walkaroundSequenceFor(
       ) {
         return false;
       }
+      // Largueros vs puntas (la pickup sencilla lleva puntas; camperos y pickup
+      // doble llevan largueros) y paral trasero de cabina (solo pickup doble).
+      if (e.kind === "item" && isStructuralItemExcluded(e.itemId, vehicleType)) {
+        return false;
+      }
       return true;
     });
   }
@@ -817,6 +875,11 @@ export function walkaroundSequenceFor(
   if (activeSet.has("chassis")) {
     for (const g of CHASSIS_SECTION.groups) {
       for (const item of g.items) {
+        // Largueros vs puntas y paral trasero de cabina según el tipo. Los demás
+        // ítems estructurales (parales, piso, refuerzos) siempre se incluyen.
+        if (isStructuralItemExcluded(item.id, vehicleType)) continue;
+        // La cuna del motor no aplica a vehículos sin tren motriz (tráiler).
+        if (item.id === "cradle" && MOTORLESS_VEHICLE_TYPES.includes(vehicleType)) continue;
         seq.push({
           kind: "item",
           stage: "general",
@@ -870,8 +933,6 @@ export const BODYWORK_SECTION: InspectionSectionDef = {
         { id: "hood", label: "Capó", kind: "bodywork" },
         { id: "bumper_front", label: "Bomper delantero", kind: "bodywork" },
         { id: "hood_2nd", label: "Capó (verificación lado derecho)", kind: "bodywork" },
-        { id: "front_corner_l", label: "Punta delantera izquierda", kind: "bodywork" },
-        { id: "front_corner_r", label: "Punta delantera derecha", kind: "bodywork" },
         { id: "inner_fender_fl", label: "Guardapolvo metálico delantero izquierdo", kind: "bodywork" },
         { id: "inner_fender_fr", label: "Guardapolvo metálico delantero derecho", kind: "bodywork" },
         { id: "fender_fl", label: "Guardafangos delantero izquierdo", kind: "bodywork" },
@@ -892,16 +953,8 @@ export const BODYWORK_SECTION: InspectionSectionDef = {
         { id: "door_fr", label: "Puerta delantera derecha", kind: "bodywork", hasSealantCheck: true },
         { id: "door_rl", label: "Puerta trasera izquierda", kind: "bodywork", hasSealantCheck: true },
         { id: "door_rr", label: "Puerta trasera derecha", kind: "bodywork", hasSealantCheck: true },
-        { id: "door_pillar_fl", label: "Paral puerta delantera izquierda", kind: "bodywork" },
-        { id: "door_pillar_fr", label: "Paral puerta delantera derecha", kind: "bodywork" },
-        { id: "windshield_pillar_l", label: "Paral panorámico izquierdo", kind: "bodywork" },
-        { id: "windshield_pillar_r", label: "Paral panorámico derecho", kind: "bodywork" },
-        { id: "roof_rail_l", label: "Larguero capota izquierdo", kind: "bodywork" },
-        { id: "roof_rail_r", label: "Larguero capota derecho", kind: "bodywork" },
-        { id: "pillar_b_l", label: "Paral central izquierdo", kind: "bodywork" },
-        { id: "pillar_b_r", label: "Paral central derecho", kind: "bodywork" },
-        { id: "rocker_l", label: "Estribo izquierdo", kind: "bodywork" },
-        { id: "rocker_r", label: "Estribo derecho", kind: "bodywork" },
+        // Parales (puerta, panorámico/parabrisas, central), larguero capota y
+        // estribos migraron a CHASSIS_SECTION (sección Estructura).
         { id: "quarter_l", label: "Costado izquierdo", kind: "bodywork" },
         { id: "quarter_r", label: "Costado derecho", kind: "bodywork" },
         { id: "inner_fender_rl", label: "Guardapolvo metálico trasero izquierdo", kind: "bodywork" },
@@ -931,6 +984,14 @@ export const BODYWORK_SECTION: InspectionSectionDef = {
 export const CHASSIS_SECTION: InspectionSectionDef = {
   id: "chassis",
   label: "Chasis y estructura",
+  // Define el UNIVERSO de ítems estructurales. La sección se renderiza/califica
+  // "define-driven": tanto el PDF (renderSectionDualTable) como el scoring
+  // (rules-engine.entriesOf) iteran estos ítems pero solo cuentan los que tienen
+  // dato en data.chassis. Por eso es seguro listar acá largueros + puntas +
+  // parales juntos: cada tipo de vehículo captura solo el subconjunto que le
+  // aplica (ver walkaroundSequenceFor). Los parales (paral puerta / larguero
+  // capota / paral central) migraron desde carrocería a esta sección para que
+  // entren al pilar de Estructura y seguridad.
   groups: [
     {
       id: "structure",
@@ -938,8 +999,31 @@ export const CHASSIS_SECTION: InspectionSectionDef = {
       items: [
         { id: "floor", label: "Piso de carrocería", kind: "structural" },
         { id: "reinforcements", label: "Refuerzos de carrocería", kind: "structural" },
+        { id: "door_pillar_fl", label: "Paral puerta delantera izquierda", kind: "structural" },
+        { id: "door_pillar_fr", label: "Paral puerta delantera derecha", kind: "structural" },
+        { id: "pillar_b_l", label: "Paral central izquierdo", kind: "structural" },
+        { id: "pillar_b_r", label: "Paral central derecho", kind: "structural" },
+        { id: "windshield_pillar_l", label: "Paral parabrisas izquierdo", kind: "structural" },
+        { id: "windshield_pillar_r", label: "Paral parabrisas derecho", kind: "structural" },
+        { id: "roof_rail_l", label: "Larguero capota izquierdo", kind: "structural" },
+        { id: "roof_rail_r", label: "Larguero capota derecho", kind: "structural" },
+        { id: "rocker_l", label: "Estribo izquierdo", kind: "structural" },
+        { id: "rocker_r", label: "Estribo derecho", kind: "structural" },
+        // Cuna del motor — pieza estructural; en autoportantes se llama cuna,
+        // en chasis independiente el equivalente es el puente de suspensión
+        // (suspension_bridge), que sigue en la sección de motor.
+        { id: "cradle", label: "Cuna del motor", kind: "structural" },
+        // Paral trasero de cabina — solo se captura en pickup doble cabina.
+        { id: "cabin_pillar_rear_l", label: "Paral trasero cabina izquierdo", kind: "structural" },
+        { id: "cabin_pillar_rear_r", label: "Paral trasero cabina derecho", kind: "structural" },
+        // Largueros de chasis — solo se capturan en camperos y pickup doble
+        // cabina (chasis independiente con rieles). Ver vehicleHasChassisRails.
         { id: "chassis_rail_l", label: "Larguero chasis izquierdo", kind: "structural" },
         { id: "chassis_rail_r", label: "Larguero chasis derecho", kind: "structural" },
+        // Las 4 puntas del vehículo — se califican en todos los demás tipos
+        // (los que NO llevan largueros de chasis).
+        { id: "front_corner_l", label: "Punta delantera izquierda", kind: "structural" },
+        { id: "front_corner_r", label: "Punta delantera derecha", kind: "structural" },
         { id: "rear_corner_l", label: "Punta trasera izquierda", kind: "structural" },
         { id: "rear_corner_r", label: "Punta trasera derecha", kind: "structural" },
       ],
@@ -992,7 +1076,8 @@ export const ENGINE_SECTION: InspectionSectionDef = {
       id: "components",
       label: "Componentes",
       items: [
-        { id: "cradle", label: "Cuna del motor", kind: "mechanical" },
+        // Cuna del motor (cradle) migró a CHASSIS_SECTION (Estructura). El
+        // puente de suspensión (equivalente en chasis independiente) sigue acá.
         { id: "suspension_bridge", label: "Puente de suspensión", kind: "mechanical" },
         { id: "engine_mounts", label: "Soporte de motor", kind: "mechanical" },
         { id: "oil_pan", label: "Cárter", kind: "mechanical" },
@@ -1165,18 +1250,8 @@ const CHASSIS_INDEPENDENT_STRUCTURAL_ITEMS = [
   { id: "windshield_l", label: "Panorámico delantero (vista izquierda)", kind: "panoramic" as const },
   { id: "windshield_r", label: "Panorámico delantero (vista derecha)", kind: "panoramic" as const },
   { id: "hood_2nd", label: "Capó (verificación lado derecho)", kind: "bodywork" as const },
-  { id: "door_pillar_fl", label: "Paral puerta delantera izquierda", kind: "bodywork" as const },
-  { id: "door_pillar_fr", label: "Paral puerta delantera derecha", kind: "bodywork" as const },
-  { id: "windshield_pillar_l", label: "Paral panorámico izquierdo", kind: "bodywork" as const },
-  { id: "windshield_pillar_r", label: "Paral panorámico derecho", kind: "bodywork" as const },
-  { id: "roof_rail_l", label: "Larguero capota izquierdo", kind: "bodywork" as const },
-  { id: "roof_rail_r", label: "Larguero capota derecho", kind: "bodywork" as const },
-  { id: "pillar_b_l", label: "Paral central izquierdo", kind: "bodywork" as const },
-  { id: "pillar_b_r", label: "Paral central derecho", kind: "bodywork" as const },
-  { id: "cabin_pillar_rear_l", label: "Paral trasero cabina izquierdo", kind: "bodywork" as const },
-  { id: "cabin_pillar_rear_r", label: "Paral trasero cabina derecho", kind: "bodywork" as const },
-  { id: "rocker_l", label: "Estribo izquierdo", kind: "bodywork" as const },
-  { id: "rocker_r", label: "Estribo derecho", kind: "bodywork" as const },
+  // Parales (puerta, parabrisas, central), larguero capota, estribos, paral
+  // trasero de cabina y cuna del motor migraron a CHASSIS_SECTION (Estructura).
   { id: "inner_fender_fl", label: "Guardapolvo metálico delantero izquierdo", kind: "bodywork" as const },
   { id: "inner_fender_fr", label: "Guardapolvo metálico delantero derecho", kind: "bodywork" as const },
   { id: "inner_fender_rl", label: "Guardapolvo metálico trasero izquierdo", kind: "bodywork" as const },
@@ -1509,8 +1584,7 @@ const HEAVY_BODYWORK_GROUPS = (withHood: boolean) => [
       { id: "door_fr", label: "Puerta derecha", kind: "bodywork" as const, hasSealantCheck: true },
       { id: "fender_fl", label: "Guardabarros delantero izquierdo", kind: "bodywork" as const },
       { id: "fender_fr", label: "Guardabarros delantero derecho", kind: "bodywork" as const },
-      { id: "rocker_l", label: "Estribo izquierdo", kind: "bodywork" as const },
-      { id: "rocker_r", label: "Estribo derecho", kind: "bodywork" as const },
+      // Estribos (rocker) los aporta CHASSIS_SECTION vía el derivador genérico.
       { id: "mirror_l", label: "Espejo izquierdo", kind: "bodywork" as const },
       { id: "mirror_r", label: "Espejo derecho", kind: "bodywork" as const },
       { id: "cabin_rear", label: "Pared trasera de cabina", kind: "bodywork" as const },

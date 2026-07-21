@@ -46,8 +46,9 @@ import {
   listInspections,
 } from "@/lib/inspections-store";
 import { idbListMutations } from "@/lib/client/idb";
-import { downloadInspectionPdf } from "@/lib/pdf-client";
+import { downloadStoredPdf } from "@/lib/pdf-client";
 import { analyze, riskTone } from "@/lib/rules-engine";
+import { riskLevelLabel } from "@/lib/scoring";
 import type { StoredInspection } from "@/lib/types";
 import { formatDate } from "@/lib/utils";
 
@@ -583,11 +584,14 @@ function InspectionCard({
     e.stopPropagation();
     setPdfBusy(true);
     try {
-      await downloadInspectionPdf(item.data, "executive", item.id);
-      toast.show({ title: "PDF generado", variant: "success" });
+      // El botón solo se muestra en peritajes finalizados, así que el PDF ya
+      // está en el server: lo pedimos por GET en vez de subir la inspección
+      // entera con las fotos.
+      await downloadStoredPdf(item.id, item.data);
+      toast.show({ title: "PDF descargado", variant: "success" });
     } catch (err) {
       toast.show({
-        title: "No se pudo generar el PDF",
+        title: "No se pudo descargar el PDF",
         description: err instanceof Error ? err.message : "Error desconocido",
         variant: "danger",
       });
@@ -620,7 +624,7 @@ function InspectionCard({
           </div>
           <div className="flex shrink-0 flex-col items-end gap-1">
             <Badge variant={tone} className="text-[10px]">
-              {report.level === "low" ? "Bajo" : report.level === "medium" ? "Medio" : "Alto"}
+              {riskLevelLabel(report.level)}
             </Badge>
             <span className="inline-flex items-center rounded-full border bg-muted/40 px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
               {(VEHICLE_TYPES[item.data.vehicleType] ?? VEHICLE_TYPES[FALLBACK_VEHICLE_TYPE]).short}
@@ -699,22 +703,29 @@ function InspectionCard({
             <FileText className="h-4 w-4" /> Abrir
           </Button>
           <div className="flex items-center gap-1">
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              className="h-10 w-10"
-              onClick={handleDownloadPdf}
-              disabled={pdfBusy}
-              aria-label="Descargar PDF"
-              title="Descargar PDF"
-            >
-              {pdfBusy ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <Download className="h-4 w-4" />
-              )}
-            </Button>
+            {/* Solo peritajes finalizados. En borrador el server rechaza la
+                descarga (el PDF entregable existe únicamente después de
+                finalizar), así que mostrar el botón acá era ofrecer algo que
+                siempre fallaba con un 403. Para ver un borrador está
+                "Previsualizar PDF" dentro del peritaje. */}
+            {isLocked && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="h-10 w-10"
+                onClick={handleDownloadPdf}
+                disabled={pdfBusy}
+                aria-label="Descargar PDF"
+                title="Descargar PDF"
+              >
+                {pdfBusy ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Download className="h-4 w-4" />
+                )}
+              </Button>
+            )}
             <Button
               type="button"
               variant="ghost"

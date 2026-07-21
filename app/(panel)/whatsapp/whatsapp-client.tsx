@@ -10,7 +10,7 @@ import { useToast } from "@/components/ui/toast";
 import { apiFetch } from "@/lib/client/api-client";
 
 type Status = {
-  provider?: "meta";
+  provider?: "meta" | "twilio" | "kapso";
   status: "disconnected" | "connected";
   phone: string | null;
   connectedAt: number | null;
@@ -71,15 +71,22 @@ export function WhatsAppClient() {
   }
 
   const isConnected = state.status === "connected";
+  const isKapso = state.provider === "kapso";
+  const providerLabel =
+    state.provider === "twilio"
+      ? "Twilio"
+      : isKapso
+        ? "Kapso (API Oficial)"
+        : "API Oficial";
 
   return (
     <div className="space-y-4">
       <div>
         <h1 className="text-2xl font-semibold tracking-tight">WhatsApp</h1>
         <p className="text-sm text-muted-foreground">
-          Integración con la API oficial de WhatsApp Business de Meta. Los
-          mensajes (intake nuevo, link de firma, PDF final, recordatorios) se
-          envían mediante plantillas aprobadas por Meta.
+          {isKapso
+            ? "Integración con la API oficial de WhatsApp Business vía Kapso (proxy de Meta Cloud API). Los mensajes (intake nuevo, link de firma, PDF final, recordatorios) se envían mediante plantillas aprobadas por Meta."
+            : "Integración con la API oficial de WhatsApp Business de Meta. Los mensajes (intake nuevo, link de firma, PDF final, recordatorios) se envían mediante plantillas aprobadas por Meta."}
         </p>
       </div>
 
@@ -88,7 +95,7 @@ export function WhatsAppClient() {
           <CardTitle className="flex items-center gap-2 text-base">
             <MessageCircle className="h-4 w-4" /> Estado de conexión
             <span className="rounded-full bg-primary/10 px-2 py-0.5 text-xs font-normal text-primary">
-              API Oficial
+              {providerLabel}
             </span>
           </CardTitle>
           <Badge variant={isConnected ? "success" : "secondary"}>
@@ -104,7 +111,7 @@ export function WhatsAppClient() {
           )}
           {isConnected && (
             <div className="text-sm text-muted-foreground">
-              Token configurado y activo.
+              {isKapso ? "API key configurada y activa." : "Token configurado y activo."}
             </div>
           )}
           {state.lastError && (
@@ -138,14 +145,29 @@ export function WhatsAppClient() {
         <p className="mb-1 font-medium text-foreground">Recomendaciones</p>
         <ul className="list-disc space-y-1 pl-4">
           <li>
-            Para que los mensajes lleguen, crea las plantillas en{" "}
-            <strong>Meta Business Manager</strong> con los nombres exactos
-            documentados en <code>lib/server/whatsapp-meta.ts</code>.
+            Para que los mensajes lleguen, crea las plantillas{" "}
+            {isKapso ? "en Kapso/Meta" : (
+              <>
+                en <strong>Meta Business Manager</strong>
+              </>
+            )}{" "}
+            con los nombres exactos documentados en{" "}
+            <code>lib/server/whatsapp-meta.ts</code>.
           </li>
           <li>
-            Registra el webhook <code>/api/webhooks/whatsapp</code> en Meta para
-            recibir confirmaciones de entrega y mensajes entrantes, y configura{" "}
-            <code>META_WA_APP_SECRET</code> para validar la firma.
+            {isKapso ? (
+              <>
+                Configura el webhook entrante en el dashboard de{" "}
+                <strong>Kapso</strong> para recibir confirmaciones de entrega y
+                mensajes.
+              </>
+            ) : (
+              <>
+                Registra el webhook <code>/api/webhooks/whatsapp</code> en Meta
+                para recibir confirmaciones de entrega y mensajes entrantes, y
+                configura <code>META_WA_APP_SECRET</code> para validar la firma.
+              </>
+            )}
           </li>
           <li>
             Asegúrate que cada usuario del equipo tenga su teléfono WA en{" "}

@@ -143,10 +143,15 @@ function transmissionLabel(v: string): string {
   return map[v] ?? "—";
 }
 
+// Mapeo automático del puntaje a color/etiqueta. Decisión de negocio: DOS bandas
+// parejas para todos los pilares y la nota global — aprobado (verde) desde 55%,
+// rechazado (rojo) por debajo. La banda amarilla intermedia ("FUERA ESTÁNDAR")
+// del cálculo automático se eliminó (sigue existiendo solo como concepto MANUAL
+// que el perito puede elegir a mano, ver CONDITION_OPTIONS en summary.tsx).
+const APPROVAL_THRESHOLD = 55;
+
 function scoreTone(pct: number): "success" | "warning" | "danger" {
-  if (pct >= 80) return "success";
-  if (pct >= 60) return "warning";
-  return "danger";
+  return pct >= APPROVAL_THRESHOLD ? "success" : "danger";
 }
 
 function tierLabel(pct: number | null): {
@@ -154,8 +159,7 @@ function tierLabel(pct: number | null): {
   tone: "success" | "warning" | "danger" | "muted";
 } {
   if (pct === null) return { label: "Sin inspeccionar", tone: "muted" };
-  if (pct >= 80) return { label: "ESTÁNDAR", tone: "success" };
-  if (pct >= 60) return { label: "FUERA ESTÁNDAR", tone: "warning" };
+  if (pct >= APPROVAL_THRESHOLD) return { label: "ESTÁNDAR", tone: "success" };
   return { label: "ASEGURABILIDAD SUJETA A POLÍTICAS", tone: "danger" };
 }
 
@@ -291,7 +295,7 @@ function renderPillarSummary(
     ? ""
     : `
       <div class="gates-block">
-        <div class="gates-label">⚠ Gates de seguridad activos — fuerzan riesgo alto sin importar la nota global</div>
+        <div class="gates-label">⚠ Gates de seguridad activos — fuerzan riesgo alto o crítico sin importar la nota global</div>
         <ul class="gates-list">
           ${gates
             .map(
@@ -1245,16 +1249,27 @@ function renderAccessories(data: InspectionData, headingHtml: string): string {
     `;
   }
 
-  const heroLabel = `${list.length} accesorio${list.length === 1 ? "" : "s"} registrado${list.length === 1 ? "" : "s"}`;
+  const totalValue = list.reduce((sum, a) => {
+    const n = Number(a.value);
+    return sum + (Number.isFinite(n) && n > 0 ? n : 0);
+  }, 0);
+  const anyValue = totalValue > 0;
 
-  const cells = list
-    .map(
-      (a) => `
-        <div class="docs-cell accessory-cell">
-          <span class="docs-label">${escapeHtml(a.name)}</span>
-          ${a.notes ? `<span class="accessory-notes">${escapeHtml(a.notes)}</span>` : ""}
-        </div>`,
-    )
+  const count = `${list.length} accesorio${list.length === 1 ? "" : "s"} registrado${list.length === 1 ? "" : "s"}`;
+  const heroLabel = anyValue
+    ? `${count} · valor total estimado ${fmtCop(String(totalValue))}`
+    : count;
+
+  const rows = list
+    .map((a) => {
+      const n = Number(a.value);
+      const val = Number.isFinite(n) && n > 0 ? escapeHtml(fmtCop(a.value)) : "—";
+      return `
+        <tr>
+          <td>${escapeHtml(a.name)}${a.notes ? `<div class="accessory-notes">${escapeHtml(a.notes)}</div>` : ""}</td>
+          <td class="num">${val}</td>
+        </tr>`;
+    })
     .join("");
 
   return `
@@ -1266,7 +1281,17 @@ function renderAccessories(data: InspectionData, headingHtml: string): string {
         </div>
         <span class="proc-hero-pct">${list.length}</span>
       </div>
-      <div class="docs-grid accessory-grid">${cells}</div>
+      <table class="value-table accessory-table">
+        <thead>
+          <tr><th>Accesorio</th><th class="num">Valor estimado</th></tr>
+        </thead>
+        <tbody>${rows}</tbody>
+        ${
+          anyValue
+            ? `<tfoot><tr><td>Valor total estimado</td><td class="num">${escapeHtml(fmtCop(String(totalValue)))}</td></tr></tfoot>`
+            : ""
+        }
+      </table>
     </section>
   `;
 }
@@ -1422,6 +1447,28 @@ function renderDocumentation(
   const claimsLabel = v.hasClaimsHistory || "—";
   const cTone = claimsTone(v.hasClaimsHistory);
 
+  // Valoración comercial — el perito la digita (campos obligatorios del wizard).
+  const fasecoldaVal = v.fasecoldaValue?.trim() || "";
+  const llanoVal = v.llanoValue?.trim() || "";
+  const valuationBlock = `
+      <div class="value-subhead">Valoración comercial</div>
+      <div class="value-duo">
+        <div class="value-hero${fasecoldaVal ? "" : " tone-muted"}">
+          <div class="value-hero-text">
+            <span class="value-hero-label">Valor Fasecolda</span>
+            <span class="value-hero-meta">Código ${esc(v.fasecoldaCode?.trim() || "—")}</span>
+          </div>
+          <span class="value-hero-amount${fasecoldaVal ? "" : " muted"}">${fasecoldaVal ? escapeHtml(fmtCop(fasecoldaVal)) : "—"}</span>
+        </div>
+        <div class="value-hero tone-brand${llanoVal ? "" : " tone-muted"}">
+          <div class="value-hero-text">
+            <span class="value-hero-label">Valor Peritajes del Llano</span>
+            <span class="value-hero-meta">Avalúo del perito</span>
+          </div>
+          <span class="value-hero-amount${llanoVal ? "" : " muted"}">${llanoVal ? escapeHtml(fmtCop(llanoVal)) : "—"}</span>
+        </div>
+      </div>`;
+
   return `
     <section class="docs-section">
       ${headingHtml}
@@ -1475,6 +1522,8 @@ function renderDocumentation(
           <span class="docs-value">${escapeHtml(fmtCop(v.claimsValue))}</span>
         </div>
       </div>
+
+      ${valuationBlock}
     </section>
   `;
 }
@@ -2285,6 +2334,25 @@ export function renderReportHtml(
     font-variant-numeric: tabular-nums;
   }
   .value-hero-amount.muted { color: #94a3b8; }
+  .value-duo {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8pt;
+    margin: 3mm 0 4mm;
+  }
+  .value-duo .value-hero {
+    margin: 0;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 6pt;
+  }
+  .value-duo .value-hero-amount { font-size: 18pt; }
+  .value-hero.tone-brand {
+    background: #eff6ff;
+    border-color: #bfdbfe;
+    border-left-color: #2563eb;
+  }
+  .value-hero.tone-brand .value-hero-amount { color: #1d4ed8; }
   .value-history { margin: 4mm 0 3mm; }
   .value-history-label {
     font-size: 8pt;
@@ -2321,6 +2389,14 @@ export function renderReportHtml(
     color: #0f172a;
   }
   .value-table tbody tr:last-child td { border-bottom: none; }
+  .value-table tfoot { display: table-footer-group; }
+  .value-table tfoot td {
+    padding: 6pt 9pt;
+    border-top: 1.5px solid #e2e8f0;
+    background: #f8fafc;
+    font-weight: 700;
+    color: #0f172a;
+  }
   .value-table thead { display: table-header-group; }
   .value-table tbody tr {
     break-inside: avoid;

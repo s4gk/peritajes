@@ -19,6 +19,7 @@ import { useCurrentUser } from "@/components/panel/current-user";
 import { listKnownVehicles } from "@/lib/inspections-store";
 import type { VehicleInfo } from "@/lib/types";
 import { cn, makeId } from "@/lib/utils";
+import { formatCop } from "@/lib/scoring";
 import {
   OwnershipCardScanner,
   type ExtractedFields,
@@ -1007,6 +1008,98 @@ export function VehicleInfoStep() {
               </div>
             </>
           )}
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Valoración comercial</CardTitle>
+          <CardDescription>
+            Valor de referencia Fasecolda y avalúo de Peritajes del Llano. Los
+            tres campos son obligatorios.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            <div className="space-y-1.5">
+              <Label htmlFor="fasecoldaValue">
+                Valor Fasecolda (COP){" "}
+                <span className="text-destructive">*</span>
+              </Label>
+              <Input
+                id="fasecoldaValue"
+                inputMode="numeric"
+                value={v.fasecoldaValue}
+                onChange={(e) =>
+                  update("fasecoldaValue", e.target.value.replace(/\D/g, ""))
+                }
+                placeholder="0"
+                className={cn(
+                  "h-11 sm:h-10",
+                  data.status !== "completed" &&
+                    !v.fasecoldaValue.trim() &&
+                    "border-destructive/50",
+                )}
+              />
+              {v.fasecoldaValue.trim() ? (
+                <p className="text-[11px] text-muted-foreground">
+                  {formatCop(Number(v.fasecoldaValue))}
+                </p>
+              ) : data.status !== "completed" ? (
+                <p className="text-[11px] text-destructive/80">Obligatorio.</p>
+              ) : null}
+            </div>
+
+            <div className="space-y-1.5">
+              <Label htmlFor="fasecoldaCode">
+                Código Fasecolda <span className="text-destructive">*</span>
+              </Label>
+              <Input
+                id="fasecoldaCode"
+                value={v.fasecoldaCode}
+                onChange={(e) => update("fasecoldaCode", e.target.value)}
+                placeholder="08042177"
+                className={cn(
+                  "h-11 sm:h-10",
+                  data.status !== "completed" &&
+                    !v.fasecoldaCode.trim() &&
+                    "border-destructive/50",
+                )}
+              />
+              {data.status !== "completed" && !v.fasecoldaCode.trim() && (
+                <p className="text-[11px] text-destructive/80">Obligatorio.</p>
+              )}
+            </div>
+
+            <div className="space-y-1.5">
+              <Label htmlFor="llanoValue">
+                Valor Peritajes del Llano (COP){" "}
+                <span className="text-destructive">*</span>
+              </Label>
+              <Input
+                id="llanoValue"
+                inputMode="numeric"
+                value={v.llanoValue}
+                onChange={(e) =>
+                  update("llanoValue", e.target.value.replace(/\D/g, ""))
+                }
+                placeholder="0"
+                className={cn(
+                  "h-11 sm:h-10",
+                  data.status !== "completed" &&
+                    !v.llanoValue.trim() &&
+                    "border-destructive/50",
+                )}
+              />
+              {v.llanoValue.trim() ? (
+                <p className="text-[11px] text-muted-foreground">
+                  {formatCop(Number(v.llanoValue))}
+                </p>
+              ) : data.status !== "completed" ? (
+                <p className="text-[11px] text-destructive/80">Obligatorio.</p>
+              ) : null}
+            </div>
           </div>
         </CardContent>
       </Card>

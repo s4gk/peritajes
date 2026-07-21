@@ -46,8 +46,9 @@ import { VoiceDictationButton } from "@/components/shared/voice-dictation-button
 import { useCurrentUser } from "@/components/panel/current-user";
 import { useToast } from "@/components/ui/toast";
 import { apiFetch } from "@/lib/client/api-client";
-import { downloadInspectionPdf } from "@/lib/pdf-client";
-import { analyze } from "@/lib/rules-engine";
+import { downloadInspectionPdf, downloadStoredPdf } from "@/lib/pdf-client";
+import { analyze, computeHealth } from "@/lib/rules-engine";
+import { computePillars } from "@/lib/scoring";
 import {
   countMandatorySlotsFilled,
   missingMandatorySlots,
@@ -76,6 +77,24 @@ export function SummaryStep() {
   const { data, setData, id: inspectionId, reportNumber } = useInspection();
   const currentUser = useCurrentUser();
   const report = React.useMemo(() => analyze(data), [data]);
+  const pillars = React.useMemo(() => computePillars(computeHealth(data), report), [data, report]);
+  const globalPct = pillars.globalPct;
+  // Concepto que sugiere el cálculo automático (mismo umbral que el tier del PDF:
+  // dos bandas — ≥55 ESTÁNDAR, <55 / con gate alto/crítico → SUJETA A POLÍTICAS).
+  // Sirve para avisar — de forma NO bloqueante — cuando el perito elige a mano un
+  // concepto que contradice la nota calculada. El concepto final sigue siendo manual.
+  const suggestedCondition = React.useMemo(() => {
+    const pct = globalPct;
+    if (pct === null) return null;
+    const hardGate = pillars.gates.some(
+      (g) => g.severity === "high" || g.severity === "critical",
+    );
+    if (hardGate || pct < 55) return "ASEGURABILIDAD SUJETA A POLÍTICAS";
+    return "ESTÁNDAR";
+  }, [globalPct, pillars]);
+  const selectedCondition = data.conclusion.generalCondition;
+  const conditionDiverges =
+    !!selectedCondition && !!suggestedCondition && selectedCondition !== suggestedCondition;
   const toast = useToast();
   const [generating, setGenerating] = React.useState(false);
   // PDF "pendiente" significa que la finalización corrió OK pero el server no
@@ -282,29 +301,7 @@ export function SummaryStep() {
   async function downloadOfficialPdf() {
     setGenerating(true);
     try {
-      const res = await apiFetch(
-        `/api/inspections/${encodeURIComponent(inspectionId)}/pdf`,
-        { credentials: "same-origin" },
-      );
-      if (!res.ok) {
-        const body = await res.json().catch(() => null);
-        throw new Error(
-          (body as { error?: string } | null)?.error ?? `${res.status}`,
-        );
-      }
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      const plate = (data.vehicle.plate || "inspeccion").replace(
-        /[^A-Z0-9]/gi,
-        "",
-      );
-      a.download = `peritaje-${plate}.pdf`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
+      await downloadStoredPdf(inspectionId, data);
       toast.show({ title: "PDF descargado", variant: "success" });
     } catch (err) {
       const message = err instanceof Error ? err.message : "Error desconocido";
@@ -581,6 +578,16 @@ export function SummaryStep() {
                 ))}
               </SelectContent>
             </Select>
+            {conditionDiverges && (
+              <div className="flex items-start gap-2 rounded-lg border border-warning/40 bg-warning/10 px-3 py-2 text-xs text-warning">
+                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                <div>
+                  El cálculo automático sugiere{" "}
+                  <span className="font-semibold">{suggestedCondition}</span>. Verifica
+                  tu selección o documenta el motivo en las observaciones.
+                </div>
+              </div>
+            )}
           </div>
 
           <div className="space-y-1.5">

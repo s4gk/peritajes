@@ -38,7 +38,7 @@ import {
   type WalkaroundStageStepId,
 } from "@/lib/constants";
 import { findOption, minPhotosFor } from "@/lib/findings-catalog";
-import { downloadInspectionPdf } from "@/lib/pdf-client";
+import { downloadStoredPdf } from "@/lib/pdf-client";
 import { cn, formatDate } from "@/lib/utils";
 import type { InspectionData, InspectionEntry } from "@/lib/types";
 
@@ -122,6 +122,12 @@ function validateStep(step: StepId, data: InspectionData): ValidateResult {
     }
     if (!v.inspector) return { ok: false, message: "Falta el nombre del perito.", focusId: "inspector" };
     if (!v.date) return { ok: false, message: "Falta la fecha.", focusId: "date" };
+    if (!v.fasecoldaValue.trim() || Number(v.fasecoldaValue) <= 0)
+      return { ok: false, message: "Falta el valor Fasecolda (debe ser mayor a 0).", focusId: "fasecoldaValue" };
+    if (!v.fasecoldaCode.trim())
+      return { ok: false, message: "Falta el código Fasecolda.", focusId: "fasecoldaCode" };
+    if (!v.llanoValue.trim() || Number(v.llanoValue) <= 0)
+      return { ok: false, message: "Falta el valor Peritajes del Llano (debe ser mayor a 0).", focusId: "llanoValue" };
     const docs = data.documents;
     if (!docs?.ownershipCardFront?.length)
       return { ok: false, message: "Falta foto del frente de la tarjeta de propiedad." };
@@ -375,11 +381,14 @@ function WizardInner() {
   const handleDownloadPdf = React.useCallback(async () => {
     setPdfBusy(true);
     try {
-      await downloadInspectionPdf(data, "executive", inspectionId);
-      toast.show({ title: "PDF generado", variant: "success" });
+      // Este botón vive dentro del bloque `status === "completed"`, así que el
+      // PDF oficial ya está persistido: lo bajamos por GET en vez de subir la
+      // inspección completa con las fotos en base64.
+      await downloadStoredPdf(inspectionId, data);
+      toast.show({ title: "PDF descargado", variant: "success" });
     } catch (err) {
       toast.show({
-        title: "No se pudo generar el PDF",
+        title: "No se pudo descargar el PDF",
         description: err instanceof Error ? err.message : "Error desconocido",
         variant: "danger",
       });

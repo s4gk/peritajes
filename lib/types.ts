@@ -1,6 +1,21 @@
 import type { VerifikSnapshot } from "./verifik/types";
 
-export type RiskLevel = "low" | "medium" | "high";
+/**
+ * Nivel de riesgo para el comprador. Escala de 4 (antes eran 3): un daño
+ * estructural, una falla de frenos o una fuga crítica disparan "critical",
+ * un peldaño por encima de "high". Ver `riskLevelFromPillars` en scoring.ts.
+ */
+export type RiskLevel = "low" | "medium" | "high" | "critical";
+
+/**
+ * Impacto económico esperado de los hallazgos — dimensión INDEPENDIENTE del
+ * riesgo. Un repinte es bajo riesgo pero impacto económico medio; una llanta
+ * lisa es riesgo alto pero impacto económico medio. Ver `scoring.ts`.
+ */
+export type EconomicImpactLevel = "low" | "medium" | "high" | "critical";
+
+/** Rango estimado de costo de reparación en COP. */
+export type RepairCostRange = { min: number; max: number };
 
 export type PeritajeKind = "plus" | "pro" | "sencillo";
 
@@ -41,12 +56,21 @@ export type InspectionEntry = {
   /** Sellante del marco. Solo se muestra/persiste para items que lo soportan
    *  (puertas). undefined = aún no calificado. */
   sealant?: SealantState;
+  /** Estimación de costo de reparación (COP) capturada por el perito para este
+   *  hallazgo puntual. Scaffolding: hoy el wizard no la captura todavía. Cuando
+   *  está presente, el motor económico (`scoring.ts`) la usa en lugar de la
+   *  banda derivada por impacto. undefined = sin estimación manual. */
+  estimatedRepairCostMin?: number;
+  estimatedRepairCostMax?: number;
 };
 
 export type AccessoryEntry = {
   id: string;
   name: string;
   notes?: string;
+  /** Valor estimado del accesorio en COP, como string (igual que el resto de
+   *  montos). Opcional: el perito lo digita si aplica. */
+  value?: string;
 };
 
 export type TirePosition = "fl" | "fr" | "rl" | "rr" | "spare";
@@ -127,6 +151,14 @@ export type VehicleInfo = {
   propertyCardStatus: string;
   /** Código Sibga (ingreso manual — no lo trae Verifik). */
   sibgaCode: string;
+  /** Valoración comercial — ingreso manual del perito. Montos en COP como
+   *  string (igual que claimsValue), código alfanumérico. Obligatorios. */
+  /** Valor de referencia Fasecolda en COP. */
+  fasecoldaValue: string;
+  /** Código Fasecolda (homologación) del vehículo. */
+  fasecoldaCode: string;
+  /** Valor del avalúo propio de Peritajes del Llano en COP. */
+  llanoValue: string;
   /** % de depreciación calculado por el perito (string para alinearse con el resto). */
   depreciationPct: string;
   /** Notas / justificación del cálculo de depreciación. */
@@ -138,10 +170,11 @@ export type VehicleInfo = {
 };
 
 export type InspectionData = {
-  /** Tipo de peritaje. Define qué secciones aparecen en el wizard y en el PDF.
-   * - complete: inspección integral (default histórico).
-   * - quick: pre-compra. Solo carrocería + llantas + motor + fugas + ruta.
-   * - appraisal: avalúo comercial. Carrocería + llantas + motor + accesorios. */
+  /** Tipo de peritaje. Define qué secciones aparecen en el wizard, en el PDF y
+   *  cuáles califican (ver PERITAJE_KINDS y activeSectionsFor en constants).
+   * - plus: el más completo. Común + eléctrica, con prueba de compresión.
+   * - pro: igual que plus pero sin compresión.
+   * - sencillo: solo las secciones comunes (sin eléctrica ni improntas). */
   kind: PeritajeKind;
   /** Tipo de carrocería del vehículo. Define el inventario de carrocería y
    *  filtra pasos que no aplican (ej. tráiler no tiene motor, moto no tiene

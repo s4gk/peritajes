@@ -41,6 +41,7 @@ const AccessoryEntry = z.object({
   id: STR(128),
   name: STR(200),
   notes: STR(2000).optional(),
+  value: STR(24).optional(),
 });
 
 const CylinderEntry = z.object({
@@ -122,6 +123,9 @@ const VehicleInfo = z
     claimsValue: STR(24).default(""),
     propertyCardStatus: STR(40).default(""),
     sibgaCode: STR(40).default(""),
+    fasecoldaValue: STR(24).default(""),
+    fasecoldaCode: STR(40).default(""),
+    llanoValue: STR(24).default(""),
     depreciationPct: STR(8).default(""),
     depreciationNotes: STR(2000).default(""),
     inspector: STR(200).default(""),

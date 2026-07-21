@@ -17,15 +17,59 @@ import crypto from "node:crypto";
 
 const GRAPH_API = "https://graph.facebook.com/v20.0";
 
+/**
+ * Modo Kapso (https://kapso.com) — proxy de la API OFICIAL de Meta Cloud API.
+ * Habla el MISMO protocolo que Meta (mismos payloads), solo cambia:
+ *   - base URL: https://api.kapso.ai/meta/whatsapp/v24.0  (vs graph.facebook.com)
+ *   - auth: header `X-API-Key`  (vs `Authorization: Bearer`)
+ *   - PDF: por link público (Kapso documenta document.link, no subida de bytes)
+ * Por eso reutilizamos TODO este módulo en vez de duplicar un proveedor.
+ * Se activa con MESSAGING_PROVIDER=kapso. Ventaja vs Meta directo: setup más
+ * rápido (números gestionados + sandbox) y free tier de plataforma.
+ */
+function isKapsoMode(): boolean {
+  return process.env.MESSAGING_PROVIDER?.trim().toLowerCase() === "kapso";
+}
+
 function token(): string {
   return process.env.META_WA_TOKEN ?? "";
 }
 
+function kapsoApiKey(): string {
+  return process.env.KAPSO_API_KEY?.trim() ?? "";
+}
+
 function phoneNumberId(): string {
+  if (isKapsoMode()) {
+    return (
+      process.env.KAPSO_PHONE_NUMBER_ID ??
+      process.env.META_WA_PHONE_NUMBER_ID ??
+      ""
+    ).trim();
+  }
   return process.env.META_WA_PHONE_NUMBER_ID ?? "";
 }
 
+/** Base URL del API de mensajes según el modo (Kapso o Meta directo). */
+function apiBase(): string {
+  if (isKapsoMode()) {
+    const base =
+      process.env.KAPSO_BASE_URL?.trim().replace(/\/$/, "") ||
+      "https://api.kapso.ai/meta/whatsapp";
+    return `${base}/v24.0`;
+  }
+  return GRAPH_API;
+}
+
+/** Headers de autenticación según el modo. */
+function authHeaders(): Record<string, string> {
+  return isKapsoMode()
+    ? { "X-API-Key": kapsoApiKey() }
+    : { Authorization: `Bearer ${token()}` };
+}
+
 export function isMetaConfigured(): boolean {
+  if (isKapsoMode()) return !!(kapsoApiKey() && phoneNumberId());
   return !!(token().trim() && phoneNumberId().trim());
 }
 
@@ -134,10 +178,10 @@ export async function sendMetaTemplate(
         ]
       : [];
 
-  const res = await fetch(`${GRAPH_API}/${phoneNumberId()}/messages`, {
+  const res = await fetch(`${apiBase()}/${phoneNumberId()}/messages`, {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${token()}`,
+      ...authHeaders(),
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
@@ -157,6 +201,7 @@ export async function sendMetaTemplate(
 /**
  * Sube un PDF a la Media API de Meta y devuelve el media_id.
  * El id tiene una vida útil de 30 días desde la subida.
+ * (Solo modo Meta directo. En modo Kapso el PDF va por link público.)
  */
 async function uploadPdf(buffer: Buffer, filename: string): Promise<string> {
   const form = new FormData();
@@ -168,9 +213,9 @@ async function uploadPdf(buffer: Buffer, filename: string): Promise<string> {
     filename,
   );
 
-  const res = await fetch(`${GRAPH_API}/${phoneNumberId()}/media`, {
+  const res = await fetch(`${apiBase()}/${phoneNumberId()}/media`, {
     method: "POST",
-    headers: { Authorization: `Bearer ${token()}` },
+    headers: { ...authHeaders() },
     body: form,
   });
   await assertOk(res);
@@ -185,18 +230,32 @@ async function uploadPdf(buffer: Buffer, filename: string): Promise<string> {
 export async function sendMetaDocumentTemplate(
   to: string,
   templateName: string,
-  pdfBuffer: Buffer,
+  pdfBuffer: Buffer | undefined,
   filename: string,
   bodyParams: string[],
+  publicUrl?: string,
 ): Promise<void> {
-  const mediaId = await uploadPdf(pdfBuffer, filename);
+  // Modo Kapso: adjuntar por link público (Kapso documenta document.link).
+  // Modo Meta directo: subir los bytes a la Media API y referenciar por id.
+  let documentParam: Record<string, string>;
+  if (isKapsoMode()) {
+    if (!publicUrl?.trim()) {
+      throw new Error(
+        "Kapso requiere una URL pública del PDF (publicUrl) para adjuntarlo.",
+      );
+    }
+    documentParam = { link: publicUrl.trim(), filename };
+  } else {
+    if (!pdfBuffer) {
+      throw new Error("Meta requiere los bytes del PDF (pdfBuffer).");
+    }
+    documentParam = { id: await uploadPdf(pdfBuffer, filename), filename };
+  }
 
   const components: unknown[] = [
     {
       type: "header",
-      parameters: [
-        { type: "document", document: { id: mediaId, filename } },
-      ],
+      parameters: [{ type: "document", document: documentParam }],
     },
   ];
   if (bodyParams.length > 0) {
@@ -206,10 +265,10 @@ export async function sendMetaDocumentTemplate(
     });
   }
 
-  const res = await fetch(`${GRAPH_API}/${phoneNumberId()}/messages`, {
+  const res = await fetch(`${apiBase()}/${phoneNumberId()}/messages`, {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${token()}`,
+      ...authHeaders(),
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
@@ -230,14 +289,19 @@ export async function sendMetaDocumentTemplate(
  * Devuelve el estado de la integración Meta para el panel /whatsapp.
  */
 export function getMetaStatus() {
+  const kapso = isKapsoMode();
   const configured = isMetaConfigured();
   return {
-    provider: "meta" as const,
+    provider: kapso ? ("kapso" as const) : ("meta" as const),
     status: configured ? ("connected" as const) : ("disconnected" as const),
     phone: configured ? (process.env.META_WA_DISPLAY_PHONE ?? null) : null,
     qrDataUrl: null,
     connectedAt: configured ? Date.now() : null,
-    lastError: configured ? null : "META_WA_TOKEN y META_WA_PHONE_NUMBER_ID no configurados",
+    lastError: configured
+      ? null
+      : kapso
+        ? "KAPSO_API_KEY y KAPSO_PHONE_NUMBER_ID no configurados"
+        : "META_WA_TOKEN y META_WA_PHONE_NUMBER_ID no configurados",
     queueSize: 0,
   };
 }
@@ -248,10 +312,10 @@ export function getMetaStatus() {
  * (el cliente nos escribió en las últimas 24h). Para producción, usar templates.
  */
 export async function sendMetaFreeText(to: string, text: string): Promise<void> {
-  const res = await fetch(`${GRAPH_API}/${phoneNumberId()}/messages`, {
+  const res = await fetch(`${apiBase()}/${phoneNumberId()}/messages`, {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${token()}`,
+      ...authHeaders(),
       "Content-Type": "application/json",
     },
     body: JSON.stringify({

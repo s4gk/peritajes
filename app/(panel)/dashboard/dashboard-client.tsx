@@ -26,6 +26,7 @@ import {
 } from "@/components/ui/card";
 import { initStore, listInspections } from "@/lib/inspections-store";
 import { analyze, riskTone } from "@/lib/rules-engine";
+import { riskLevelLabel } from "@/lib/scoring";
 import type { StoredInspection } from "@/lib/types";
 import { cn, formatDate } from "@/lib/utils";
 
@@ -48,6 +49,7 @@ type Stats = {
   riskLow: number;
   riskMedium: number;
   riskHigh: number;
+  riskCritical: number;
   topFindings: FindingTotal[];
   topMakes: MakeTotal[];
   monthly: MonthBucket[];
@@ -98,6 +100,7 @@ function compute(items: StoredInspection[]): Stats {
   let riskLow = 0;
   let riskMedium = 0;
   let riskHigh = 0;
+  let riskCritical = 0;
 
   const findingsAcc = new Map<string, FindingTotal>();
   const makesAcc = new Map<string, number>();
@@ -116,7 +119,8 @@ function compute(items: StoredInspection[]): Stats {
     const r = analyze(it.data);
     if (r.level === "low") riskLow += 1;
     else if (r.level === "medium") riskMedium += 1;
-    else riskHigh += 1;
+    else if (r.level === "high") riskHigh += 1;
+    else riskCritical += 1;
 
     for (const f of r.findings) {
       const key = `${f.section}|${f.item}`;
@@ -152,6 +156,7 @@ function compute(items: StoredInspection[]): Stats {
     riskLow,
     riskMedium,
     riskHigh,
+    riskCritical,
     topFindings,
     topMakes,
     monthly,
@@ -231,13 +236,13 @@ export function DashboardClient() {
           tone="primary"
         />
         <HeroStat
-          label="Riesgo alto"
-          value={stats.riskHigh}
+          label="Riesgo alto / crítico"
+          value={stats.riskHigh + stats.riskCritical}
           icon={AlertTriangle}
-          tone={stats.riskHigh > 0 ? "danger" : "muted"}
+          tone={stats.riskHigh + stats.riskCritical > 0 ? "danger" : "muted"}
           subtitle={
             stats.total > 0
-              ? `${Math.round((stats.riskHigh / stats.total) * 100)}% del total`
+              ? `${Math.round(((stats.riskHigh + stats.riskCritical) / stats.total) * 100)}% del total${stats.riskCritical > 0 ? ` · ${stats.riskCritical} crítico${stats.riskCritical === 1 ? "" : "s"}` : ""}`
               : undefined
           }
         />
@@ -264,6 +269,7 @@ export function DashboardClient() {
               low={stats.riskLow}
               medium={stats.riskMedium}
               high={stats.riskHigh}
+              critical={stats.riskCritical}
             />
           </CardContent>
         </Card>
@@ -700,16 +706,19 @@ function RiskDistribution({
   low,
   medium,
   high,
+  critical,
 }: {
   low: number;
   medium: number;
   high: number;
+  critical: number;
 }) {
-  const total = Math.max(1, low + medium + high);
+  const total = Math.max(1, low + medium + high + critical);
   const segs = [
     { label: "Bajo", value: low, className: "bg-success" },
     { label: "Medio", value: medium, className: "bg-warning" },
     { label: "Alto", value: high, className: "bg-danger" },
+    { label: "Crítico", value: critical, className: "bg-danger/70" },
   ];
 
   return (
@@ -756,7 +765,7 @@ function RecentRow({ item }: { item: StoredInspection }) {
           <div className="flex items-center gap-2">
             <span className="truncate text-sm font-medium">{v.plate || "Sin placa"}</span>
             <Badge variant={tone} className="text-[10px]">
-              {report.level === "low" ? "Bajo" : report.level === "medium" ? "Medio" : "Alto"}
+              {riskLevelLabel(report.level)}
             </Badge>
           </div>
           <div className="truncate text-xs text-muted-foreground">

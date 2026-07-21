@@ -35,12 +35,15 @@ export async function POST() {
   }
 
   if (!isMessagingConfigured()) {
+    const provider = activeProvider();
     return NextResponse.json(
       {
         error:
-          activeProvider() === "twilio"
+          provider === "twilio"
             ? "WhatsApp (Twilio) no está configurado. Define TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN y un sender."
-            : "WhatsApp (Meta) no está configurado. Define META_WA_TOKEN y META_WA_PHONE_NUMBER_ID.",
+            : provider === "kapso"
+              ? "WhatsApp (Kapso) no está configurado. Define KAPSO_API_KEY y KAPSO_PHONE_NUMBER_ID."
+              : "WhatsApp (Meta) no está configurado. Define META_WA_TOKEN y META_WA_PHONE_NUMBER_ID.",
       },
       { status: 400 },
     );

@@ -16,24 +16,30 @@ import {
   sendTwilioFreeText,
   sendTwilioTemplate,
 } from "./whatsapp-twilio";
-
 /**
  * Dispatcher de mensajería WhatsApp. Selecciona el proveedor según la variable
  * de entorno `MESSAGING_PROVIDER`:
- *   - "twilio" → Twilio WhatsApp (lib/server/whatsapp-twilio.ts)
- *   - cualquier otro / no seteada → Meta WhatsApp Cloud API (default)
+ *   - "twilio"  → Twilio WhatsApp (lib/server/whatsapp-twilio.ts)
+ *   - "kapso"   → Kapso, proxy de la API oficial de Meta (mismo protocolo Meta;
+ *                 lo maneja whatsapp-meta.ts con base URL + auth distintas)
+ *   - cualquier otro / no seteada → Meta WhatsApp Cloud API directo (default)
+ *
+ * Nota: "meta" y "kapso" comparten el módulo whatsapp-meta.ts (Kapso es un
+ * proxy del MISMO protocolo de Meta), así que ambos caen en las funciones
+ * sendMeta*. El módulo Meta detecta el modo Kapso por env.
  *
  * Toda la capa de notificaciones (whatsapp-notifications.ts) habla SOLO con
  * este dispatcher, así cambiar de proveedor es flippear una env var sin tocar
  * la lógica de negocio.
  */
 
-export type MessagingProvider = "meta" | "twilio";
+export type MessagingProvider = "meta" | "twilio" | "kapso";
 
 export function activeProvider(): MessagingProvider {
-  return process.env.MESSAGING_PROVIDER?.trim().toLowerCase() === "twilio"
-    ? "twilio"
-    : "meta";
+  const p = process.env.MESSAGING_PROVIDER?.trim().toLowerCase();
+  if (p === "twilio") return "twilio";
+  if (p === "kapso") return "kapso";
+  return "meta";
 }
 
 export function isMessagingConfigured(): boolean {
@@ -85,15 +91,15 @@ export async function sendDocumentTemplate(
       bodyParams,
     );
   }
-  if (!doc.pdfBuffer) {
-    throw new Error("Meta requiere los bytes del PDF (pdfBuffer).");
-  }
+  // meta o kapso: sendMetaDocumentTemplate valida según el modo
+  // (Meta exige pdfBuffer; Kapso exige publicUrl).
   return sendMetaDocumentTemplate(
     to,
     templateName,
     doc.pdfBuffer,
     doc.filename,
     bodyParams,
+    doc.publicUrl,
   );
 }
 
