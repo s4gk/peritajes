@@ -4,6 +4,7 @@ import "./globals.css";
 import { PWAInstallPrompt } from "@/components/shared/pwa-install-prompt";
 import { PWAUpdatePrompt } from "@/components/shared/pwa-update-prompt";
 import { ServiceWorkerRegister } from "@/components/shared/sw-register";
+import { ConfirmProvider } from "@/components/ui/confirm-dialog";
 import { ToastProvider } from "@/components/ui/toast";
 
 /**
@@ -118,10 +119,17 @@ export default function RootLayout({
         <script dangerouslySetInnerHTML={{ __html: themeBootstrap }} />
       </head>
       <body>
-        <ToastProvider>{children}</ToastProvider>
-        <ServiceWorkerRegister />
-        <PWAUpdatePrompt />
-        <PWAInstallPrompt />
+        {/* Los prompts de PWA van DENTRO de los providers: PWAUpdatePrompt
+            necesita pedir confirmación cuando hay cambios sin subir, y antes
+            quedaba fuera y tenía que caer al confirm() del navegador. */}
+        <ToastProvider>
+          <ConfirmProvider>
+            {children}
+            <ServiceWorkerRegister />
+            <PWAUpdatePrompt />
+            <PWAInstallPrompt />
+          </ConfirmProvider>
+        </ToastProvider>
       </body>
     </html>
   );

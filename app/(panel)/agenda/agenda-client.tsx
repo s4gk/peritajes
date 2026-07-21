@@ -44,6 +44,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { useConfirm } from "@/components/ui/confirm-dialog";
 import { useToast } from "@/components/ui/toast";
 import { apiFetch } from "@/lib/client/api-client";
 import { appointmentsToCsv, downloadCsv } from "@/lib/csv";
@@ -214,6 +215,7 @@ type ViewMode = "list" | "calendar";
 export function AgendaClient({ initialAppointments, currentUser }: Props) {
   const router = useRouter();
   const toast = useToast();
+  const confirm = useConfirm();
   const [appointments, setAppointments] = React.useState<Appointment[]>(initialAppointments);
   const [editing, setEditing] = React.useState<Appointment | null>(null);
   const [dialogOpen, setDialogOpen] = React.useState(false);
@@ -331,12 +333,13 @@ export function AgendaClient({ initialAppointments, currentUser }: Props) {
   }
 
   async function remove(appt: Appointment) {
-    if (
-      typeof window !== "undefined" &&
-      !window.confirm(`¿Eliminar la cita de ${appt.ownerName || "—"} (${appt.plate || "sin placa"})?`)
-    ) {
-      return;
-    }
+    const ok = await confirm({
+      title: "¿Eliminar esta cita?",
+      description: `${appt.ownerName || "Sin nombre"} · ${appt.plate || "sin placa"}. La cita desaparece de la agenda y no se puede recuperar.`,
+      confirmLabel: "Eliminar cita",
+      variant: "danger",
+    });
+    if (!ok) return;
     const res = await apiFetch(`/api/appointments/${appt.id}`, { method: "DELETE" });
     if (!res.ok) {
       toast.show({ title: "No se pudo eliminar", variant: "danger" });

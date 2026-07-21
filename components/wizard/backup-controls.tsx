@@ -4,6 +4,7 @@ import * as React from "react";
 import { Download, Upload } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { useToast } from "@/components/ui/toast";
 import {
   exportAllInspections,
   importInspections,
@@ -38,17 +39,27 @@ function summarize(r: ImportResult): string {
 }
 
 export function BackupControls({ onChange }: { onChange?: () => void }) {
+  const toast = useToast();
   const fileInputRef = React.useRef<HTMLInputElement>(null);
   const [busy, setBusy] = React.useState(false);
 
   function handleExport() {
     const backup = exportAllInspections();
     if (backup.count === 0) {
-      alert("No hay peritajes para exportar.");
+      toast.show({
+        title: "No hay nada para exportar",
+        description: "Todavía no tienes peritajes guardados en este dispositivo.",
+        variant: "warning",
+      });
       return;
     }
     const filename = `perito-backup-${todayStamp()}.json`;
     downloadFile(filename, JSON.stringify(backup, null, 2));
+    toast.show({
+      title: "Respaldo descargado",
+      description: `${backup.count} peritaje${backup.count === 1 ? "" : "s"} en ${filename}`,
+      variant: "success",
+    });
   }
 
   function handlePickFile() {
@@ -64,13 +75,32 @@ export function BackupControls({ onChange }: { onChange?: () => void }) {
       const text = await file.text();
       const result = await importInspections(text, "merge");
       if (result.errors.length) {
-        alert(`Errores al importar:\n${result.errors.join("\n")}`);
+        // Solo los primeros: el toast no es un visor de logs, y una lista de
+        // 40 errores lo volvería una pared de texto ilegible.
+        const shown = result.errors.slice(0, 3).join(" · ");
+        const rest = result.errors.length - 3;
+        toast.show({
+          title: `La importación terminó con ${result.errors.length} error${result.errors.length === 1 ? "" : "es"}`,
+          description: rest > 0 ? `${shown} · y ${rest} más` : shown,
+          variant: "danger",
+        });
       } else {
-        alert(`Importación lista — ${summarize(result)}.`);
+        toast.show({
+          title: "Importación lista",
+          description: summarize(result),
+          variant: "success",
+        });
       }
       onChange?.();
     } catch (err) {
-      alert(`No se pudo leer el archivo: ${(err as Error).message}`);
+      toast.show({
+        title: "No se pudo leer el archivo",
+        description:
+          err instanceof Error
+            ? err.message
+            : "Revisa que sea un respaldo de Perito en formato JSON.",
+        variant: "danger",
+      });
     } finally {
       setBusy(false);
     }

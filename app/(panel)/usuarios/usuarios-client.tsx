@@ -33,6 +33,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { useConfirm } from "@/components/ui/confirm-dialog";
 import { useToast } from "@/components/ui/toast";
 import { apiFetch } from "@/lib/client/api-client";
 import { formatDate } from "@/lib/utils";
@@ -58,6 +59,7 @@ export function UsuariosClient({
   currentUserRole: "admin" | "owner" | "employee";
 }) {
   const toast = useToast();
+  const confirm = useConfirm();
   const [users, setUsers] = React.useState<User[]>(initialUsers);
   const [createOpen, setCreateOpen] = React.useState(false);
   const [pwUserId, setPwUserId] = React.useState<string | null>(null);
@@ -114,12 +116,13 @@ export function UsuariosClient({
   }
 
   async function handleDelete(u: User) {
-    if (
-      !confirm(
-        `¿Eliminar a ${u.fullName} (@${u.username})? Esta acción no se puede deshacer.`,
-      )
-    )
-      return;
+    const ok = await confirm({
+      title: `¿Eliminar a ${u.fullName}?`,
+      description: `Se borrará la cuenta @${u.username}. Esta acción no se puede deshacer. Si solo quieres retirarlo del equipo, desactívalo: así conservas su historial de peritajes.`,
+      confirmLabel: "Eliminar cuenta",
+      variant: "danger",
+    });
+    if (!ok) return;
     const res = await apiFetch(`/api/users/${u.id}`, { method: "DELETE" });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {

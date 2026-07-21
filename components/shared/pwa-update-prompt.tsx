@@ -4,6 +4,7 @@ import * as React from "react";
 import { AlertTriangle, RefreshCw, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { useConfirm } from "@/components/ui/confirm-dialog";
 import { subscribeSync, type SyncState } from "@/lib/client/sync-queue";
 import { cn } from "@/lib/utils";
 
@@ -29,6 +30,7 @@ import { cn } from "@/lib/utils";
 const UPDATE_CHECK_INTERVAL_MS = 60_000;
 
 export function PWAUpdatePrompt() {
+  const confirm = useConfirm();
   const [waitingWorker, setWaitingWorker] = React.useState<ServiceWorker | null>(null);
   const [dismissed, setDismissed] = React.useState(false);
   const reloadingRef = React.useRef(false);
@@ -100,16 +102,19 @@ export function PWAUpdatePrompt() {
   const hasPending = !!sync && sync.pending > 0;
   const hasFailed = !!sync && sync.failed > 0;
 
-  function applyUpdate() {
+  async function applyUpdate() {
     if (!waitingWorker) return;
     if (hasFailed) {
       // Cambios fallidos son la situación más arriesgada: el server NO los
       // tiene, y un reload no los va a sincronizar mágicamente. Pedimos
       // confirmación explícita en vez de aplicar silenciosamente.
-      const ok = window.confirm(
-        `Hay ${sync!.failed} cambio(s) sin subir al server. ` +
-          "El reload mantiene los datos en este dispositivo, pero seguirán pendientes. ¿Actualizar igual?",
-      );
+      const ok = await confirm({
+        title: "Hay cambios sin subir al servidor",
+        description: `${sync!.failed} cambio${sync!.failed === 1 ? "" : "s"} no se ${sync!.failed === 1 ? "ha" : "han"} podido sincronizar. Al actualizar, los datos siguen guardados en este dispositivo, pero van a quedar pendientes hasta que haya conexión.`,
+        confirmLabel: "Actualizar igual",
+        cancelLabel: "Ahora no",
+        variant: "warning",
+      });
       if (!ok) return;
     }
     try {
