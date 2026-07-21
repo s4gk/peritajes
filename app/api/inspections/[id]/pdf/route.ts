@@ -52,6 +52,11 @@ export async function GET(
     });
     const bytes = await readPdf(params.id);
     if (!bytes) {
+      // ensureCompletedPdf ya regenera cuando el archivo falta, así que llegar
+      // acá significa que el render corrió y aun así no dejó archivo.
+      console.error(
+        `[pdf] ${params.id}: ensureCompletedPdf terminó pero no hay bytes en disco.`,
+      );
       return NextResponse.json(
         { error: "PDF no disponible" },
         { status: 500 },
@@ -86,6 +91,7 @@ export async function GET(
     if (msg === "INSPECTION_NOT_FOUND") {
       return NextResponse.json({ error: "No encontrado" }, { status: 404 });
     }
+    console.error(`[pdf] falló la entrega de ${params.id}:`, err);
     return NextResponse.json(
       { error: `Error al generar PDF: ${msg}` },
       { status: 500 },

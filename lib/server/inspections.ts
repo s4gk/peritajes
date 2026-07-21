@@ -6,7 +6,7 @@ import { formatReportNumber } from "@/lib/company";
 import type { InspectionData, StoredInspection } from "@/lib/types";
 
 import { logAudit, query } from "./db";
-import { deletePdf, savePdf } from "./pdf-storage";
+import { deletePdf, pdfExists, savePdf } from "./pdf-storage";
 import { renderInspectionPdf } from "./pdf-render";
 import {
   createShareToken,
@@ -43,7 +43,7 @@ type InspectionRow = {
  * repetir el if/else en cada función.
  */
 type Actor = { id: string; role: string; orgId: string | null };
-function scopeWhere(
+export function scopeWhere(
   actor: Actor,
   alias = "",
 ): { sql: string; params: unknown[]; nextIdx: number } {
@@ -528,8 +528,20 @@ export async function ensureCompletedPdf(opts: {
   if (!r.locked_at && r.status !== "completed") {
     throw new Error("INSPECTION_NOT_FINALIZED");
   }
-  if (r.pdf_path && r.pdf_sha256) {
+  const alreadyPersisted = Boolean(r.pdf_path && r.pdf_sha256);
+  if (alreadyPersisted && (await pdfExists(inspectionId))) {
     return rowToStored(r);
+  }
+  if (alreadyPersisted) {
+    // La fila dice que hay PDF pero el archivo no está. Antes salíamos por
+    // arriba igual y el usuario recibía 500 "PDF no disponible" para siempre,
+    // sin forma de recuperarse ni rastro en los logs. Regeneramos.
+    //
+    // OJO: el PDF regenerado NO es byte a byte el original, así que el sha256
+    // cambia. Queda auditado aparte para poder distinguirlo.
+    console.error(
+      `[inspections] PDF huérfano en ${inspectionId}: la fila apunta a ${r.pdf_path} pero el archivo no está en disco. Regenerando.`,
+    );
   }
 
   // Reusamos un share token activo (para que el QR del PDF apunte a la versión
@@ -573,7 +585,11 @@ export async function ensureCompletedPdf(opts: {
      RETURNING *`,
     [inspectionId, meta.relativePath, meta.sha256, meta.size],
   );
-  await logAudit(user.id, "inspection.pdf_persisted", `${inspectionId} ${meta.sha256.slice(0, 12)}`);
+  await logAudit(
+    user.id,
+    alreadyPersisted ? "inspection.pdf_regenerated" : "inspection.pdf_persisted",
+    `${inspectionId} ${meta.sha256.slice(0, 12)}`,
+  );
   return rowToStored(updated.rows[0]);
 }
 
@@ -601,10 +617,19 @@ export type ImportInspectionsResult = {
 
 /**
  * Bulk import from a backup payload. Newer updatedAt wins per id.
+ *
+ * Está scopeado por organización: un backup solo puede tocar filas de la org
+ * de quien importa, y las filas nuevas nacen con ese org_id. Sin esto, los IDs
+ * de peritaje (que viajan en los share links) permitirían sobrescribir
+ * peritajes de otro tenant subiendo un JSON con updatedAt futuro.
+ *
+ * Para el admin (Vestel, sin org) el scope es org_id NULL, que es donde viven
+ * sus propios peritajes.
  */
 export async function importInspectionsServer(
   rows: StoredInspection[],
   userId: string | null,
+  orgId: string | null = null,
 ): Promise<ImportInspectionsResult> {
   const result: ImportInspectionsResult = {
     added: 0,
@@ -618,12 +643,18 @@ export async function importInspectionsServer(
       continue;
     }
     try {
-      const existing = await query<{ updated_at: Date | string }>(
-        "SELECT updated_at FROM inspections WHERE id = $1",
-        [row.id],
-      );
+      const existing = await query<{
+        updated_at: Date | string;
+        org_id: string | null;
+      }>("SELECT updated_at, org_id FROM inspections WHERE id = $1", [row.id]);
       const incomingMs = Date.parse(row.updatedAt);
       const existingRow = existing.rows[0];
+      if (existingRow && (existingRow.org_id ?? null) !== orgId) {
+        // El ID ya existe pero pertenece a otra organización. Se ignora en
+        // silencio: ni lo pisamos ni confirmamos que exista.
+        result.skipped += 1;
+        continue;
+      }
       if (existingRow) {
         const existingMs =
           typeof existingRow.updated_at === "string"
@@ -639,7 +670,7 @@ export async function importInspectionsServer(
                  plate = $4,
                  report_number = COALESCE(report_number, $5),
                  updated_at = $6
-             WHERE id = $1`,
+             WHERE id = $1 AND org_id IS NOT DISTINCT FROM $7`,
             [
               row.id,
               JSON.stringify(row.data),
@@ -647,6 +678,7 @@ export async function importInspectionsServer(
               platefromData(row.data),
               row.reportNumber ?? null,
               row.updatedAt,
+              orgId,
             ],
           );
           result.updated += 1;
@@ -655,11 +687,12 @@ export async function importInspectionsServer(
         }
       } else {
         await query(
-          `INSERT INTO inspections (id, user_id, status, plate, data, report_number, created_at, updated_at)
-           VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8)`,
+          `INSERT INTO inspections (id, user_id, org_id, status, plate, data, report_number, created_at, updated_at)
+           VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9)`,
           [
             row.id,
             userId,
+            orgId,
             row.data.status === "completed" ? "completed" : "draft",
             platefromData(row.data),
             JSON.stringify(row.data),

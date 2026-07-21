@@ -43,13 +43,13 @@ export async function POST(req: Request) {
 /** Body: { endpoint }. Llamado cuando el user revoca permisos o desinstala. */
 export async function DELETE(req: Request) {
   try {
-    await requireUser();
+    const user = await requireUser();
     const body = await req.json().catch(() => ({}));
     const endpoint = String(body?.endpoint ?? "");
     if (!endpoint) {
       return NextResponse.json({ error: "Falta endpoint" }, { status: 400 });
     }
-    await deleteSubscription(endpoint);
+    await deleteSubscription(endpoint, user.id);
     return NextResponse.json({ ok: true });
   } catch (e) {
     return fail(e);

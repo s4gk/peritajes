@@ -38,13 +38,35 @@ export async function PATCH(
     );
   }
 
-  // Un owner solo puede modificar otros owners — no debe poder cambiar
-  // contraseña ni desactivar a un admin. El admin puede todo.
-  if (me.role !== "admin" && target.role === "admin") {
+  // Este endpoint es administrativo: cambia contraseña o activa/desactiva a
+  // OTRA persona. Para cambiar la propia contraseña está /api/auth/me, así que
+  // un employee no tiene nada que hacer acá.
+  if (me.role === "employee") {
     return NextResponse.json(
-      { error: "Solo un administrador puede modificar a otro administrador." },
+      { error: "Sin permisos para modificar usuarios." },
       { status: 403 },
     );
+  }
+
+  // Un owner solo puede modificar usuarios de SU organización, y nunca a un
+  // admin. El admin (Vestel) no tiene org y puede sobre cualquiera.
+  if (me.role !== "admin") {
+    if (target.role === "admin") {
+      return NextResponse.json(
+        {
+          error: "Solo un administrador puede modificar a otro administrador.",
+        },
+        { status: 403 },
+      );
+    }
+    if (!me.orgId || target.orgId !== me.orgId) {
+      // Mismo cuerpo que "no encontrado" a propósito: no revelamos la
+      // existencia de usuarios de otros tenants.
+      return NextResponse.json(
+        { error: "Usuario no encontrado" },
+        { status: 404 },
+      );
+    }
   }
 
   try {

@@ -71,7 +71,24 @@ export async function saveSubscription(args: {
   );
 }
 
-export async function deleteSubscription(endpoint: string): Promise<void> {
+/**
+ * Borra una suscripción push. Si se pasa `userId`, el borrado se limita a las
+ * suscripciones de esa persona — necesario en el endpoint público, donde de lo
+ * contrario cualquier usuario autenticado podría desuscribir el dispositivo de
+ * otro mandando su endpoint. El envío interno (410/404 de push) llama sin
+ * userId porque ahí el endpoint ya viene de la fila que se está purgando.
+ */
+export async function deleteSubscription(
+  endpoint: string,
+  userId?: string,
+): Promise<void> {
+  if (userId) {
+    await query(
+      "DELETE FROM push_subscriptions WHERE endpoint = $1 AND user_id = $2",
+      [endpoint, userId],
+    );
+    return;
+  }
   await query("DELETE FROM push_subscriptions WHERE endpoint = $1", [endpoint]);
 }
 

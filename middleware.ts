@@ -18,6 +18,13 @@ const CSRF_HEADER = "x-csrf-token";
 const CSRF_TTL_SECONDS = 60 * 60 * 24 * 30; // 30 días
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 
+// Rutas del panel donde se siembra la cookie CSRF.
+//
+// OJO: esta lista y el `matcher` de abajo tienen que cubrir lo mismo, y ambas
+// deben cubrir todo app/(panel)/. Si una ruta está acá pero no en el matcher,
+// el middleware ni corre: quien entre directo a esa sección (deep link o
+// start_url de la PWA) se queda sin cookie y TODAS sus mutaciones responden
+// 403 csrf_invalid hasta que navegue a otra parte.
 const PANEL_PATHS = [
   "/peritajes",
   "/inspection",
@@ -31,6 +38,9 @@ const PANEL_PATHS = [
   "/agenda",
   "/auditoria",
   "/whatsapp",
+  "/clientes",
+  "/propietarios",
+  "/admin",
 ];
 
 function shouldMarkCookieSecure(): boolean {
@@ -148,5 +158,13 @@ export const config = {
     "/agenda",
     "/auditoria/:path*",
     "/auditoria",
+    "/whatsapp/:path*",
+    "/whatsapp",
+    "/clientes/:path*",
+    "/clientes",
+    "/propietarios/:path*",
+    "/propietarios",
+    "/admin/:path*",
+    "/admin",
   ],
 };

@@ -57,6 +57,10 @@ export async function POST(req: Request) {
     );
   }
 
-  const result = await importInspectionsServer(body.inspections, user.id);
+  const result = await importInspectionsServer(
+    body.inspections,
+    user.id,
+    user.orgId,
+  );
   return NextResponse.json(result);
 }

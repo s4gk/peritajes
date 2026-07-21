@@ -46,6 +46,22 @@ export async function savePdf(id: string, bytes: Buffer): Promise<StoredPdfMeta>
   };
 }
 
+/**
+ * ¿Está el archivo realmente en disco? La fila en DB puede tener pdf_path y
+ * pdf_sha256 y aun así no haber archivo (borrado manual, restore de backup de
+ * la DB sin los archivos, disco reemplazado). Sin este chequeo la descarga
+ * queda rota para siempre porque ensureCompletedPdf corta antes de regenerar.
+ */
+export async function pdfExists(id: string): Promise<boolean> {
+  try {
+    await fs.stat(pdfPathForId(id));
+    return true;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw err;
+  }
+}
+
 export async function readPdf(id: string): Promise<Buffer | null> {
   try {
     return await fs.readFile(pdfPathForId(id));

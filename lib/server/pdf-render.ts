@@ -301,12 +301,29 @@ export async function renderInspectionPdf(
   const PDF_TIMEOUT_MS = 25_000;
 
   let browser: import("puppeteer").Browser | undefined;
+  const startedAt = Date.now();
   try {
     const puppeteer = (await import("puppeteer")).default;
-    browser = await puppeteer.launch({
-      headless: true,
-      args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
-    });
+    try {
+      browser = await puppeteer.launch({
+        headless: true,
+        args: [
+          "--no-sandbox",
+          "--disable-setuid-sandbox",
+          "--disable-dev-shm-usage",
+        ],
+      });
+    } catch (err) {
+      // El modo de fallo más común en un servidor recién aprovisionado: el
+      // Chromium de puppeteer no se descargó (npm ci con --ignore-scripts) o
+      // quedó en un $HOME distinto al del usuario de pm2. Sin este log el
+      // error solo llegaba al navegador del perito.
+      console.error(
+        "[pdf-render] no se pudo lanzar Chromium. Verificá que puppeteer haya descargado el browser para el usuario que corre pm2 (npx puppeteer browsers install chrome):",
+        err,
+      );
+      throw err;
+    }
     const page = await browser.newPage();
     page.setDefaultTimeout(SET_CONTENT_TIMEOUT_MS);
     page.setDefaultNavigationTimeout(SET_CONTENT_TIMEOUT_MS);
@@ -338,6 +355,9 @@ export async function renderInspectionPdf(
       timeout: PDF_TIMEOUT_MS,
     });
     const compressed = await compressPdfWithGhostscript(Buffer.from(pdf));
+    console.log(
+      `[pdf-render] ${plateSlug || "sin-placa"}: ${Math.round(compressed.length / 1024)} KB en ${Date.now() - startedAt} ms`,
+    );
     return { buffer: compressed, plateSlug, docNumber };
   } finally {
     if (browser) await browser.close().catch(() => {});

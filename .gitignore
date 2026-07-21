@@ -55,3 +55,5 @@ certificates
 # es regenerable con `gunzip -k spa.traineddata.gz`. Tesseract puede leer .gz
 # directo del langPath.
 lib/tessdata/spa.traineddata
+# Claude Code local settings
+.claude/settings.local.json

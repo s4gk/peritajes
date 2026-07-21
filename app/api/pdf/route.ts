@@ -33,6 +33,18 @@ type Payload = {
   preview?: boolean;
 };
 
+/**
+ * Tope del cuerpo del POST. El cliente manda la inspección completa con las
+ * fotos en base64; sin tope, un peritaje con muchas fotos se sube durante
+ * minutos por 4G y termina en `Error: aborted / ECONNRESET` (visible en los
+ * logs de pm2), que en el celular se ve como un "Error desconocido" opaco.
+ *
+ * Este endpoint es solo para previsualizar borradores. El PDF oficial de un
+ * peritaje finalizado se baja por GET /api/inspections/[id]/pdf, sin subir
+ * nada. `/api/inspections` usa un tope equivalente (MAX_DATA_BYTES).
+ */
+const MAX_BODY_BYTES = 24 * 1024 * 1024;
+
 export async function POST(req: Request) {
   let user;
   try {
@@ -41,9 +53,44 @@ export async function POST(req: Request) {
     return new NextResponse("No autenticado", { status: 401 });
   }
 
+  const declaredLength = Number(req.headers.get("content-length") ?? "0");
+  if (declaredLength > MAX_BODY_BYTES) {
+    console.warn(
+      `[pdf] cuerpo rechazado por tamaño: ${declaredLength} bytes (user=${user.id})`,
+    );
+    return new NextResponse(
+      "El peritaje es demasiado grande para previsualizar. Finalízalo para generar el PDF oficial en el servidor.",
+      { status: 413 },
+    );
+  }
+
+  let raw: string;
+  try {
+    raw = await req.text();
+  } catch (err) {
+    // Acá es donde aterriza el ECONNRESET de una subida cortada.
+    console.error(
+      `[pdf] no se pudo leer el cuerpo (user=${user.id}):`,
+      err instanceof Error ? err.message : err,
+    );
+    return new NextResponse(
+      "Se interrumpió la subida del peritaje. Revisa tu conexión e inténtalo de nuevo.",
+      { status: 400 },
+    );
+  }
+  if (raw.length > MAX_BODY_BYTES) {
+    console.warn(
+      `[pdf] cuerpo rechazado por tamaño real: ${raw.length} bytes (user=${user.id})`,
+    );
+    return new NextResponse(
+      "El peritaje es demasiado grande para previsualizar. Finalízalo para generar el PDF oficial en el servidor.",
+      { status: 413 },
+    );
+  }
+
   let body: Payload;
   try {
-    body = (await req.json()) as Payload;
+    body = JSON.parse(raw) as Payload;
   } catch {
     return new NextResponse("Cuerpo inválido", { status: 400 });
   }
@@ -168,6 +215,13 @@ export async function POST(req: Request) {
       },
     });
   } catch (err) {
+    // Sin este log, un fallo de Puppeteer (chromium ausente, OOM, timeout de
+    // render) no dejaba NINGÚN rastro en pm2: el único lugar donde aparecía
+    // era el cuerpo del 500 en el navegador del perito.
+    console.error(
+      `[pdf] falló el render (user=${user.id} inspection=${body.inspectionId ?? "-"} preview=${body.preview ?? false}):`,
+      err,
+    );
     const message = err instanceof Error ? err.message : "Error desconocido";
     return new NextResponse(`Error al generar PDF: ${message}`, { status: 500 });
   }

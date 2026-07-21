@@ -51,6 +51,18 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "invalid signature" }, { status: 401 });
   }
   if (verdict.ok === null) {
+    // Sin secreto no hay forma de saber si esto viene de Meta. En dev es una
+    // molestia aceptable durante el setup; en producción sería un endpoint
+    // público que cualquiera puede alimentar (y que escribe en audit_log).
+    if (process.env.NODE_ENV === "production") {
+      console.error(
+        "[wa-webhook] META_WA_APP_SECRET no configurado en producción — webhook rechazado.",
+      );
+      return NextResponse.json(
+        { error: "webhook not configured" },
+        { status: 503 },
+      );
+    }
     console.warn(
       "[wa-webhook] META_WA_APP_SECRET no configurado — webhook sin validar firma. Configúralo en producción.",
     );
