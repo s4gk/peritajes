@@ -18,7 +18,12 @@
 // dispositivos (después de cambios grandes en el bundle, p.ej. reemplazo de
 // Gemini OCR por Tesseract). En `activate` borramos los caches que no estén
 // en la versión actual, así los chunks viejos se botan.
-const VERSION = "v19";
+// v20 (jul 2026): el deploy del rediseño de login + pilares v2 salió sin bump,
+// dejando dispositivos con el bundle de junio cacheado (chunks que ya no
+// existen en el server → login/SPA colgados). REGLA: todo deploy con cambios
+// de bundle debe venir con bump de VERSION, si no los celulares con la PWA
+// instalada nunca ven el banner de actualización.
+const VERSION = "v20";
 const STATIC_CACHE = `perito-static-${VERSION}`;
 const RUNTIME_CACHE = `perito-runtime-${VERSION}`;
 const API_CACHE = `perito-api-${VERSION}`;
