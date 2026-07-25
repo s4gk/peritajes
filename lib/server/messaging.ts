@@ -35,6 +35,37 @@ import {
 
 export type MessagingProvider = "meta" | "twilio" | "kapso";
 
+/**
+ * Modo prueba: si `WA_TEST_ALLOWLIST` está seteada (números separados por
+ * coma, en cualquier formato), SOLO se envía a esos destinos; cualquier otro
+ * se rechaza con error claro (queda como "failed" en la auditoría, no como
+ * enviado). Protege a los clientes reales de recibir mensajes del número de
+ * pruebas mientras no esté aprobado el número definitivo. Para desactivar el
+ * modo prueba basta quitar la variable del entorno y reiniciar.
+ */
+/** Últimos 10 dígitos — así "3001234567" y "573001234567" casan igual. */
+function allowKey(phone: string): string {
+  return phone.replace(/\D/g, "").slice(-10);
+}
+
+function testAllowlist(): Set<string> | null {
+  const raw = process.env.WA_TEST_ALLOWLIST?.trim();
+  if (!raw) return null;
+  return new Set(raw.split(",").map(allowKey).filter(Boolean));
+}
+
+function assertAllowedRecipient(to: string): void {
+  const list = testAllowlist();
+  if (!list) return;
+  if (list.has(allowKey(to))) return;
+  console.warn(
+    `[wa] modo prueba: destino ${to} fuera de WA_TEST_ALLOWLIST — envío bloqueado.`,
+  );
+  throw new Error(
+    "Modo prueba de WhatsApp: destinatario fuera de WA_TEST_ALLOWLIST",
+  );
+}
+
 export function activeProvider(): MessagingProvider {
   const p = process.env.MESSAGING_PROVIDER?.trim().toLowerCase();
   if (p === "twilio") return "twilio";
@@ -64,6 +95,7 @@ export async function sendTemplate(
   templateName: string,
   bodyParams: string[],
 ): Promise<void> {
+  assertAllowedRecipient(to);
   if (activeProvider() === "twilio") {
     return sendTwilioTemplate(to, templateName, bodyParams);
   }
@@ -83,6 +115,7 @@ export async function sendDocumentTemplate(
   doc: { pdfBuffer?: Buffer; filename: string; publicUrl?: string },
   bodyParams: string[],
 ): Promise<void> {
+  assertAllowedRecipient(to);
   if (activeProvider() === "twilio") {
     return sendTwilioDocumentTemplate(
       to,
@@ -105,6 +138,7 @@ export async function sendDocumentTemplate(
 
 /** Texto libre (solo dentro de la ventana de sesión de 24h). Para pruebas. */
 export async function sendFreeText(to: string, text: string): Promise<void> {
+  assertAllowedRecipient(to);
   if (activeProvider() === "twilio") {
     return sendTwilioFreeText(to, text);
   }
