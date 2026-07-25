@@ -1,7 +1,12 @@
 import { describe, it, expect } from "vitest";
 import { analyze, computeHealth, riskTone, sectionHealthPct } from "@/lib/rules-engine";
 import { computePillars, riskLevelFromPillars } from "@/lib/scoring";
-import { BODYWORK_SECTION, bodyworkSectionFor } from "@/lib/constants";
+import {
+  activeSectionsFor,
+  BODYWORK_SECTION,
+  bodyworkSectionFor,
+  CHASSIS_ITEMS_SCORED_AS_BODYWORK,
+} from "@/lib/constants";
 import type { VehicleType } from "@/lib/types";
 import {
   pristineInspection,
@@ -60,8 +65,8 @@ describe("analyze: bodywork", () => {
 describe("analyze: structural escalation", () => {
   it("two structural hits force critical risk", () => {
     const data = pristineInspection();
-    setChassis(data, "floor", "struct_repair_bench");
-    setChassis(data, "reinforcements", "struct_welded_later");
+    setChassis(data, "door_pillar_fl", "struct_repair_bench");
+    setChassis(data, "pillar_b_l", "struct_welded_later");
     const r = analyze(data);
     expect(r.counters.structuralHits).toBe(2);
     expect(r.level).toBe("critical");
@@ -69,7 +74,7 @@ describe("analyze: structural escalation", () => {
 
   it("a single severe structural deformation puts score in high territory", () => {
     const data = pristineInspection();
-    setChassis(data, "floor", "struct_deform_severe");
+    setChassis(data, "front_corner_l", "struct_deform_severe");
     const r = analyze(data);
     expect(r.counters.structuralHits).toBe(1);
     // single structural hit alone shouldn't auto-escalate; score path can.
@@ -81,7 +86,7 @@ describe("analyze: structural escalation", () => {
 describe("analyze: chasis calificado con catálogo común (contextual)", () => {
   it("'Deformado' en el chasis cuenta como estructural y fuerza riesgo crítico", () => {
     const data = pristineInspection();
-    setChassis(data, "floor", "common_deformed");
+    setChassis(data, "door_pillar_fl", "common_deformed");
     const r = analyze(data);
     expect(r.counters.structuralHits).toBe(1);
     expect(r.level).toBe("critical");
@@ -100,7 +105,7 @@ describe("analyze: chasis calificado con catálogo común (contextual)", () => {
 
   it("'Regular' en el chasis penaliza medio pero NO fuerza riesgo alto", () => {
     const data = pristineInspection();
-    setChassis(data, "reinforcements", "common_regular");
+    setChassis(data, "rocker_l", "common_regular");
     const r = analyze(data);
     expect(r.counters.structuralHits).toBe(0);
     expect(r.level).not.toBe("high");
@@ -117,7 +122,7 @@ describe("analyze: chasis calificado con catálogo común (contextual)", () => {
     expect(clean.globalPct).toBe(100);
 
     const data = pristineInspection();
-    setChassis(data, "floor", "common_deformed");
+    setChassis(data, "door_pillar_fl", "common_deformed");
     const pillars = computePillars(computeHealth(data), analyze(data));
     expect(pillars.globalPct).not.toBeNull();
     expect(pillars.globalPct!).toBeLessThan(100);
@@ -234,7 +239,7 @@ describe("analyze: ordering & summary", () => {
 
   it("conditionSummary reflects worst category", () => {
     const data = pristineInspection();
-    setChassis(data, "floor", "struct_repair_bench");
+    setChassis(data, "door_pillar_fl", "struct_repair_bench");
     const r = analyze(data);
     expect(r.conditionSummary).toMatch(/estructural/i);
   });
@@ -360,7 +365,7 @@ describe("piso por peor sección: carrocería NO hunde, mecánica SÍ", () => {
 describe("Estructura y Seguridad: chasis por severidad (daño −3/pt, cosmético −1/pt, crítico −20)", () => {
   it("chasis con 1 advertencia de DAÑO sev1 (regular) → 97%", () => {
     const data = pristineInspection();
-    setChassis(data, "reinforcements", "common_regular"); // warning sev1, risks damage
+    setChassis(data, "front_corner_l", "common_regular"); // warning sev1, risks damage
     const h = computeHealth(data);
     expect(h.bySection.chassis.warning).toBe(1);
     expect(h.bySection.chassis.warnSeverity).toBe(1);
@@ -370,8 +375,8 @@ describe("Estructura y Seguridad: chasis por severidad (daño −3/pt, cosmétic
 
   it("chasis con 2 advertencias de daño sev1 → 94%", () => {
     const data = pristineInspection();
-    setChassis(data, "reinforcements", "common_regular");
-    setChassis(data, "floor", "common_regular");
+    setChassis(data, "front_corner_l", "common_regular");
+    setChassis(data, "front_corner_r", "common_regular");
     const h = computeHealth(data);
     expect(h.bySection.chassis.healthPct).toBe(94); // 100 − 2·3
   });
@@ -432,7 +437,7 @@ describe("Estructura y Seguridad: chasis por severidad (daño −3/pt, cosmétic
 describe("gate crítico hunde la barra del pilar (no se diluye)", () => {
   it("daño estructural hunde el pilar de seguridad y el global cuadra con las barras", () => {
     const data = pristineInspection();
-    setChassis(data, "floor", "common_deformed"); // estructural → gate crítico
+    setChassis(data, "door_pillar_fl", "common_deformed"); // estructural → gate crítico
     const pillars = computePillars(computeHealth(data), analyze(data));
     const safety = pillars.pillars.find((p) => p.key === "safety")!;
     expect(safety.healthPct!).toBeLessThanOrEqual(45);
@@ -503,7 +508,7 @@ describe("dimensiones nuevas: riesgo + impacto económico", () => {
 
   it("un daño estructural es riesgo e impacto económico crítico", () => {
     const data = pristineInspection();
-    setChassis(data, "floor", "common_deformed");
+    setChassis(data, "door_pillar_fl", "common_deformed");
     const r = analyze(data);
     const f = r.findings.find((x) => x.section === "Chasis / Estructura");
     expect(f?.riskLevel).toBe("critical");
@@ -546,7 +551,12 @@ describe("la carrocería se califica según el TIPO de vehículo", () => {
       const h = computeHealth(data);
       // La guarda de regresión real: se evalúan TODOS los paneles del tipo.
       // Antes, con el inventario de sedán, la moto evaluaba 0 y el tráiler 4.
-      expect(h.bySection.bodywork.inspected).toBe(ids.length);
+      // Si el chasis está activo, carrocería suma además piso y refuerzos
+      // (viven en data.chassis pero califican acá — pre-rellenados en OK).
+      const extras = new Set(activeSectionsFor(data.kind, type)).has("chassis")
+        ? CHASSIS_ITEMS_SCORED_AS_BODYWORK.size
+        : 0;
+      expect(h.bySection.bodywork.inspected).toBe(ids.length + extras);
       expect(h.bySection.bodywork.healthPct).not.toBeNull();
       // Carrocería usa la calibración plana suave (100 − danger×3), así que el
       // piso depende del nº de paneles: tráiler (15) es el más benigno con 55.
@@ -629,7 +639,7 @@ describe("impacto económico del chasis: graduado, no siempre crítico", () => {
 
   it("un deformado en el chasis sigue siendo crítico en ambas dimensiones", () => {
     const data = pristineInspection();
-    setChassis(data, "floor", "common_deformed");
+    setChassis(data, "door_pillar_fl", "common_deformed");
     const r = analyze(data);
     const f = r.findings.find((x) => x.section === "Chasis / Estructura");
     expect(f?.riskLevel).toBe("critical");
@@ -649,12 +659,46 @@ describe("impacto económico del chasis: graduado, no siempre crítico", () => {
     const rep = pristineInspection();
     setChassis(rep, "rocker_l", "common_repainted");
     const deform = pristineInspection();
-    setChassis(deform, "floor", "common_deformed");
+    setChassis(deform, "door_pillar_fl", "common_deformed");
 
     const costRep = analyze(rep).estimatedRepairCost;
     const costDeform = analyze(deform).estimatedRepairCost;
     expect(costRep).not.toBeNull();
     expect(costDeform).not.toBeNull();
     expect(costRep!.max).toBeLessThan(costDeform!.min);
+  });
+});
+
+describe("piso y refuerzos de carrocería califican como Carrocería, no Estructura", () => {
+  // Decisión de producto (CHASSIS_ITEMS_SCORED_AS_BODYWORK): se capturan en la
+  // etapa de estructura (sus entries viven en data.chassis) pero se muestran y
+  // califican dentro del módulo de Carrocería.
+  it("un piso deformado resta en el pilar de carrocería y NO dispara el gate estructural", () => {
+    const data = pristineInspection();
+    setChassis(data, "floor", "common_deformed");
+    const r = analyze(data);
+    expect(r.counters.structuralHits).toBe(0);
+    const f = r.findings.find((x) => x.item === "Piso de carrocería");
+    expect(f?.section).toBe("Carrocería");
+
+    const h = computeHealth(data);
+    expect(h.bySection.chassis.danger).toBe(0);
+    expect(h.bySection.chassis.healthPct).toBe(100);
+    // Calibración estética de carrocería: 1 crítico → −3.
+    expect(h.bySection.bodywork.danger).toBe(1);
+    expect(h.bySection.bodywork.healthPct).toBe(97);
+
+    const pillars = computePillars(h, r);
+    expect(pillars.gates.some((g) => g.pillar === "safety")).toBe(false);
+  });
+
+  it("una advertencia en refuerzos resta en carrocería y deja el chasis intacto", () => {
+    const data = pristineInspection();
+    setChassis(data, "reinforcements", "common_regular");
+    const h = computeHealth(data);
+    expect(h.bySection.chassis.warning).toBe(0);
+    expect(h.bySection.chassis.healthPct).toBe(100);
+    expect(h.bySection.bodywork.warning).toBe(1);
+    expect(h.bySection.bodywork.healthPct).toBe(99); // plano suave: advertencia −1
   });
 });

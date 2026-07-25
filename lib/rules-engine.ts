@@ -1,7 +1,8 @@
 import {
   activeSectionsFor,
   bodyworkSectionFor,
-  CHASSIS_SECTION,
+  CHASSIS_BODYWORK_GROUP,
+  CHASSIS_STRUCTURAL_SECTION,
   COMFORT_SECTION,
   ELECTRICAL_SECTION,
   FALLBACK_VEHICLE_TYPE,
@@ -334,23 +335,36 @@ export function analyze(data: InspectionData): RiskReport {
   const active = activeSectionSet(data);
 
   // --- Bodywork ---
-  for (const { opt, label } of entriesOf(bodyworkDefFor(data), data.bodywork)) {
-    if (!opt) continue;
-    if (hasRisk(opt, "repainted")) counters.repainted += 1;
-    if (hasRisk(opt, "repaired")) counters.repaired += 1;
-    if (hasRisk(opt, "poor_repair")) counters.poorlyRepaired += 1;
-    if (hasRisk(opt, "damage")) counters.damaged += 1;
-    if (hasRisk(opt, "rust")) counters.rustHits += 1;
+  // Piso y refuerzos de carrocería viven en data.chassis (se capturan en la
+  // etapa de estructura) pero califican como carrocería (decisión de producto,
+  // ver CHASSIS_ITEMS_SCORED_AS_BODYWORK): mismos counters y severidad que el
+  // resto de la carrocería, sin bono estructural ni gate de chasis.
+  const bodyworkSources: {
+    def: InspectionSectionDef;
+    record?: Record<string, InspectionEntry>;
+  }[] = [
+    { def: bodyworkDefFor(data), record: data.bodywork },
+    { def: CHASSIS_BODYWORK_GROUP, record: data.chassis },
+  ];
+  for (const src of bodyworkSources) {
+    for (const { opt, label } of entriesOf(src.def, src.record)) {
+      if (!opt) continue;
+      if (hasRisk(opt, "repainted")) counters.repainted += 1;
+      if (hasRisk(opt, "repaired")) counters.repaired += 1;
+      if (hasRisk(opt, "poor_repair")) counters.poorlyRepaired += 1;
+      if (hasRisk(opt, "damage")) counters.damaged += 1;
+      if (hasRisk(opt, "rust")) counters.rustHits += 1;
 
-    const lvl = catalogLevel(opt);
-    if (lvl) {
-      pushFinding("bodywork", lvl, "Carrocería", label, opt.label, opt);
-      score += catalogSeverityScore(opt);
+      const lvl = catalogLevel(opt);
+      if (lvl) {
+        pushFinding("bodywork", lvl, "Carrocería", label, opt.label, opt);
+        score += catalogSeverityScore(opt);
+      }
     }
   }
 
   // --- Structural / chassis ---
-  for (const { opt, label } of entriesOf(CHASSIS_SECTION, data.chassis)) {
+  for (const { opt, label } of entriesOf(CHASSIS_STRUCTURAL_SECTION, data.chassis)) {
     if (!opt) continue;
     if (isChassisStructuralHit(opt)) counters.structuralHits += 1;
     if (hasRisk(opt, "poor_repair")) counters.poorlyRepaired += 1;
@@ -795,7 +809,11 @@ export function computeHealth(data: InspectionData): HealthReport {
     processSectionInto(sections.bodywork, bodyworkDefFor(data), data.bodywork);
   }
   if (scores("chassis")) {
-    processSectionInto(sections.chassis, CHASSIS_SECTION, data.chassis, chassisExtraPenalty);
+    // Piso y refuerzos: capturados con el chasis, calificados como carrocería
+    // (ver CHASSIS_ITEMS_SCORED_AS_BODYWORK) — entran a la salud de bodywork
+    // con su calibración estética, sin el bono de penalización del chasis.
+    processSectionInto(sections.bodywork, CHASSIS_BODYWORK_GROUP, data.chassis);
+    processSectionInto(sections.chassis, CHASSIS_STRUCTURAL_SECTION, data.chassis, chassisExtraPenalty);
   }
   if (scores("suspension")) {
     processSectionInto(sections.suspension, SUSPENSION_SECTION, data.suspension);

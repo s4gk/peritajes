@@ -1031,6 +1031,45 @@ export const CHASSIS_SECTION: InspectionSectionDef = {
   ],
 };
 
+/** Piso y refuerzos de carrocería: se capturan en la etapa de estructura del
+ *  recorrido y sus entries viven en `data.chassis`, pero por decisión de
+ *  producto se muestran Y CALIFICAN dentro de Carrocería (pilar "Carrocería y
+ *  pintura"): no cuentan como golpe estructural, no llevan el bono de
+ *  penalización del chasis ni disparan el gate de daño estructural. El PDF y
+ *  el rules-engine derivan sus definiciones de este split; el wizard sigue
+ *  capturándolos con CHASSIS_SECTION completo. */
+export const CHASSIS_ITEMS_SCORED_AS_BODYWORK: ReadonlySet<string> = new Set([
+  "floor",
+  "reinforcements",
+]);
+
+/** CHASSIS_SECTION sin piso/refuerzos — lo que se imprime y califica como
+ *  Estructura. */
+export const CHASSIS_STRUCTURAL_SECTION: InspectionSectionDef = {
+  ...CHASSIS_SECTION,
+  groups: CHASSIS_SECTION.groups.map((g) => ({
+    ...g,
+    items: g.items.filter((i) => !CHASSIS_ITEMS_SCORED_AS_BODYWORK.has(i.id)),
+  })),
+};
+
+/** Solo piso/refuerzos, empaquetados como grupo de carrocería: el PDF anexa
+ *  sus groups a la sección de carrocería y el scoring los itera contra
+ *  `data.chassis` (ahí es donde viven los datos). */
+export const CHASSIS_BODYWORK_GROUP: InspectionSectionDef = {
+  id: "bodywork",
+  label: "Carrocería",
+  groups: [
+    {
+      id: "floor_reinforcements",
+      label: "Piso y refuerzos",
+      items: CHASSIS_SECTION.groups
+        .flatMap((g) => g.items)
+        .filter((i) => CHASSIS_ITEMS_SCORED_AS_BODYWORK.has(i.id)),
+    },
+  ],
+};
+
 export const SUSPENSION_SECTION: InspectionSectionDef = {
   id: "suspension",
   label: "Suspensión",

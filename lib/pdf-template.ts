@@ -6,7 +6,8 @@ import { buildDocumentNumber, getCompanyBranding, type CompanyBranding } from ".
 import {
   activeSectionsFor,
   bodyworkSectionFor,
-  CHASSIS_SECTION,
+  CHASSIS_BODYWORK_GROUP,
+  CHASSIS_STRUCTURAL_SECTION,
   COMFORT_SECTION,
   componentsForKind,
   ELECTRICAL_SECTION,
@@ -1794,7 +1795,24 @@ export function renderReportHtml(
     VEHICLE_TYPES[vehicleType] ?? VEHICLE_TYPES[FALLBACK_VEHICLE_TYPE];
   const activeSectionIds = new Set(activeSectionsFor(data.kind, vehicleType));
   const components = componentsForKind(data.kind);
-  const bodyworkSectionForPdf = bodyworkSectionFor(vehicleType);
+  // Piso y refuerzos de carrocería viven en data.chassis (se capturan en la
+  // etapa de estructura) pero se muestran y califican dentro de Carrocería
+  // (ver CHASSIS_ITEMS_SCORED_AS_BODYWORK en constants). Acá solo anexamos su
+  // grupo a la definición de carrocería y mergeamos sus entries para el render.
+  const baseBodywork = bodyworkSectionFor(vehicleType);
+  const bodyworkSectionForPdf: InspectionSectionDef = {
+    ...baseBodywork,
+    groups: [...baseBodywork.groups, ...CHASSIS_BODYWORK_GROUP.groups],
+  };
+  const bodyworkDataForPdf: Record<string, InspectionEntry> = {
+    ...data.bodywork,
+  };
+  for (const g of CHASSIS_BODYWORK_GROUP.groups) {
+    for (const item of g.items) {
+      const entry = data.chassis?.[item.id];
+      if (entry) bodyworkDataForPdf[item.id] = entry;
+    }
+  }
 
   // El grupo "Compresión" del motor es dinámico: el perito agrega cilindros uno
   // a uno y se guardan en data.engineCompression. Para que las funciones de
@@ -1833,8 +1851,8 @@ export function renderReportHtml(
     def: InspectionSectionDef;
     data: Record<string, InspectionEntry>;
   }[] = [
-    { sectionId: "bodywork", title: "Carrocería", def: bodyworkSectionForPdf, data: data.bodywork },
-    { sectionId: "chassis", title: "Chasis y estructura", def: CHASSIS_SECTION, data: data.chassis },
+    { sectionId: "bodywork", title: "Carrocería", def: bodyworkSectionForPdf, data: bodyworkDataForPdf },
+    { sectionId: "chassis", title: "Chasis y estructura", def: CHASSIS_STRUCTURAL_SECTION, data: data.chassis },
     { sectionId: "suspension", title: "Suspensión", def: SUSPENSION_SECTION, data: data.suspension },
     { sectionId: "engine", title: "Motor", def: engineSectionForPdf, data: engineDataForPdf },
     { sectionId: "electrical", title: "Sistema eléctrico", def: ELECTRICAL_SECTION, data: data.electrical },
