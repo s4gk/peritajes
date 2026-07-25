@@ -6,6 +6,7 @@ import {
   idbDeleteInspection,
   idbEnqueueMutation,
   idbListInspections,
+  idbListMutations,
   idbPutInspection,
   idbPutInspections,
   idbRemoveMutationsForInspection,
@@ -248,9 +249,11 @@ async function refreshFromServer(): Promise<void> {
     const json = (await fetchJson("/api/inspections")) as {
       inspections: StoredInspection[];
     };
+    const serverIds = new Set<string>();
     const merged: StoredInspection[] = [];
     for (const row of json.inspections ?? []) {
       const incoming = mergeDefaults(row);
+      serverIds.add(incoming.id);
       const local = memory.get(incoming.id);
       const winner =
         !local || local.updatedAt < incoming.updatedAt ? incoming : local;
@@ -259,6 +262,20 @@ async function refreshFromServer(): Promise<void> {
     }
     if (merged.length > 0) {
       idbPutInspections(merged).catch(() => {});
+    }
+    // Reconciliar borrados hechos en otro dispositivo (o server-side): filas
+    // que viven en el cache local pero el server ya no reporta. Solo se quitan
+    // las que NO tienen mutación pendiente en la cola — esas ya estaban
+    // sincronizadas, así que su ausencia = eliminación real. Las que sí tienen
+    // mutación pendiente son drafts offline aún sin subir: se conservan para
+    // que el sync los suba (si no, se perderían al perder red y refrescar).
+    const pending = new Set(
+      (await idbListMutations()).map((m) => m.inspectionId),
+    );
+    for (const id of [...memory.keys()]) {
+      if (serverIds.has(id) || pending.has(id)) continue;
+      memory.delete(id);
+      idbDeleteInspection(id).catch(() => {});
     }
     // Avisamos a las pantallas que pueden re-leer del store con la versión
     // canónica del server (p.ej. el listado de peritajes).
