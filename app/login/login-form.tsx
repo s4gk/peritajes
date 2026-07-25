@@ -2,7 +2,6 @@
 
 import * as React from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { AlertCircle, Eye, EyeOff, Loader2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -17,8 +16,22 @@ import { wipeLocalUserData } from "@/lib/inspections-store";
 // origen de los peritajes que quedaban a nombre de otro).
 const ACTIVE_UID_KEY = "perito_active_uid";
 
+// fetch con timeout duro. Sin esto, un celular con señal débil puede dejar el
+// request "pensando" 30-60s y el perito solo ve el spinner infinito de
+// "Ingresando…" sin ningún error.
+function fetchWithTimeout(
+  input: RequestInfo,
+  init: RequestInit,
+  ms: number,
+): Promise<Response> {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), ms);
+  return fetch(input, { ...init, signal: ctrl.signal }).finally(() =>
+    clearTimeout(timer),
+  );
+}
+
 export function LoginForm() {
-  const router = useRouter();
   const [username, setUsername] = React.useState("");
   const [password, setPassword] = React.useState("");
   const [showPassword, setShowPassword] = React.useState(false);
@@ -30,11 +43,15 @@ export function LoginForm() {
     setError(null);
     setBusy(true);
     try {
-      const res = await fetch("/api/auth/login", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ username, password }),
-      });
+      const res = await fetchWithTimeout(
+        "/api/auth/login",
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ username, password }),
+        },
+        15_000,
+      );
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         setError(data?.error || "No se pudo iniciar sesión");
@@ -43,37 +60,59 @@ export function LoginForm() {
       }
       // Detectar cambio de usuario en este dispositivo. /api/auth/me ahora va
       // siempre a red (el SW no lo cachea), así que devuelve la identidad real
-      // recién autenticada.
+      // recién autenticada. Todo el chequeo va acotado a 8s: es una protección
+      // (limpiar estado local del usuario anterior), no puede convertirse en
+      // el motivo por el que el login "se queda cargando".
       try {
-        const me = await fetch("/api/auth/me", { credentials: "same-origin" })
-          .then((r) => (r.ok ? r.json() : null))
-          .catch(() => null);
-        const newUid: string | null = me?.user?.id ?? null;
-        let prevUid: string | null = null;
-        try {
-          prevUid = localStorage.getItem(ACTIVE_UID_KEY);
-        } catch {
-          /* localStorage no disponible */
-        }
-        if (newUid && prevUid && prevUid !== newUid) {
-          // Usuario distinto al anterior → botar su estado local para no
-          // heredar ni resincronizar nada suyo bajo esta cuenta.
-          await wipeLocalUserData().catch(() => {});
-        }
-        if (newUid) {
-          try {
-            localStorage.setItem(ACTIVE_UID_KEY, newUid);
-          } catch {
-            /* ignore */
-          }
-        }
+        await Promise.race([
+          (async () => {
+            const me = await fetchWithTimeout(
+              "/api/auth/me",
+              { credentials: "same-origin" },
+              5_000,
+            )
+              .then((r) => (r.ok ? r.json() : null))
+              .catch(() => null);
+            const newUid: string | null = me?.user?.id ?? null;
+            let prevUid: string | null = null;
+            try {
+              prevUid = localStorage.getItem(ACTIVE_UID_KEY);
+            } catch {
+              /* localStorage no disponible */
+            }
+            if (newUid && prevUid && prevUid !== newUid) {
+              // Usuario distinto al anterior → botar su estado local para no
+              // heredar ni resincronizar nada suyo bajo esta cuenta.
+              await wipeLocalUserData().catch(() => {});
+            }
+            if (newUid) {
+              try {
+                localStorage.setItem(ACTIVE_UID_KEY, newUid);
+              } catch {
+                /* ignore */
+              }
+            }
+          })(),
+          new Promise((resolve) => setTimeout(resolve, 8_000)),
+        ]);
       } catch {
         /* best-effort: si algo falla, seguimos al panel igual */
       }
-      router.replace("/dashboard");
-      router.refresh();
+      // Navegación DURA a propósito (no router.replace): tras un deploy, el
+      // bundle viejo que el navegador tiene en memoria puede pedir chunks que
+      // ya no existen en el server y dejar la SPA colgada en "Ingresando…".
+      // Un full load trae HTML y chunks frescos y deja que el SW actualizado
+      // tome control de la sesión.
+      window.location.replace("/dashboard");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Error desconocido");
+      const timedOut = err instanceof DOMException && err.name === "AbortError";
+      setError(
+        timedOut
+          ? "El servidor no respondió. Revisa tu señal e intenta de nuevo."
+          : err instanceof Error
+            ? err.message
+            : "Error desconocido",
+      );
       setBusy(false);
     }
   }
