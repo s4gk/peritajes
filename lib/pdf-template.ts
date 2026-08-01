@@ -1061,18 +1061,26 @@ function renderLegalDisclaimer(brand: CompanyBranding): string {
   `;
 }
 
+/** Grupo de evidencia fotográfica.
+ *
+ *  `size: "lg"` cambia a una grilla de 2 columnas con marco alto: es para las
+ *  fotos donde el DETALLE es el contenido (improntas de motor/chasis/plaqueta,
+ *  tarjeta de propiedad). En la grilla normal de 3 columnas esos números salen
+ *  demasiado pequeños para leerse impresos. */
 function renderEvidenceGroup(
   title: string,
   items: { label: string; dataUrl: string }[],
+  opts: { size?: "md" | "lg" } = {},
 ): string {
   if (items.length === 0) return "";
+  const gridClass = opts.size === "lg" ? "image-grid image-grid-lg" : "image-grid";
   return `
     <div class="evidence-group">
       <div class="evidence-group-head">
         <span class="evidence-group-title">${escapeHtml(title)}</span>
         <span class="evidence-group-count">${items.length} foto${items.length === 1 ? "" : "s"}</span>
       </div>
-      <div class="image-grid">
+      <div class="${gridClass}">
         ${items
           .map(
             (i) => `
@@ -1128,7 +1136,9 @@ function renderMandatoryPhotosEvidence(data: InspectionData): string {
     }
   }
   if (items.length === 0) return "";
-  return renderEvidenceGroup("Fotografías obligatorias", items);
+  // Grilla grande: tres de las seis son improntas (chasis, motor, plaqueta) y
+  // el número tiene que quedar legible en el impreso.
+  return renderEvidenceGroup("Fotografías obligatorias", items, { size: "lg" });
 }
 
 function renderExtraPhotosEvidence(data: InspectionData): string {
@@ -1151,7 +1161,10 @@ function renderDocumentEvidence(data: InspectionData): string {
   for (const img of docs.ownershipCardBack ?? []) {
     items.push({ label: "Tarjeta de propiedad — Reverso", dataUrl: img.dataUrl });
   }
-  return renderEvidenceGroup("Tarjeta de propiedad / Licencia de tránsito", items);
+  // Grilla grande — es un documento: si se recorta o se ve chico, no se lee.
+  return renderEvidenceGroup("Tarjeta de propiedad / Licencia de tránsito", items, {
+    size: "lg",
+  });
 }
 
 function renderTireEvidence(data: InspectionData): string {
@@ -2971,10 +2984,14 @@ export function renderReportHtml(
     line-height: 1.4;
   }
   .proc-finding-photos { display: flex; flex-wrap: wrap; gap: 4pt; margin-top: 4pt; }
+  /* Miniaturas del hallazgo: también en "contain" (la foto completa a tamaño
+     grande vive en Evidencia fotográfica, pero recortar acá hacía que la
+     miniatura no se pareciera a la foto que documenta). */
   .proc-finding-photos img {
     width: 80pt;
     height: 58pt;
-    object-fit: cover;
+    object-fit: contain;
+    background: #eef2f7;
     border-radius: 3pt;
     border: 1px solid #e2e8f0;
   }
@@ -3277,9 +3294,43 @@ export function renderReportHtml(
   .two-col-grid .section-h .section-num { font-size: 8pt; padding: 1.5pt 5pt 2pt; }
 
   .image-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6pt; margin-top: 6pt; }
-  .image-grid figure { margin: 0; border: 1px solid #e2e8f0; border-radius: 4pt; overflow: hidden; background: #f8fafc; page-break-inside: avoid; }
-  .image-grid img { width: 100%; height: 120pt; object-fit: cover; display: block; }
-  .image-grid figcaption { padding: 3pt 5pt; font-size: 8pt; color: #475569; }
+  .image-grid figure {
+    margin: 0;
+    border: 1px solid #e2e8f0;
+    border-radius: 4pt;
+    overflow: hidden;
+    background: #f8fafc;
+    page-break-inside: avoid;
+    /* Columna flex: la foto arriba, el pie SIEMPRE pegado abajo. Con el marco
+       de alto fijo todas las tarjetas de la fila quedan idénticas. */
+    display: flex;
+    flex-direction: column;
+  }
+  /* Marco UNIFORME + foto COMPLETA (letterbox). Dos reglas de negocio:
+     1. La foto entra entera, nunca recortada — con object-fit: cover el
+        recorte central se comía justo el dato de las improntas.
+     2. Todas las tarjetas miden lo mismo — antes el marco tomaba el alto de
+        su foto y una vertical quedaba como una torre al lado de las
+        apaisadas, rompiendo la armonía de la grilla.
+     El alto es FIJO y la foto se centra en él: lo que no llena el marco queda
+     en el gris de fondo. Además el server gira los retratos 90° a apaisado
+     antes de embeber (shrinkImageForPdf), así todas llegan horizontales y el
+     letterbox es mínimo. */
+  .image-grid img {
+    display: block;
+    width: 100%;
+    height: 118pt;
+    object-fit: contain;
+  }
+  .image-grid figcaption { margin-top: auto; padding: 3pt 5pt; font-size: 8pt; color: #475569; }
+
+  /* Variante grande (2 columnas) para improntas y documentos: el ancho de
+     columna casi se duplica, así que el número se alcanza a leer impreso. El
+     marco también es fijo (más alto): una impronta vertical usa el alto
+     completo y sigue legible. */
+  .image-grid-lg { grid-template-columns: repeat(2, 1fr); gap: 8pt; }
+  .image-grid-lg img { height: 225pt; }
+  .image-grid-lg figcaption { padding: 4pt 6pt; font-size: 8.5pt; font-weight: 600; color: #334155; }
 
   /* Evidencia fotográfica — bloques agrupados por sección */
   .evidence-section .evidence-group { margin-top: 6mm; page-break-inside: auto; }
@@ -3511,6 +3562,20 @@ export function renderReportHtml(
   <!-- DOCUMENTACIÓN -->
   ${renderDocumentation(data, heading("Documentación"))}
 
+  <!-- CONCLUSION — va acá, justo después de Documentación, por decisión de
+       producto: el cliente lee el concepto del perito arriba, antes de
+       meterse en el detalle sección por sección. El numerador de secciones
+       (heading) es un contador secuencial, así que el número acompaña la
+       posición sin tocar nada más. -->
+  <section style="margin-top:10pt;">
+    ${heading("Conclusión técnica")}
+    <div class="conclusion">
+      <h3>Condición general: ${escapeHtml(conditionLabel)}</h3>
+      ${data.conclusion.observations ? `<p><strong>Observaciones:</strong><br/>${escapeHtml(data.conclusion.observations).replace(/\n/g, "<br/>")}</p>` : ""}
+      ${data.conclusion.recommendation ? `<p><strong>Recomendación:</strong><br/>${escapeHtml(data.conclusion.recommendation).replace(/\n/g, "<br/>")}</p>` : ""}
+    </div>
+  </section>
+
   <!-- DETAILED SECTIONS -->
   ${sections.map(renderOneSection).join("")}
 
@@ -3539,16 +3604,6 @@ export function renderReportHtml(
         ? blocks.join("")
         : `<p class="muted">No se registraron fotografías.</p>`;
     })()}
-  </section>
-
-  <!-- CONCLUSION -->
-  <section style="margin-top:10pt;">
-    ${heading("Conclusión técnica")}
-    <div class="conclusion">
-      <h3>Condición general: ${escapeHtml(conditionLabel)}</h3>
-      ${data.conclusion.observations ? `<p><strong>Observaciones:</strong><br/>${escapeHtml(data.conclusion.observations).replace(/\n/g, "<br/>")}</p>` : ""}
-      ${data.conclusion.recommendation ? `<p><strong>Recomendación:</strong><br/>${escapeHtml(data.conclusion.recommendation).replace(/\n/g, "<br/>")}</p>` : ""}
-    </div>
   </section>
 
   <!-- DETALLE CONSOLIDADO DE HALLAZGOS -->

@@ -3,21 +3,44 @@ import "server-only";
 import sharp from "sharp";
 
 /**
- * Re-comprime las fotos del peritaje server-side ANTES de meterlas al HTML
- * que va a Puppeteer. Sin esto, cada `data:image/jpeg;base64,...` se embebe
- * tal cual el client lo capturó (~300KB cada una, post-compressImage del
- * cliente), y un peritaje con 30 fotos llega a ~9MB de PDF.
+ * Normaliza y re-comprime las fotos del peritaje server-side ANTES de
+ * meterlas al HTML que va a Puppeteer. Dos trabajos:
  *
- * Target acá: 200KB max, JPEG 0.75, maxDim 1400px. Idempotente — si una
- * imagen ya pesa menos del target la devolvemos tal cual sin re-codificar.
+ * 1. ORIENTACIÓN: toda foto vertical (retrato) se gira 90° para quedar
+ *    apaisada. Las grillas de evidencia del PDF usan marcos uniformes
+ *    apaisados; una foto en retrato quedaba encogida con franjas enormes a
+ *    los lados. Giradas, todas llenan el marco parejo — y las improntas
+ *    (chasis/motor), que se fotografían en vertical, quedan con el número
+ *    horizontal y más legible. Decisión de negocio.
+ * 2. PESO: sin re-compresión, cada `data:image/jpeg;base64,...` se embebe tal
+ *    cual el client lo capturó (~300KB cada una, post-compressImage del
+ *    cliente), y un peritaje con 30 fotos llega a ~9MB de PDF.
  *
- * No procesamos firmas (PNG con transparencia) ni el QR de verificación
- * (es chico y vector-ish). Tampoco logos — los maneja el branding aparte.
+ * Target: 200KB max, JPEG 0.75, maxDim 1400px. Idempotente — una imagen ya
+ * apaisada y bajo el target se devuelve tal cual sin re-codificar.
+ *
+ * No procesamos firmas (PNG con transparencia — girarlas además las rompería)
+ * ni el QR de verificación (es chico y vector-ish). Tampoco logos — los
+ * maneja el branding aparte.
  */
 
 const TARGET_MAX_BYTES = 200 * 1024;
 const MAX_DIM = 1400;
 const JPEG_QUALITY = 75;
+
+/** Dimensiones efectivas (post-EXIF): las orientaciones 5-8 rotan 90°, así
+ *  que el ancho/alto reales quedan intercambiados respecto del bitmap. */
+function effectiveDims(meta: {
+  width?: number;
+  height?: number;
+  orientation?: number;
+}): { width: number; height: number } | null {
+  if (!meta.width || !meta.height) return null;
+  const swapped = (meta.orientation ?? 1) >= 5;
+  return swapped
+    ? { width: meta.height, height: meta.width }
+    : { width: meta.width, height: meta.height };
+}
 
 /** Estima los bytes binarios reales detrás de un dataURL base64 (sin contar
  *  el prefijo "data:image/jpeg;base64,"). */
@@ -48,30 +71,42 @@ function dataUrlToBuffer(dataUrl: string): Buffer | null {
   }
 }
 
-/** Re-comprime UNA foto. Si está bajo target o no es JPEG/PNG, devuelve el
- *  dataURL original. Si la decodificación falla, devuelve el original
- *  (defensive — preferimos un PDF con foto pesada a un PDF sin foto). */
+/** Normaliza UNA foto (gira retratos a apaisado + re-comprime si pesa mucho).
+ *  Si ya está apaisada y bajo target, o no es JPEG, devuelve el dataURL
+ *  original. Si la decodificación falla, devuelve el original (defensive —
+ *  preferimos un PDF con foto pesada/vertical a un PDF sin foto). */
 export async function shrinkImageForPdf(dataUrl: string): Promise<string> {
   if (!dataUrl || !dataUrl.startsWith("data:image/")) return dataUrl;
   // Firmas son PNG con transparencia — no las tocamos.
   if (isPngDataUrl(dataUrl)) return dataUrl;
   if (!isJpegDataUrl(dataUrl)) return dataUrl;
 
-  const currentBytes = estimateBytes(dataUrl);
-  if (currentBytes <= TARGET_MAX_BYTES) return dataUrl;
-
   const input = dataUrlToBuffer(dataUrl);
   if (!input) return dataUrl;
 
+  const currentBytes = estimateBytes(dataUrl);
+
   try {
-    const out = await sharp(input, { failOn: "none" })
-      .rotate() // honra EXIF
+    const meta = await sharp(input, { failOn: "none" }).metadata();
+    const dims = effectiveDims(meta);
+    const isPortrait = dims !== null && dims.height > dims.width;
+
+    // Apaisada y liviana: no hay nada que hacer.
+    if (!isPortrait && currentBytes <= TARGET_MAX_BYTES) return dataUrl;
+
+    // Primero aplanamos el EXIF (rotate() sin args) y sobre ese bitmap giramos
+    // 90° si es retrato — sharp solo permite UNA rotación explícita por
+    // pipeline, por eso van en dos pasos.
+    const upright = await sharp(input, { failOn: "none" }).rotate().toBuffer();
+    const out = await sharp(upright, { failOn: "none" })
+      .rotate(isPortrait ? 90 : 0)
       .resize({ width: MAX_DIM, height: MAX_DIM, fit: "inside", withoutEnlargement: true })
       .jpeg({ quality: JPEG_QUALITY, mozjpeg: true })
       .toBuffer();
-    // Si el resultado es paradójicamente más grande (raro: imagen ya optimizada),
-    // dejamos el original.
-    if (out.byteLength >= currentBytes) return dataUrl;
+    // Si no había que girar y el resultado es paradójicamente más grande
+    // (raro: imagen ya optimizada), dejamos el original. Si se giró, el nuevo
+    // gana aunque pese más — la orientación importa más que unos KB.
+    if (!isPortrait && out.byteLength >= currentBytes) return dataUrl;
     return `data:image/jpeg;base64,${out.toString("base64")}`;
   } catch {
     return dataUrl;
