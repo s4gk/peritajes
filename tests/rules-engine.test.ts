@@ -261,23 +261,26 @@ describe("salud por sección: anti-dilución + techo por críticos", () => {
     expect(sectionHealthPct(40, 0)).toBe(80); // -20 puntos
   });
 
-  it("carrocería es ESTÉTICA: descuento plano suave (advertencia −1, crítico −3)", () => {
+  it("carrocería es ESTÉTICA: descuento suave por severidad (daño −2/pto, crítico −4)", () => {
     const data = pristineInspection();
     for (const id of bodyIds.slice(0, 4)) setBodywork(data, id, "dent_deep"); // 4 críticos
     const h = computeHealth(data);
     expect(h.bySection.bodywork.danger).toBe(4);
     expect(h.bySection.bodywork.inspected).toBeGreaterThan(20); // muchos ítems OK alrededor
-    // 4 críticos × −3 = −12 => 88%. (1 advertencia daría −1 => 99%.)
-    expect(h.bySection.bodywork.healthPct).toBe(88);
+    // 4 críticos × −4 = −16 => 84%. (1 repinte daría −1 => 99%.)
+    expect(h.bySection.bodywork.healthPct).toBe(84);
   });
 
-  it("carrocería: 1 advertencia (repinte) → 99%, 1 crítico → 97%", () => {
+  it("carrocería: 1 repinte (cosmético) → 99%, 1 rayón → 98%, 1 crítico → 96%", () => {
     const warn = pristineInspection();
-    setBodywork(warn, bodyIds[0], "common_repainted"); // warning
+    setBodywork(warn, bodyIds[0], "common_repainted"); // warning cosmético sev1 → −1
     expect(computeHealth(warn).bySection.bodywork.healthPct).toBe(99);
+    const dmg = pristineInspection();
+    setBodywork(dmg, bodyIds[0], "common_scratch"); // warning con daño sev1 → −2
+    expect(computeHealth(dmg).bySection.bodywork.healthPct).toBe(98);
     const crit = pristineInspection();
-    setBodywork(crit, bodyIds[0], "dent_deep"); // danger
-    expect(computeHealth(crit).bySection.bodywork.healthPct).toBe(97);
+    setBodywork(crit, bodyIds[0], "dent_deep"); // danger → −4
+    expect(computeHealth(crit).bySection.bodywork.healthPct).toBe(96);
   });
 
   it("el techo por críticos SÍ aplica a secciones de seguridad/mecánica", () => {
@@ -342,10 +345,10 @@ describe("piso por peor sección: carrocería NO hunde, mecánica SÍ", () => {
 
   it("carrocería golpeada (estética) baja el global solo por su peso de pilar (~15%)", () => {
     const data = pristineInspection();
-    // 4 abolladuras profundas → carrocería plano suave (4×−3) = 88%.
+    // 4 abolladuras profundas → carrocería suave (4×−4) = 84%.
     for (const id of bodyIds.slice(0, 4)) setBodywork(data, id, "dent_deep");
     const pillars = computePillars(computeHealth(data), analyze(data));
-    expect(computeHealth(data).bySection.bodywork.healthPct).toBe(88);
+    expect(computeHealth(data).bySection.bodywork.healthPct).toBe(84);
     // Carrocería queda fuera del piso por peor sección, así que el global se
     // mantiene muy alto (solo pierde lo proporcional a su 15%).
     expect(pillars.globalPct!).toBeGreaterThanOrEqual(94);
@@ -684,9 +687,9 @@ describe("piso y refuerzos de carrocería califican como Carrocería, no Estruct
     const h = computeHealth(data);
     expect(h.bySection.chassis.danger).toBe(0);
     expect(h.bySection.chassis.healthPct).toBe(100);
-    // Calibración estética de carrocería: 1 crítico → −3.
+    // Calibración estética de carrocería: 1 crítico → −4.
     expect(h.bySection.bodywork.danger).toBe(1);
-    expect(h.bySection.bodywork.healthPct).toBe(97);
+    expect(h.bySection.bodywork.healthPct).toBe(96);
 
     const pillars = computePillars(h, r);
     expect(pillars.gates.some((g) => g.pillar === "safety")).toBe(false);
@@ -699,6 +702,6 @@ describe("piso y refuerzos de carrocería califican como Carrocería, no Estruct
     expect(h.bySection.chassis.warning).toBe(0);
     expect(h.bySection.chassis.healthPct).toBe(100);
     expect(h.bySection.bodywork.warning).toBe(1);
-    expect(h.bySection.bodywork.healthPct).toBe(99); // plano suave: advertencia −1
+    expect(h.bySection.bodywork.healthPct).toBe(98); // suave: advertencia con daño sev1 → −2
   });
 });

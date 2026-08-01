@@ -507,7 +507,7 @@ export type WalkaroundEntry =
       compoundKey: "interior_delantera" | "accessories";
     };
 
-/** Secuencia canónica de 65 items para carro 5p, agrupados en 6 etapas. */
+/** Secuencia canónica de items para carro 5p, agrupados en 6 etapas. */
 export const WALKAROUND_SEQUENCE_CAR_5DOORS: readonly WalkaroundEntry[] = [
   // ───── Etapa 1: Frente y delantero izquierdo ─────
   { kind: "item", stage: "front", label: "Capó", sectionId: "bodywork", itemId: "hood" },
@@ -568,6 +568,8 @@ export const WALKAROUND_SEQUENCE_CAR_5DOORS: readonly WalkaroundEntry[] = [
   { kind: "item", stage: "right", label: "Amortiguador delantero derecho", sectionId: "suspension", itemId: "shock_fr" },
   { kind: "tire", stage: "right", label: "Llanta delantera derecha", position: "fr" },
   { kind: "item", stage: "right", label: "Punta delantera derecha", sectionId: "chassis", itemId: "front_corner_r" },
+  { kind: "item", stage: "right", label: "Traviesa frontal inferior", sectionId: "chassis", itemId: "front_crossmember_lower" },
+  { kind: "item", stage: "right", label: "Traviesa frontal superior", sectionId: "chassis", itemId: "front_crossmember_upper" },
 
   // ───── Etapa 5: Motor y accesorios ─────
   { kind: "item", stage: "engine", label: "Estado motor (fugas, ruidos, aceite, filtros, líquidos)", sectionId: "engine", itemId: "general_check" },
@@ -671,6 +673,9 @@ export const WALKAROUND_SEQUENCE_CHASSIS_INDEPENDENT: readonly WalkaroundEntry[]
   { kind: "item", stage: "right", label: "Larguero chasis derecho", sectionId: "chassis", itemId: "chassis_rail_r" },
   // Punta delantera derecha — alternativa al larguero para los tipos sin largueros.
   { kind: "item", stage: "right", label: "Punta delantera derecha", sectionId: "chassis", itemId: "front_corner_r" },
+  // Traviesas frontales — aplican a todos los tipos (no se filtran por largueros).
+  { kind: "item", stage: "right", label: "Traviesa frontal inferior", sectionId: "chassis", itemId: "front_crossmember_lower" },
+  { kind: "item", stage: "right", label: "Traviesa frontal superior", sectionId: "chassis", itemId: "front_crossmember_upper" },
 
   // ───── Etapa 5: Motor y accesorios ─────
   { kind: "item", stage: "engine", label: "Estado motor (fugas, ruidos, aceite, filtros, líquidos)", sectionId: "engine", itemId: "general_check" },
@@ -1026,6 +1031,10 @@ export const CHASSIS_SECTION: InspectionSectionDef = {
         { id: "front_corner_r", label: "Punta delantera derecha", kind: "structural" },
         { id: "rear_corner_l", label: "Punta trasera izquierda", kind: "structural" },
         { id: "rear_corner_r", label: "Punta trasera derecha", kind: "structural" },
+        // Traviesas frontales — aplican a TODOS los tipos (autoportante y chasis
+        // independiente), así que no entran en isStructuralItemExcluded.
+        { id: "front_crossmember_lower", label: "Traviesa frontal inferior", kind: "structural" },
+        { id: "front_crossmember_upper", label: "Traviesa frontal superior", kind: "structural" },
       ],
     },
   ],

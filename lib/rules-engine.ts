@@ -676,9 +676,10 @@ function criticalCap(danger: number): number {
  *  - "flat" (ESTRUCTURA Y SEGURIDAD — chasis, prueba de ruta): descuento PLANO
  *    por hallazgo, fácil de explicar: cada advertencia −10, cada crítico −20.
  *    Aquí las advertencias SÍ pesan (antes apenas restaban) y un crítico duele.
- *  - "flat" suave (CARROCERÍA, estético): descuento plano leve — cada
- *    advertencia −1, cada crítico −3. Un golpe cosmético no debe desplomar la
- *    sección (es valor comercial, no seguridad).
+ *  - "flat" suave (CARROCERÍA, estético): descuento por severidad, leve — daño
+ *    −2 por punto de severidad, repinte −1, crítico −4. Un golpe cosmético no
+ *    debe desplomar la sección (es valor comercial, no seguridad), pero el daño
+ *    acumulado sí tiene que verse.
  *  - default (resto: motor, suspensión, eléctrico, fugas, llantas, etc.):
  *    penalización absoluta por severidad + techo por # de críticos.
  * Tocar estos números impacta el % de TODOS los peritajes — discutir antes.
@@ -713,10 +714,19 @@ const SECTION_CALIBRATION: Record<string, SectionCalib> = {
   //  - daño real (deformado / mal reparado) es tono `danger` → criticalDrop −20.
   chassis: { mode: "flat", warningDrop: 3, criticalDrop: 20, severityWeighted: true, cosmeticDrop: 1 },
   roadTest: { mode: "flat", warningDrop: 10, criticalDrop: 20 },
-  // Carrocería/pintura: descuento plano SUAVE (estético) — advertencia −1,
-  // crítico −3. Un golpe/repinte resta poco; no debe hundir la sección
-  // (es valor comercial, no seguridad). Decisión de negocio.
-  bodywork: { mode: "flat", warningDrop: 1, criticalDrop: 3 },
+  // Carrocería/pintura: descuento por SEVERIDAD, igual que el chasis pero mucho
+  // más suave (sigue siendo estético / valor comercial, no seguridad). Antes era
+  // plano −1 advertencia / −3 crítico, tan suave que un carro con 10 paneles
+  // deformados + panorámicos fisurados daba 58% — incoherente con el resto del
+  // informe. Ahora:
+  //  - advertencia con DAÑO (rayón sev1, sumido sev2): −2 por punto de severidad
+  //    → rayón −2, sumido −4.
+  //  - advertencia COSMÉTICA (repintado, bien reparado): −1 por punto. Un repinte
+  //    es común en usados y no debe pesar como un golpe.
+  //  - crítico (deformado, mal reparado, rotura de farola, panorámico fisurado):
+  //    −4. Un panel que hay que reparar sí duele, pero un solo golpe deja la
+  //    sección en 96%: solo el daño acumulado hunde la nota.
+  bodywork: { mode: "flat", warningDrop: 2, criticalDrop: 4, severityWeighted: true, cosmeticDrop: 1 },
 };
 
 /** Salud de una sección por penalización absoluta (anti-dilución) + techo por #
