@@ -23,7 +23,7 @@
 // existen en el server → login/SPA colgados). REGLA: todo deploy con cambios
 // de bundle debe venir con bump de VERSION, si no los celulares con la PWA
 // instalada nunca ven el banner de actualización.
-const VERSION = "v20";
+const VERSION = "v23";
 const STATIC_CACHE = `perito-static-${VERSION}`;
 const RUNTIME_CACHE = `perito-runtime-${VERSION}`;
 const API_CACHE = `perito-api-${VERSION}`;
