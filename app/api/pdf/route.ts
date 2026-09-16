@@ -182,10 +182,14 @@ export async function POST(req: Request) {
   // stored, el peritaje no está finalizado (o no existe en server). Dos casos:
   //   - preview=true: cualquier usuario puede generarlo, pero sale con marca de
   //     agua "PREVISUALIZACIÓN" y sin QR/consecutivo — no es entregable.
-  //   - descarga "oficial" de un borrador: sigue restringida a admin. Sin esto
-  //     el perito podía entregar un PDF sin finalizar (saltándose firma del
-  //     cliente, consecutivo oficial y entrega automática por WhatsApp).
-  if (!body.preview && user.role !== "admin") {
+  //   - descarga sin marca de agua de un borrador: admin y OWNER (2026-09, a
+  //     pedido del negocio: el dueño necesita mostrarle el informe al cliente
+  //     antes de cerrarlo). Sigue vedada al employee: si no, el perito
+  //     asalariado podía entregar un PDF saltándose la firma del cliente, el
+  //     consecutivo oficial y el envío automático por WhatsApp.
+  // El gate vive ACÁ, no solo en la UI: el flag `preview` lo manda el cliente
+  // y sin esta verificación bastaba con un fetch a mano para saltárselo.
+  if (!body.preview && user.role === "employee") {
     return new NextResponse(
       "El PDF solo se puede descargar después de finalizar el peritaje.",
       { status: 403 },

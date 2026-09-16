@@ -125,9 +125,9 @@ export type PeritajeKindDef = {
   components: PeritajeComponents;
 };
 
-// Secciones de inspección comunes a los 3 tipos. La eléctrica solo va en
-// Plus/Pro, y la revisión general de Motor no va en ninguno (solo la prueba
-// de compresión, que es un componente aparte gateado en Plus).
+// Secciones de inspección comunes a los 3 tipos. La eléctrica y la revisión
+// de Motor solo van en Plus/Pro (el Sencillo no las lleva); la prueba de
+// compresión es un componente aparte gateado en Plus.
 const COMMON_SECTIONS: readonly SectionId[] = [
   "bodywork",
   "chassis",
@@ -145,8 +145,8 @@ export const PERITAJE_KINDS: Record<PeritajeKind, PeritajeKindDef> = {
     label: "Peritaje Plus",
     short: "Plus",
     description:
-      "El más completo: estructura, carrocería, identificación, siniestros, antecedentes, improntas, eléctrica y prueba de compresión del motor.",
-    sections: [...COMMON_SECTIONS, "electrical"],
+      "El más completo: estructura, carrocería, identificación, siniestros, antecedentes, improntas, eléctrica, motor y prueba de compresión.",
+    sections: [...COMMON_SECTIONS, "engine", "electrical"],
     components: {
       identification: true,
       claims: true,
@@ -160,8 +160,8 @@ export const PERITAJE_KINDS: Record<PeritajeKind, PeritajeKindDef> = {
     label: "Peritaje Pro",
     short: "Pro",
     description:
-      "Igual que Plus pero sin la prueba de compresión del motor. Incluye eléctrica, antecedentes e improntas.",
-    sections: [...COMMON_SECTIONS, "electrical"],
+      "Igual que Plus pero sin la prueba de compresión del motor. Incluye eléctrica, motor, antecedentes e improntas.",
+    sections: [...COMMON_SECTIONS, "engine", "electrical"],
     components: {
       identification: true,
       claims: true,
@@ -175,7 +175,7 @@ export const PERITAJE_KINDS: Record<PeritajeKind, PeritajeKindDef> = {
     label: "Peritaje Sencillo",
     short: "Sencillo",
     description:
-      "Lo esencial: estructura, carrocería, identificación y reclamación de siniestros. Sin eléctrica, antecedentes, improntas ni compresión.",
+      "Lo esencial: estructura, carrocería, identificación y reclamación de siniestros. Sin eléctrica, motor, antecedentes, improntas ni compresión.",
     sections: [...COMMON_SECTIONS],
     components: {
       identification: true,
@@ -553,7 +553,7 @@ export const WALKAROUND_SEQUENCE_CAR_5DOORS: readonly WalkaroundEntry[] = [
   { kind: "item", stage: "right", label: "Amortiguador trasero derecho", sectionId: "suspension", itemId: "shock_rr" },
   { kind: "tire", stage: "right", label: "Llanta trasera derecha", position: "rr" },
   { kind: "item", stage: "right", label: "Larguero capota derecho", sectionId: "chassis", itemId: "roof_rail_r" },
-  { kind: "item", stage: "right", label: "Capó (verificación lado derecho)", sectionId: "bodywork", itemId: "hood_2nd" },
+  { kind: "item", stage: "right", label: "Capota (techo lado derecho)", sectionId: "bodywork", itemId: "roof_r" },
   { kind: "item", stage: "right", label: "Paral central derecho", sectionId: "chassis", itemId: "pillar_b_r" },
   { kind: "item", stage: "right", label: "Puerta trasera derecha", sectionId: "bodywork", itemId: "door_rr" },
   { kind: "item", stage: "right", label: "Paral parabrisas derecho", sectionId: "chassis", itemId: "windshield_pillar_r" },
@@ -656,7 +656,7 @@ export const WALKAROUND_SEQUENCE_CHASSIS_INDEPENDENT: readonly WalkaroundEntry[]
   { kind: "item", stage: "right", label: "Costado derecho", sectionId: "bodywork", itemId: "quarter_r" },
   { kind: "item", stage: "right", label: "Paral trasero cabina derecho", sectionId: "chassis", itemId: "cabin_pillar_rear_r" },
   { kind: "item", stage: "right", label: "Larguero capota derecho", sectionId: "chassis", itemId: "roof_rail_r" },
-  { kind: "item", stage: "right", label: "Capó (verificación lado derecho)", sectionId: "bodywork", itemId: "hood_2nd" },
+  { kind: "item", stage: "right", label: "Capota (techo lado derecho)", sectionId: "bodywork", itemId: "roof_r" },
   { kind: "item", stage: "right", label: "Paral central derecho", sectionId: "chassis", itemId: "pillar_b_r" },
   { kind: "item", stage: "right", label: "Puerta trasera derecha", sectionId: "bodywork", itemId: "door_rr" },
   { kind: "item", stage: "right", label: "Puerta delantera derecha", sectionId: "bodywork", itemId: "door_fr" },
@@ -770,11 +770,13 @@ export function walkaroundSequenceFor(
 
   if (
     vehicleType === "car_5doors" ||
+    vehicleType === "hatchback" ||
     vehicleType === "car_coupe" ||
     vehicleType === "suv"
   ) {
-    // La SUV/crossover es autoportante de 5 puertas: comparte el recorrido de
-    // car_5doors y conserva las puertas traseras (solo el coupé las omite).
+    // El hatchback y la SUV/crossover son autoportantes de 5 puertas: comparten
+    // el recorrido de car_5doors y conservan las puertas traseras (solo el
+    // coupé las omite).
     const noRearDoors = vehicleType === "car_coupe";
     return WALKAROUND_SEQUENCE_CAR_5DOORS.filter((e) => {
       if (!filter(e)) return false;
@@ -937,7 +939,6 @@ export const BODYWORK_SECTION: InspectionSectionDef = {
       items: [
         { id: "hood", label: "Capó", kind: "bodywork" },
         { id: "bumper_front", label: "Bomper delantero", kind: "bodywork" },
-        { id: "hood_2nd", label: "Capó (verificación lado derecho)", kind: "bodywork" },
         { id: "inner_fender_fl", label: "Guardapolvo metálico delantero izquierdo", kind: "bodywork" },
         { id: "inner_fender_fr", label: "Guardapolvo metálico delantero derecho", kind: "bodywork" },
         { id: "fender_fl", label: "Guardafangos delantero izquierdo", kind: "bodywork" },
@@ -968,7 +969,12 @@ export const BODYWORK_SECTION: InspectionSectionDef = {
     {
       id: "roof",
       label: "Techo",
-      items: [{ id: "roof", label: "Techo", kind: "bodywork" }],
+      items: [
+        { id: "roof", label: "Techo", kind: "bodywork" },
+        // Capota — segunda verificación del techo desde el costado derecho.
+        // Reemplazó al viejo `hood_2nd` en el recorrido (ver secuencias arriba).
+        { id: "roof_r", label: "Capota (techo lado derecho)", kind: "bodywork" },
+      ],
     },
     {
       id: "rear",
@@ -1297,7 +1303,6 @@ const BODYWORK_5DOORS = BODYWORK_SECTION; // Carrocería 5 Puertas — base orig
 const CHASSIS_INDEPENDENT_STRUCTURAL_ITEMS = [
   { id: "windshield_l", label: "Panorámico delantero (vista izquierda)", kind: "panoramic" as const },
   { id: "windshield_r", label: "Panorámico delantero (vista derecha)", kind: "panoramic" as const },
-  { id: "hood_2nd", label: "Capó (verificación lado derecho)", kind: "bodywork" as const },
   // Parales (puerta, parabrisas, central), larguero capota, estribos, paral
   // trasero de cabina y cuna del motor migraron a CHASSIS_SECTION (Estructura).
   { id: "inner_fender_fl", label: "Guardapolvo metálico delantero izquierdo", kind: "bodywork" as const },
@@ -1355,6 +1360,7 @@ export const BODYWORK_SUV_5DOORS: InspectionSectionDef = {
       label: "Techo y vidrios",
       items: [
         { id: "roof", label: "Techo", kind: "bodywork" },
+        { id: "roof_r", label: "Capota (techo lado derecho)", kind: "bodywork" },
         { id: "windshield", label: "Parabrisas", kind: "panoramic" },
         { id: "rear_window", label: "Panorámico trasero", kind: "panoramic" },
         { id: "sunroof", label: "Techo corredizo", kind: "bodywork" },
@@ -1414,6 +1420,7 @@ export const BODYWORK_SUV_2DOORS: InspectionSectionDef = {
       label: "Techo y vidrios",
       items: [
         { id: "roof", label: "Techo", kind: "bodywork" },
+        { id: "roof_r", label: "Capota (techo lado derecho)", kind: "bodywork" },
         { id: "windshield", label: "Parabrisas", kind: "panoramic" },
         { id: "rear_window", label: "Panorámico trasero", kind: "panoramic" },
         { id: "sunroof", label: "Techo corredizo", kind: "bodywork" },
@@ -1476,6 +1483,7 @@ export const BODYWORK_PICKUP_SINGLE: InspectionSectionDef = {
       label: "Techo y vidrios",
       items: [
         { id: "roof", label: "Techo de cabina", kind: "bodywork" },
+        { id: "roof_r", label: "Capota (techo cabina lado derecho)", kind: "bodywork" },
         { id: "windshield", label: "Parabrisas", kind: "panoramic" },
         { id: "rear_window", label: "Panorámico trasero de cabina", kind: "panoramic" },
       ],
@@ -1539,6 +1547,7 @@ export const BODYWORK_PICKUP_DOUBLE: InspectionSectionDef = {
       label: "Techo y vidrios",
       items: [
         { id: "roof", label: "Techo de cabina", kind: "bodywork" },
+        { id: "roof_r", label: "Capota (techo cabina lado derecho)", kind: "bodywork" },
         { id: "windshield", label: "Parabrisas", kind: "panoramic" },
         { id: "rear_window", label: "Panorámico trasero de cabina", kind: "panoramic" },
       ],

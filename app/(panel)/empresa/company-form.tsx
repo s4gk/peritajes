@@ -20,6 +20,7 @@ type Company = {
   email: string;
   website: string;
   logoDataUrl: string;
+  insurabilityVerdict: boolean;
 };
 
 export function CompanyForm({ initial }: { initial: Company }) {
@@ -173,6 +174,29 @@ export function CompanyForm({ initial }: { initial: Company }) {
                 ) : null}
               </div>
             </div>
+          </div>
+
+          <div className="space-y-2 border-t pt-5">
+            <Label>Concepto de asegurabilidad</Label>
+            <label className="flex cursor-pointer items-start gap-3 text-sm">
+              <input
+                type="checkbox"
+                className="mt-0.5 h-4 w-4 shrink-0 accent-primary"
+                checked={form.insurabilityVerdict}
+                onChange={(e) => update("insurabilityVerdict", e.target.checked)}
+              />
+              <span>
+                Emitir concepto{" "}
+                <span className="font-semibold">ASEGURABLE SÍ / ASEGURABLE NO</span>{" "}
+                en los peritajes.
+                <span className="mt-1 block text-xs text-muted-foreground">
+                  Viene activo. El perito lo dictamina en la conclusión y sale en
+                  la portada del PDF, encima de la condición general — es lo que
+                  exigen las financieras y aseguradoras. Desactívalo solo si no
+                  quieres que tus informes lleven ese veredicto.
+                </span>
+              </span>
+            </label>
           </div>
 
           <div className="flex justify-end border-t pt-5">

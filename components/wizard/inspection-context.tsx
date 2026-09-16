@@ -12,6 +12,7 @@ import {
 import { emptyInspection } from "@/lib/default-data";
 import {
   awaitServerFetch,
+  ensureFullInspection,
   getInspection,
   initStore,
   saveInspectionData,
@@ -158,6 +159,15 @@ export function InspectionProvider({ id, children }: Props) {
           await awaitServerFetch();
           if (cancelled) return;
           stored = getInspection(id);
+        }
+        // El listado sirve las filas sin las fotos (`partial`). El wizard sí
+        // las necesita, así que acá pedimos la versión completa antes de
+        // hidratar — si no, abrir un peritaje mostraría todas las secciones
+        // sin imágenes.
+        if (stored?.partial) {
+          const full = await ensureFullInspection(id);
+          if (cancelled) return;
+          if (full) stored = full;
         }
 
         if (stored) {

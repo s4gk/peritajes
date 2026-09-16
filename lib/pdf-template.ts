@@ -22,7 +22,14 @@ import {
 } from "./constants";
 import { findOption } from "./findings-catalog";
 import { computeHealth, type HealthReport, type RiskReport, type SectionHealth } from "./rules-engine";
-import { computePillars, type PillarHealth, type PillarReport } from "./scoring";
+import {
+  APPROVAL_THRESHOLD,
+  applyManualPillarScores,
+  computePillars,
+  insurabilityLabel,
+  type PillarHealth,
+  type PillarReport,
+} from "./scoring";
 import type {
   InspectionData,
   InspectionEntry,
@@ -149,7 +156,8 @@ function transmissionLabel(v: string): string {
 // rechazado (rojo) por debajo. La banda amarilla intermedia ("FUERA ESTÁNDAR")
 // del cálculo automático se eliminó (sigue existiendo solo como concepto MANUAL
 // que el perito puede elegir a mano, ver CONDITION_OPTIONS en summary.tsx).
-const APPROVAL_THRESHOLD = 55;
+// APPROVAL_THRESHOLD vive en scoring.ts — mismo corte que usa el resumen del
+// wizard para sugerir el concepto, así el PDF y la app nunca se desalinean.
 
 function scoreTone(pct: number): "success" | "warning" | "danger" {
   return pct >= APPROVAL_THRESHOLD ? "success" : "danger";
@@ -202,6 +210,32 @@ function conceptoFromGeneralCondition(
   // Valor no reconocido (no debería pasar con el selector actual): lo mostramos
   // tal cual, sin tono fuerte.
   return { label: v, tone: "muted", meaning: "" };
+}
+
+/**
+ * Banner del concepto de ASEGURABILIDAD (SÍ/NO). Es una dimensión aparte de la
+ * condición general: la piden clientes institucionales (financieras,
+ * aseguradoras) que necesitan un veredicto binario. Solo lo emiten las orgs que
+ * lo tienen habilitado, así que si el peritaje no trae el dictamen el banner no
+ * se imprime — nunca se infiere del puntaje.
+ */
+function renderInsurabilityBanner(data: InspectionData): string {
+  const verdict = data.conclusion?.insurability;
+  if (verdict !== "yes" && verdict !== "no") return "";
+  const tone = verdict === "yes" ? "success" : "danger";
+  const meaning =
+    verdict === "yes"
+      ? "Según el peritaje, el vehículo es apto para asegurarse."
+      : "Según el peritaje, el vehículo NO es apto para asegurarse.";
+  return `
+    <div class="concepto-banner tone-${tone}">
+      <div class="cb-main">
+        <div class="cb-overline">Concepto de asegurabilidad</div>
+        <div class="cb-label">${escapeHtml(insurabilityLabel(verdict))}</div>
+        <div class="cb-meaning">${escapeHtml(meaning)}</div>
+      </div>
+    </div>
+  `;
 }
 
 /**
@@ -287,7 +321,7 @@ function renderPillarSummary(
       <div class="summary-global tone-${scoreTone(globalPct)}">
         <div class="sg-text">
           <div class="sg-label">Estado general del vehículo</div>
-          <div class="sg-meta">Promedio ponderado · ${evaluatedPillars} de ${totalPillars} pilares evaluados${gates.length > 0 ? ` · <strong>${gates.length} gate${gates.length === 1 ? "" : "s"} de seguridad activo${gates.length === 1 ? "" : "s"}</strong>` : ""}</div>
+          <div class="sg-meta">Promedio ponderado${pillarReport.manual ? " de la calificación del perito" : ""} · ${evaluatedPillars} de ${totalPillars} pilares evaluados${gates.length > 0 ? ` · <strong>${gates.length} gate${gates.length === 1 ? "" : "s"} de seguridad activo${gates.length === 1 ? "" : "s"}</strong>` : ""}</div>
         </div>
         <div class="sg-value">${globalPct}%</div>
       </div>`;
@@ -1752,6 +1786,67 @@ function buildBgWatermarkStyle(watermarkLogoDataUrl: string | null): string {
   );
 }
 
+/**
+ * Excepciones manuales al % de una SECCIÓN, por PLACA y SOLO en el PDF.
+ *
+ * El porcentaje normalmente se deriva de los hallazgos capturados (ver
+ * `computeHealth`). Estas entradas lo pisan: el número que sale en el informe
+ * deja de corresponder a los ítems listados en ese mismo informe. Es una
+ * decisión de negocio puntual, no una calibración — si lo que hace falta es que
+ * TODOS los peritajes califiquen distinto, hay que mover `SECTION_CALIBRATION`
+ * en rules-engine.ts, no agregar placas aquí.
+ *
+ * Se aplica sobre `health.bySection` ANTES de armar los pilares, así el
+ * encabezado de la sección, la barra del pilar y el "Estado general" salen
+ * todos del mismo número y el PDF no se contradice a sí mismo.
+ *
+ * Mantener la lista corta y borrar la entrada cuando deje de aplicar. La
+ * pantalla del wizard (`summary.tsx`) NO usa este mapa: ahí se sigue viendo el
+ * valor calculado.
+ */
+const SECTION_PCT_OVERRIDES: Record<string, Partial<Record<SectionId, number>>> = {
+  // Solicitado por el negocio: en el informe de este vehículo, "Carrocería y
+  // pintura" se muestra en 70% (el cálculo por hallazgos da 54%).
+  KNP264: { bodywork: 70 },
+  // Solicitado por el negocio: en el informe de este vehículo, "Chasis y
+  // estructura" se muestra en 65% (el cálculo por hallazgos da 91%). Como el
+  // pilar "Estructura y seguridad" se arma con chassis + roadTest y aquí la
+  // prueba de ruta quedó omitida, la barra del pilar también baja a 65%.
+  JOK992: { chassis: 65 },
+  // Solicitado por el negocio: en el informe de este vehículo, "Chasis y
+  // estructura" se muestra en 82% (el cálculo por hallazgos da 81%) y
+  // "Carrocería y pintura" en 75% (el cálculo da 74%). La prueba de ruta quedó
+  // omitida, así que la barra del pilar "Estructura y seguridad" también sale
+  // en 82%.
+  DAT672: { chassis: 82, bodywork: 75 },
+};
+
+/**
+ * Devuelve un `HealthReport` con los % forzados para esa placa, o el mismo
+ * objeto si no hay excepción. No muta el original.
+ */
+function applySectionPctOverrides(
+  health: HealthReport,
+  plate: string | undefined | null,
+): HealthReport {
+  const key = (plate ?? "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+  const overrides = key ? SECTION_PCT_OVERRIDES[key] : undefined;
+  if (!overrides) return health;
+
+  const bySection = { ...health.bySection };
+  for (const [sectionId, pct] of Object.entries(overrides)) {
+    const s = bySection[sectionId];
+    // Una sección que no se inspeccionó sigue en null (no se pinta su barra):
+    // forzarle un % inventaría una calificación donde no hubo captura.
+    if (!s || s.healthPct === null || pct === undefined) continue;
+    bySection[sectionId] = {
+      ...s,
+      healthPct: Math.max(0, Math.min(100, Math.round(pct))),
+    };
+  }
+  return { ...health, bySection };
+}
+
 export function renderReportHtml(
   data: InspectionData,
   report: RiskReport,
@@ -1828,26 +1923,15 @@ export function renderReportHtml(
   }
 
   // El grupo "Compresión" del motor es dinámico: el perito agrega cilindros uno
-  // a uno y se guardan en data.engineCompression. Para que las funciones de
-  // render que iteran section.groups[].items los muestren igual que el resto,
-  // inyectamos los cilindros como items virtuales dentro del grupo compresión
-  // y mergeamos sus entries en el record de engine. Es una transformación de
-  // solo-lectura para el PDF — no toca el storage.
+  // a uno y se guardan en data.engineCompression. La sección Motor lo omite —
+  // los cilindros se imprimen en su propia sección "Compresión del motor", que
+  // solo aplica al Plus (ver más abajo). Acá inyectamos sus entries en el
+  // record de engine para que esa sección los encuentre. Es una transformación
+  // de solo-lectura para el PDF — no toca el storage.
   const cylinders = data.engineCompression ?? [];
   const engineSectionForPdf: InspectionSectionDef = {
     ...ENGINE_SECTION,
-    groups: ENGINE_SECTION.groups.map((g) =>
-      g.id === "compression"
-        ? {
-            ...g,
-            items: cylinders.map((c) => ({
-              id: c.id,
-              label: c.label,
-              kind: "mechanical" as const,
-            })),
-          }
-        : g,
-    ),
+    groups: ENGINE_SECTION.groups.filter((g) => g.id !== "compression"),
   };
   const engineDataForPdf: Record<string, InspectionEntry> = { ...data.engine };
   for (const c of cylinders) {
@@ -1874,10 +1958,9 @@ export function renderReportHtml(
     { sectionId: "roadTest", title: "Prueba de ruta", def: ROAD_TEST_SECTION, data: data.roadTest },
   ];
   const sections = allSections.filter((s) => activeSectionIds.has(s.sectionId));
-  // La revisión general del motor no va en ningún tipo, pero la prueba de
-  // compresión es un componente gateado (Plus). Si está activa y hay cilindros,
-  // la insertamos como sección propia (sin los grupos generales del motor),
-  // justo después de suspensión (donde iría el motor).
+  // La prueba de compresión es un componente gateado (solo Plus), aparte de la
+  // sección Motor. Si está activa y hay cilindros, la insertamos como sección
+  // propia (sin los grupos generales del motor), justo después de suspensión.
   if (components.compression && cylinders.length > 0) {
     const compressionSection: (typeof allSections)[number] = {
       sectionId: "engine",
@@ -1907,8 +1990,13 @@ export function renderReportHtml(
   const showAccessories = activeSectionIds.has("accessories");
   const roadTestSkipped = data.roadTestSkipped === true;
 
-  const health = computeHealth(data);
-  const pillarReport = computePillars(health, report);
+  const health = applySectionPctOverrides(computeHealth(data), v.plate);
+  // Las barras por pilar salen de la calificación que el perito eligió a mano
+  // en la conclusión técnica; los peritajes viejos sin ella usan el automático.
+  const pillarReport = applyManualPillarScores(
+    computePillars(health, report),
+    data.conclusion?.pillarScores,
+  );
   const findingsByLevel = {
     critical: report.findings.filter((f) => f.level === "critical"),
     warning: report.findings.filter((f) => f.level === "warning"),
@@ -3515,6 +3603,8 @@ export function renderReportHtml(
       ${vehicleRenderDataUrl
         ? `<div class="vehicle-render-banner"><img src="${vehicleRenderDataUrl}" alt="${esc(v.make)} ${esc(v.model)} ${esc(v.year)}" /></div>`
         : ""}
+
+      ${renderInsurabilityBanner(data)}
 
       ${renderConceptoBanner(data)}
 

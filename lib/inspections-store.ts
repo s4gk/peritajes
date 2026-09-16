@@ -255,6 +255,12 @@ async function refreshFromServer(): Promise<void> {
       const incoming = mergeDefaults(row);
       serverIds.add(incoming.id);
       const local = memory.get(incoming.id);
+      // `incoming` viene del listado y es `partial`: trae todo menos los blobs
+      // base64. Si la copia local está al día y SÍ tiene las fotos, nos
+      // quedamos con ella — si no, cada refresh borraría las imágenes que ya
+      // teníamos bajadas. Solo cuando el server es estrictamente más nuevo la
+      // local quedó obsoleta y la reemplazamos (las fotos se vuelven a pedir
+      // con `ensureFullInspection` al abrir el peritaje).
       const winner =
         !local || local.updatedAt < incoming.updatedAt ? incoming : local;
       memory.set(winner.id, winner);
@@ -284,6 +290,39 @@ async function refreshFromServer(): Promise<void> {
     }
   } catch {
     // Sin red o sin auth — seguimos con lo que tenga IDB.
+  }
+}
+
+/**
+ * Garantiza que el peritaje esté en memoria CON sus fotos.
+ *
+ * El listado (`/api/inspections`) sirve las filas sin blobs base64 y marcadas
+ * `partial`, porque mandarlas completas eran 155 MB por respuesta. Todo lo que
+ * solo lee status/vehículo (listado, dashboard, vehículos) funciona con la
+ * versión liviana; quien necesite las imágenes — abrir el wizard, previsualizar
+ * un borrador, exportar backup — tiene que pasar por acá primero.
+ *
+ * Es idempotente y barato: si la fila ya está completa no toca la red.
+ */
+export async function ensureFullInspection(
+  id: string,
+): Promise<StoredInspection | null> {
+  const local = memory.get(id);
+  if (local && !local.partial) return local;
+  try {
+    const json = (await fetchJson(`/api/inspections/${encodeURIComponent(id)}`)) as {
+      inspection: StoredInspection;
+    };
+    if (!json?.inspection) return local ?? null;
+    const full = mergeDefaults(json.inspection);
+    delete full.partial;
+    memory.set(full.id, full);
+    idbPutInspection(full).catch(() => {});
+    return full;
+  } catch {
+    // Sin red: devolvemos lo que haya. El caller decide si puede seguir con
+    // la versión liviana o si tiene que avisar que faltan las fotos.
+    return local ?? null;
   }
 }
 
@@ -353,6 +392,9 @@ export function saveInspectionData(id: string, data: InspectionData) {
     createdAt: existing?.createdAt ?? new Date().toISOString(),
     updatedAt: new Date().toISOString(),
     data,
+    // `data` que llega acá es el del editor, ya completo con sus fotos: la
+    // fila deja de ser la versión liviana del listado.
+    partial: undefined,
   };
   memory.set(id, updated);
   idbPutInspection(updated).catch(() => {});
@@ -492,8 +534,14 @@ export type InspectionsBackup = {
   inspections: StoredInspection[];
 };
 
-export function exportAllInspections(): InspectionsBackup {
-  const inspections = listInspections();
+export async function exportAllInspections(): Promise<InspectionsBackup> {
+  // Las filas del listado son livianas (sin fotos). Un backup sin imágenes no
+  // sirve para restaurar, así que acá sí bajamos cada peritaje completo — de a
+  // uno para no volver a armar una respuesta de cientos de MB.
+  const inspections: StoredInspection[] = [];
+  for (const row of listInspections()) {
+    inspections.push((await ensureFullInspection(row.id)) ?? row);
+  }
   return {
     version: BACKUP_VERSION,
     exportedAt: new Date().toISOString(),

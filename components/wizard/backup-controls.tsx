@@ -43,23 +43,37 @@ export function BackupControls({ onChange }: { onChange?: () => void }) {
   const fileInputRef = React.useRef<HTMLInputElement>(null);
   const [busy, setBusy] = React.useState(false);
 
-  function handleExport() {
-    const backup = exportAllInspections();
-    if (backup.count === 0) {
+  // Ahora es async: el listado local viene sin fotos, así que exportar baja
+  // cada peritaje completo del server. Con historial grande tarda, por eso el
+  // botón queda en busy.
+  async function handleExport() {
+    setBusy(true);
+    try {
+      const backup = await exportAllInspections();
+      if (backup.count === 0) {
+        toast.show({
+          title: "No hay nada para exportar",
+          description: "Todavía no tienes peritajes guardados en este dispositivo.",
+          variant: "warning",
+        });
+        return;
+      }
+      const filename = `perito-backup-${todayStamp()}.json`;
+      downloadFile(filename, JSON.stringify(backup, null, 2));
       toast.show({
-        title: "No hay nada para exportar",
-        description: "Todavía no tienes peritajes guardados en este dispositivo.",
-        variant: "warning",
+        title: "Respaldo descargado",
+        description: `${backup.count} peritaje${backup.count === 1 ? "" : "s"} en ${filename}`,
+        variant: "success",
       });
-      return;
+    } catch (e) {
+      toast.show({
+        title: "No se pudo exportar",
+        description: e instanceof Error ? e.message : "Error inesperado",
+        variant: "danger",
+      });
+    } finally {
+      setBusy(false);
     }
-    const filename = `perito-backup-${todayStamp()}.json`;
-    downloadFile(filename, JSON.stringify(backup, null, 2));
-    toast.show({
-      title: "Respaldo descargado",
-      description: `${backup.count} peritaje${backup.count === 1 ? "" : "s"} en ${filename}`,
-      variant: "success",
-    });
   }
 
   function handlePickFile() {

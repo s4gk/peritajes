@@ -143,11 +143,21 @@ export async function listInspectionsFor(
   actor: Actor,
 ): Promise<StoredInspection[]> {
   const scope = scopeWhere(actor);
+  // Ojo: `data_light`, NO `data`. El listado se sirve sin los blobs base64 de
+  // fotos y firmas — con `SELECT *` esta respuesta pesaba 155 MB para 37
+  // peritajes y el cliente no la podía bajar. Las filas salen marcadas con
+  // `partial: true` para que el store sepa que tiene que pedir la versión
+  // completa antes de abrir el peritaje o generar el PDF.
   const r = await query<InspectionRow>(
-    `SELECT * FROM inspections WHERE ${scope.sql} ORDER BY updated_at DESC`,
+    `SELECT id, user_id, org_id, status, plate, report_number, locked_at,
+            pdf_path, pdf_sha256, pdf_size, created_at, updated_at,
+            coalesce(data_light, '{}'::jsonb) AS data
+       FROM inspections
+      WHERE ${scope.sql}
+      ORDER BY updated_at DESC`,
     scope.params,
   );
-  return r.rows.map(rowToStored);
+  return r.rows.map((row) => ({ ...rowToStored(row), partial: true }));
 }
 
 export async function getInspectionServer(

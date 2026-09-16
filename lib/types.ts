@@ -14,6 +14,29 @@ export type RiskLevel = "low" | "medium" | "high" | "critical";
  */
 export type EconomicImpactLevel = "low" | "medium" | "high" | "critical";
 
+/**
+ * Concepto de asegurabilidad — veredicto BINARIO que exigen algunas
+ * financieras/aseguradoras ("¿asegurable sí o no?"). Es una dimensión APARTE
+ * de `conclusion.generalCondition` (ESTÁNDAR / FUERA DE ESTÁNDAR /
+ * ASEGURABILIDAD SUJETA A POLÍTICAS): esa es la escala propia del peritaje,
+ * esta es la respuesta que el cliente institucional necesita leer de una.
+ *
+ * Solo se captura y se imprime cuando la organización lo tiene habilitado
+ * (`company_config.insurability_verdict`). Lo elige el perito a mano; el
+ * sistema solo sugiere (ver `suggestedInsurability` en scoring.ts).
+ */
+export type InsurabilityVerdict = "yes" | "no";
+
+/** Los 4 módulos (pilares) de la calificación. Ver `PILLARS` en scoring.ts. */
+export type PillarKey = "safety" | "mechanical" | "bodywork" | "equipment";
+
+/**
+ * Porcentaje (0-100) que el perito asigna A MANO a cada pilar en la conclusión
+ * técnica. Cuando está, manda sobre el cálculo automático en el informe (ver
+ * `applyManualPillarScores` en scoring.ts). Faltante = sin calificar todavía.
+ */
+export type PillarScores = Partial<Record<PillarKey, number>>;
+
 /** Rango estimado de costo de reparación en COP. */
 export type RepairCostRange = { min: number; max: number };
 
@@ -250,6 +273,12 @@ export type InspectionData = {
   completedAt?: string;
   conclusion: {
     generalCondition: string; // finding value from mechanical
+    /** Concepto de asegurabilidad SÍ/NO. undefined = no aplica (la org no lo
+     *  tiene habilitado) o el perito aún no lo dictaminó. */
+    insurability?: InsurabilityVerdict;
+    /** Calificación manual por pilar. Obligatoria para finalizar; los
+     *  peritajes viejos sin ella siguen mostrando el cálculo automático. */
+    pillarScores?: PillarScores;
     observations: string;
     recommendation: string;
     inspectorSignature?: string; // dataUrl
@@ -313,4 +342,11 @@ export type StoredInspection = {
    *  autorización: owner ve todo lo de su org, employee solo lo suyo. */
   orgId?: string;
   data: InspectionData;
+  /** True cuando `data` viene del listado y por lo tanto NO trae los blobs
+   *  base64 (fotos y firmas): el resto del contenido — status de cada ítem,
+   *  vehículo, notas — está completo, así que `analyze()` y los conteos de
+   *  fotos funcionan igual. Antes de abrir el peritaje en el wizard, generar
+   *  el PDF o exportar un backup hay que pedir la fila completa con
+   *  `ensureFullInspection(id)`. */
+  partial?: boolean;
 };

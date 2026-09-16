@@ -43,12 +43,23 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import { ClientSignatureCapture } from "@/components/shared/client-signature-capture";
 import { VoiceDictationButton } from "@/components/shared/voice-dictation-button";
-import { useCurrentUser } from "@/components/panel/current-user";
+import { useCanManage, useCurrentUser } from "@/components/panel/current-user";
+import { useOrgFeatures } from "@/components/panel/org-features";
 import { useToast } from "@/components/ui/toast";
 import { apiFetch } from "@/lib/client/api-client";
 import { downloadInspectionPdf, downloadStoredPdf } from "@/lib/pdf-client";
 import { analyze, computeHealth } from "@/lib/rules-engine";
-import { computePillars } from "@/lib/scoring";
+import {
+  APPROVAL_THRESHOLD,
+  PILLARS,
+  applyManualPillarScores,
+  computePillars,
+  hasCompletePillarScores,
+  insurabilityLabel,
+  suggestedInsurability,
+} from "@/lib/scoring";
+import type { InsurabilityVerdict, PillarKey } from "@/lib/types";
+import { Input } from "@/components/ui/input";
 import {
   countMandatorySlotsFilled,
   missingMandatorySlots,
@@ -64,6 +75,13 @@ function appendText(existing: string, added: string): string {
   return `${existing}${sep}${added}`.trim();
 }
 
+/** Concepto binario que exigen algunas financieras/aseguradoras. Solo se
+ *  muestra cuando la org lo tiene habilitado (ver OrgFeatures). */
+const INSURABILITY_OPTIONS: { value: InsurabilityVerdict; label: string }[] = [
+  { value: "yes", label: insurabilityLabel("yes") },
+  { value: "no", label: insurabilityLabel("no") },
+];
+
 const CONDITION_OPTIONS = [
   { value: "ESTÁNDAR", label: "ESTÁNDAR" },
   { value: "FUERA DE ESTÁNDAR", label: "FUERA DE ESTÁNDAR" },
@@ -76,8 +94,20 @@ const CONDITION_OPTIONS = [
 export function SummaryStep() {
   const { data, setData, id: inspectionId, reportNumber } = useInspection();
   const currentUser = useCurrentUser();
+  // Dueño/admin pueden bajar el borrador sin marca de agua; el employee no.
+  const canDownloadDraft = useCanManage();
   const report = React.useMemo(() => analyze(data), [data]);
-  const pillars = React.useMemo(() => computePillars(computeHealth(data), report), [data, report]);
+  // Cálculo automático: queda solo como referencia al lado de cada pilar.
+  const autoPillars = React.useMemo(
+    () => computePillars(computeHealth(data), report),
+    [data, report],
+  );
+  // La calificación que manda es la que el perito pone a mano por pilar.
+  const pillarScores = data.conclusion.pillarScores;
+  const pillars = React.useMemo(
+    () => applyManualPillarScores(autoPillars, pillarScores),
+    [autoPillars, pillarScores],
+  );
   const globalPct = pillars.globalPct;
   // Concepto que sugiere el cálculo automático (mismo umbral que el tier del PDF:
   // dos bandas — ≥55 ESTÁNDAR, <55 / con gate alto/crítico → SUJETA A POLÍTICAS).
@@ -89,12 +119,23 @@ export function SummaryStep() {
     const hardGate = pillars.gates.some(
       (g) => g.severity === "high" || g.severity === "critical",
     );
-    if (hardGate || pct < 55) return "ASEGURABILIDAD SUJETA A POLÍTICAS";
+    if (hardGate || pct < APPROVAL_THRESHOLD) return "ASEGURABILIDAD SUJETA A POLÍTICAS";
     return "ESTÁNDAR";
   }, [globalPct, pillars]);
   const selectedCondition = data.conclusion.generalCondition;
   const conditionDiverges =
     !!selectedCondition && !!suggestedCondition && selectedCondition !== suggestedCondition;
+  // Concepto de asegurabilidad SÍ/NO: dimensión aparte, solo para las orgs que
+  // atienden clientes que lo exigen. Igual que la condición general, lo decide
+  // el perito a mano y el cálculo solo sugiere.
+  const insurabilityEnabled = useOrgFeatures().insurabilityVerdict;
+  const suggestedVerdict = React.useMemo(
+    () => suggestedInsurability(globalPct, pillars.gates),
+    [globalPct, pillars],
+  );
+  const selectedVerdict = data.conclusion.insurability;
+  const verdictDiverges =
+    !!selectedVerdict && !!suggestedVerdict && selectedVerdict !== suggestedVerdict;
   const toast = useToast();
   const [generating, setGenerating] = React.useState(false);
   // PDF "pendiente" significa que la finalización corrió OK pero el server no
@@ -255,6 +296,19 @@ export function SummaryStep() {
     setData((prev) => ({ ...prev, conclusion: { ...prev.conclusion, ...patch } }));
   }
 
+  function setPillarScore(key: PillarKey, raw: string) {
+    const n = raw.trim() === "" ? undefined : Math.round(Number(raw));
+    const value =
+      n === undefined || Number.isNaN(n) ? undefined : Math.max(0, Math.min(100, n));
+    setData((prev) => ({
+      ...prev,
+      conclusion: {
+        ...prev.conclusion,
+        pillarScores: { ...prev.conclusion.pillarScores, [key]: value },
+      },
+    }));
+  }
+
   // Sincronizamos la firma del perfil hacia el peritaje mientras esté en
   // borrador. Si el perito actualiza su firma en /cuenta, la nueva versión se
   // aplica al peritaje en curso. Una vez finalizado, el peritaje queda
@@ -294,6 +348,34 @@ export function SummaryStep() {
     }
   }
 
+  // Descarga del borrador SIN marca de agua. Solo dueño/admin (el employee
+  // se queda con la previsualización): el negocio necesita mostrarle el
+  // informe al cliente antes de cerrarlo. Ojo — no lleva consecutivo oficial,
+  // ese se asigna al finalizar. El gate real está en /api/pdf.
+  async function downloadDraftPdf() {
+    setGenerating(true);
+    try {
+      await downloadInspectionPdf(data, "detailed", inspectionId, {
+        preview: false,
+      });
+      toast.show({
+        title: "PDF descargado",
+        description:
+          "Borrador sin marca de agua. Todavía no tiene consecutivo oficial: se asigna al finalizar.",
+        variant: "success",
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Error desconocido";
+      toast.show({
+        title: "No se pudo descargar el PDF",
+        description: message,
+        variant: "danger",
+      });
+    } finally {
+      setGenerating(false);
+    }
+  }
+
   // Descarga del PDF oficial post-finalización. Pega directo al endpoint
   // stored (no re-renderea — bytes exactos del documento entregable, con su
   // sha256 registrado). Disponible para todos los roles una vez el peritaje
@@ -324,14 +406,27 @@ export function SummaryStep() {
       });
       return;
     }
-    if (!data.conclusion.clientSignature) {
+    if (insurabilityEnabled && !data.conclusion.insurability) {
       toast.show({
-        title: "Falta la firma del cliente",
-        description: "Captura la firma del cliente (QR o en pantalla) antes de cerrar el peritaje.",
+        title: "Falta el concepto de asegurabilidad",
+        description: "Dictamina ASEGURABLE SÍ o ASEGURABLE NO antes de finalizar.",
         variant: "warning",
       });
       return;
     }
+    if (!hasCompletePillarScores(data.conclusion.pillarScores)) {
+      toast.show({
+        title: "Falta la calificación por módulos",
+        description: "Asigna el porcentaje de los 4 módulos en la conclusión técnica antes de finalizar.",
+        variant: "warning",
+      });
+      return;
+    }
+    // La firma del cliente NO bloquea el cierre (decisión de negocio: hay
+    // peritajes de concesionario/flota donde no hay un cliente presente que
+    // firme). Sigue siendo capturable por QR o en pantalla, y el modal de
+    // confirmación avisa cuando falta. OJO: sin firma, el server NO dispara
+    // el envío del PDF por WhatsApp (ver app/api/inspections/[id]/route.ts).
     const filled = countMandatorySlotsFilled(data);
     if (filled < MIN_REQUIRED_PHOTOS) {
       const missing = missingMandatorySlots(data);
@@ -375,9 +470,11 @@ export function SummaryStep() {
     }));
     toast.show({
       title: "Peritaje finalizado",
-      description: data.vehicle.ownerPhone
-        ? "Cerrado en solo lectura. Enviando el PDF al cliente por WhatsApp."
-        : "Cerrado en solo lectura. El cliente no tiene teléfono cargado, descárgalo y envíalo manualmente.",
+      description: !data.conclusion.clientSignature
+        ? "Cerrado en solo lectura. Como no quedó firma del cliente, el PDF NO se envía por WhatsApp: descárgalo y mándalo tú."
+        : data.vehicle.ownerPhone
+          ? "Cerrado en solo lectura. Enviando el PDF al cliente por WhatsApp."
+          : "Cerrado en solo lectura. El cliente no tiene teléfono cargado, descárgalo y envíalo manualmente.",
       variant: "success",
     });
     if (typeof window !== "undefined") window.scrollTo({ top: 0, behavior: "smooth" });
@@ -561,6 +658,50 @@ export function SummaryStep() {
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
+          <div className="space-y-2">
+            <Label>Calificación por módulos</Label>
+            <p className="text-xs text-muted-foreground">
+              Asigna el porcentaje (0 a 100) de cada módulo. Es el que sale en el
+              informe; el cálculo automático queda solo como referencia.
+            </p>
+            <div className="grid gap-3 sm:grid-cols-2">
+              {PILLARS.map((p) => {
+                const auto = autoPillars.pillars.find((a) => a.key === p.key)?.healthPct ?? null;
+                const value = pillarScores?.[p.key];
+                return (
+                  <div key={p.key} className="space-y-1">
+                    <Label htmlFor={`pillar-${p.key}`} className="text-sm">
+                      {p.title}
+                    </Label>
+                    <div className="flex items-center gap-2">
+                      <Input
+                        id={`pillar-${p.key}`}
+                        type="number"
+                        inputMode="numeric"
+                        min={0}
+                        max={100}
+                        step={1}
+                        value={value ?? ""}
+                        onChange={(e) => setPillarScore(p.key, e.target.value)}
+                        className="w-24"
+                      />
+                      <span className="text-sm text-muted-foreground">%</span>
+                    </div>
+                    <div className="text-[11px] text-muted-foreground">
+                      Cálculo automático: {auto === null ? "sin datos" : `${auto}%`}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            {hasCompletePillarScores(pillarScores) && globalPct !== null && (
+              <div className="text-sm">
+                Estado general (promedio ponderado):{" "}
+                <span className="font-semibold">{globalPct}%</span>
+              </div>
+            )}
+          </div>
+
           <div className="space-y-1.5">
             <Label>Condición general</Label>
             <Select
@@ -589,6 +730,42 @@ export function SummaryStep() {
               </div>
             )}
           </div>
+
+          {insurabilityEnabled && (
+            <div className="space-y-1.5">
+              <Label>Concepto de asegurabilidad</Label>
+              <Select
+                value={data.conclusion.insurability || undefined}
+                onValueChange={(v) =>
+                  updateConclusion({ insurability: v as InsurabilityVerdict })
+                }
+              >
+                <SelectTrigger className="max-w-sm">
+                  <SelectValue placeholder="Seleccione" />
+                </SelectTrigger>
+                <SelectContent>
+                  {INSURABILITY_OPTIONS.map((o) => (
+                    <SelectItem key={o.value} value={o.value}>
+                      {o.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {verdictDiverges && (
+                <div className="flex items-start gap-2 rounded-lg border border-warning/40 bg-warning/10 px-3 py-2 text-xs text-warning">
+                  <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                  <div>
+                    El cálculo automático sugiere{" "}
+                    <span className="font-semibold">
+                      {insurabilityLabel(suggestedVerdict!)}
+                    </span>
+                    . Verifica tu selección o documenta el motivo en las
+                    observaciones.
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
 
           <div className="space-y-1.5">
             <Label htmlFor="observations">Observaciones generales</Label>
@@ -729,6 +906,28 @@ export function SummaryStep() {
             )}
           </Button>
         )}
+        {data.status !== "completed" && canDownloadDraft && (
+          <Button
+            type="button"
+            onClick={downloadDraftPdf}
+            disabled={generating}
+            size="lg"
+            variant="outline"
+            title="Descargar el PDF sin marca de agua, sin cerrar el peritaje (aún sin consecutivo oficial)"
+          >
+            {generating ? (
+              <>
+                <FileText className="mr-2 h-4 w-4 animate-pulse" />
+                Descargando...
+              </>
+            ) : (
+              <>
+                <Download className="mr-2 h-4 w-4" />
+                Descargar PDF
+              </>
+            )}
+          </Button>
+        )}
         {data.status !== "completed" && (
           <Button
             type="button"
@@ -772,6 +971,18 @@ export function SummaryStep() {
               el PDF se le envía automáticamente por WhatsApp.
             </DialogDescription>
           </DialogHeader>
+          {!data.conclusion.clientSignature && (
+            <div className="flex items-start gap-2 rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-xs text-warning">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+              <div>
+                <div className="font-semibold">Sin firma del cliente</div>
+                <div className="text-warning/90">
+                  Puedes cerrarlo igual, pero el informe sale sin la firma del
+                  cliente y el PDF no se le envía por WhatsApp.
+                </div>
+              </div>
+            </div>
+          )}
           <div className="rounded-md border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
             ¿Seguro que quieres cerrarlo? Si necesitas corregir algo después, un
             administrador puede reabrirlo.

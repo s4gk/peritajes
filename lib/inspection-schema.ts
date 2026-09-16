@@ -155,9 +155,23 @@ const Tires = z.object({
   rims: z.record(TirePositionKey, RimEntry).optional(),
 });
 
+const PillarPct = z.number().int().min(0).max(100).optional();
+
 const Conclusion = z
   .object({
     generalCondition: STR(128).default(""),
+    /** Concepto de asegurabilidad (SÍ/NO). Opcional: solo lo emiten las orgs
+     *  que lo tienen habilitado en su configuración de empresa. */
+    insurability: z.enum(["yes", "no"]).optional(),
+    /** Calificación manual por pilar (0-100), la elige el perito. */
+    pillarScores: z
+      .object({
+        safety: PillarPct,
+        mechanical: PillarPct,
+        bodywork: PillarPct,
+        equipment: PillarPct,
+      })
+      .optional(),
     observations: STR(8000).default(""),
     recommendation: STR(8000).default(""),
     inspectorSignature: z.string().max(1024 * 1024).optional(),

@@ -23,6 +23,10 @@ export type CompanyConfig = {
   email: string;
   website: string;
   logoDataUrl: string;
+  /** ¿Esta org emite el concepto de asegurabilidad SÍ/NO en sus peritajes?
+   *  PRENDIDO por defecto para todas las empresas — el owner puede apagarlo
+   *  desde /empresa si no atiende clientes que exijan ese veredicto. */
+  insurabilityVerdict: boolean;
   updatedAt: string;
 };
 
@@ -35,6 +39,7 @@ type CompanyRow = {
   email: string | null;
   website: string | null;
   logo_data_url: string | null;
+  insurability_verdict: boolean | null;
   updated_at: Date | string;
 };
 
@@ -47,6 +52,7 @@ const DEFAULTS: CompanyConfig = {
   email: "",
   website: "",
   logoDataUrl: "",
+  insurabilityVerdict: true,
   updatedAt: new Date(0).toISOString(),
 };
 
@@ -64,6 +70,7 @@ function rowToConfig(row: CompanyRow): CompanyConfig {
     email: row.email ?? "",
     website: row.website ?? "",
     logoDataUrl: row.logo_data_url ?? "",
+    insurabilityVerdict: row.insurability_verdict === true,
     updatedAt,
   };
 }
@@ -94,6 +101,7 @@ export type CompanyConfigInput = {
   email?: string;
   website?: string;
   logoDataUrl?: string;
+  insurabilityVerdict?: boolean;
 };
 
 /**
@@ -121,6 +129,11 @@ export async function updateCompanyConfig(
     input.email ?? "",
     input.website ?? "",
     input.logoDataUrl ?? "",
+    // Omitido = PRENDIDO. Importante para los callers que no conocen el campo
+    // (p.ej. el seed de company_config al crear una org en /api/orgs): si acá
+    // fuera `=== true`, cada empresa nueva nacería con el concepto apagado.
+    // Apagarlo exige mandar `false` explícito, que es lo que hace /empresa.
+    input.insurabilityVerdict !== false,
     orgId,
   ];
   // ¿Existe fila para esta org? Si sí, UPDATE; si no, INSERT con id sintético
@@ -132,10 +145,11 @@ export async function updateCompanyConfig(
   if (existing.rowCount === 0) {
     await query(
       `INSERT INTO company_config
-        (id, name, tagline, nit, address, phone, email, website, logo_data_url, org_id, updated_at)
+        (id, name, tagline, nit, address, phone, email, website, logo_data_url,
+         insurability_verdict, org_id, updated_at)
        VALUES (
          COALESCE((SELECT MAX(id) FROM company_config), 0) + 1,
-         $1, $2, $3, $4, $5, $6, $7, $8, $9, now()
+         $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, now()
        )`,
       params,
     );
@@ -143,8 +157,9 @@ export async function updateCompanyConfig(
     await query(
       `UPDATE company_config
        SET name = $1, tagline = $2, nit = $3, address = $4, phone = $5,
-           email = $6, website = $7, logo_data_url = $8, updated_at = now()
-       WHERE org_id = $9`,
+           email = $6, website = $7, logo_data_url = $8,
+           insurability_verdict = $9, updated_at = now()
+       WHERE org_id = $10`,
       params,
     );
   }

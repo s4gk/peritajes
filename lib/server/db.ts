@@ -159,6 +159,31 @@ CREATE TABLE IF NOT EXISTS company_config (
 -- crearse o al primer get.
 ALTER TABLE company_config ADD COLUMN IF NOT EXISTS org_id TEXT REFERENCES organizations(id) ON DELETE CASCADE;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_company_config_org ON company_config(org_id) WHERE org_id IS NOT NULL;
+-- 2026-09: concepto de asegurabilidad SÍ/NO. Lo exigen clientes
+-- institucionales (financieras/aseguradoras) que necesitan un veredicto
+-- binario, no la escala ESTÁNDAR / FUERA DE ESTÁNDAR del peritaje.
+-- Nació apagado por org; por decisión de producto pasó a PRENDIDO para todas
+-- las empresas (el owner puede apagarlo desde /empresa si no lo quiere).
+ALTER TABLE company_config ADD COLUMN IF NOT EXISTS insurability_verdict BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE company_config ALTER COLUMN insurability_verdict SET DEFAULT TRUE;
+
+-- Marcador de migraciones de DATOS (one-shot). Distinto de las de esquema, que
+-- son idempotentes por naturaleza (IF NOT EXISTS): un UPDATE masivo no lo es
+-- —si se repitiera en cada arranque le pisaría al owner la decisión de haber
+-- apagado algo. Cada backfill deja su llave acá y no vuelve a correr.
+CREATE TABLE IF NOT EXISTS data_migrations (
+  key TEXT PRIMARY KEY,
+  applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+-- Backfill: prender el concepto en las empresas que ya existían cuando la
+-- columna nació en FALSE. Corre UNA sola vez.
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM data_migrations WHERE key = 'insurability_verdict_on_for_all') THEN
+    UPDATE company_config SET insurability_verdict = TRUE;
+    INSERT INTO data_migrations (key) VALUES ('insurability_verdict_on_for_all');
+  END IF;
+END $$;
 -- El constraint CHECK (id = 1) era del diseño single-tenant original; con
 -- multi-tenant cada org necesita su propia fila con id > 1. Lo dropamos si
 -- todavía existe (idempotente: DO block verifica antes de alterar).
@@ -205,6 +230,60 @@ CREATE INDEX IF NOT EXISTS idx_inspections_updated ON inspections(updated_at DES
 CREATE INDEX IF NOT EXISTS idx_inspections_user ON inspections(user_id);
 CREATE INDEX IF NOT EXISTS idx_inspections_org ON inspections(org_id);
 CREATE INDEX IF NOT EXISTS idx_inspections_plate ON inspections(plate) WHERE plate IS NOT NULL;
+
+-- ---------------------------------------------------------------------------
+-- data_light: copia de "data" SIN los blobs base64 (fotos y firmas).
+--
+-- El listado del panel ("/api/inspections") devolvía "data" completo, o sea
+-- cada foto en base64: con 37 peritajes eso eran 155 MB en UNA respuesta. El
+-- navegador nunca terminaba de bajarla, "refreshFromServer()" caía en su catch
+-- mudo y la lista se veía VACÍA sin ningún error. Crecía solo: ~4 MB por
+-- peritaje.
+--
+-- "analyze()" (rules-engine) no mira las imágenes — solo los "status" de cada
+-- ítem — así que una copia sin blobs alcanza para el listado, el dashboard y
+-- vehículos, y baja el payload de 148 MB a ~434 kB (350x).
+--
+-- Se materializa por trigger en vez de calcularse al leer: strippear las 37
+-- filas cuesta ~3 s por request y escala con el histórico, mientras que al
+-- escribir son ~170 ms una sola vez por guardado.
+CREATE OR REPLACE FUNCTION perito_strip_blobs(j JSONB) RETURNS JSONB
+LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $perito_strip$
+  SELECT CASE jsonb_typeof(j)
+    WHEN 'object' THEN (
+      SELECT coalesce(jsonb_object_agg(k, perito_strip_blobs(v)), '{}'::jsonb)
+      FROM jsonb_each(j) AS e(k, v)
+      WHERE k NOT IN ('dataUrl', 'inspectorSignature', 'clientSignature')
+    )
+    WHEN 'array' THEN (
+      SELECT coalesce(jsonb_agg(perito_strip_blobs(v) ORDER BY ord), '[]'::jsonb)
+      FROM jsonb_array_elements(j) WITH ORDINALITY AS a(v, ord)
+    )
+    ELSE j
+  END
+$perito_strip$;
+
+ALTER TABLE inspections ADD COLUMN IF NOT EXISTS data_light JSONB;
+
+CREATE OR REPLACE FUNCTION perito_sync_data_light() RETURNS trigger
+LANGUAGE plpgsql AS $perito_sync$
+BEGIN
+  NEW.data_light := perito_strip_blobs(NEW.data);
+  RETURN NEW;
+END;
+$perito_sync$;
+
+-- Trigger y no columna GENERATED: una generada deja la fila dependiendo de la
+-- función y no se puede reemplazar después sin dropear la columna. Va sobre
+-- "UPDATE OF data" para que el backfill de abajo no se recompute a sí mismo.
+DROP TRIGGER IF EXISTS trg_inspections_data_light ON inspections;
+CREATE TRIGGER trg_inspections_data_light
+  BEFORE INSERT OR UPDATE OF data ON inspections
+  FOR EACH ROW EXECUTE FUNCTION perito_sync_data_light();
+
+-- Backfill de las filas viejas. Corre una sola vez (después data_light nunca
+-- vuelve a ser NULL porque el trigger la mantiene).
+UPDATE inspections SET data_light = perito_strip_blobs(data) WHERE data_light IS NULL;
 
 CREATE TABLE IF NOT EXISTS report_counters (
   year INTEGER PRIMARY KEY,

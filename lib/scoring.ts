@@ -13,9 +13,16 @@
  */
 
 import type { HealthReport, RiskFinding, RiskReport, SectionHealth } from "./rules-engine";
-import type { EconomicImpactLevel, RepairCostRange, RiskLevel } from "./types";
+import type {
+  EconomicImpactLevel,
+  InsurabilityVerdict,
+  PillarKey,
+  PillarScores,
+  RepairCostRange,
+  RiskLevel,
+} from "./types";
 
-export type PillarKey = "safety" | "mechanical" | "bodywork" | "equipment";
+export type { PillarKey };
 
 export type PillarDef = {
   key: PillarKey;
@@ -121,6 +128,9 @@ export type PillarReport = {
   /** Promedio ponderado de los `healthPct` de cada pilar inspeccionado. */
   globalPct: number | null;
   gates: HardGate[];
+  /** true cuando los % de los pilares los puso el perito a mano (ver
+   *  `applyManualPillarScores`). */
+  manual?: boolean;
 };
 
 /**
@@ -240,6 +250,43 @@ export function computePillars(
   return { pillars, globalPct, gates };
 }
 
+/** true si el perito calificó a mano los 4 pilares. */
+export function hasCompletePillarScores(scores: PillarScores | undefined): boolean {
+  return PILLARS.every((p) => typeof scores?.[p.key] === "number");
+}
+
+/**
+ * Reemplaza el % automático de cada pilar por el que el perito eligió a mano en
+ * la conclusión técnica (decisión de negocio: la calificación por módulos la da
+ * el perito, el cálculo queda solo como referencia). Los pilares sin valor
+ * manual conservan el automático. Con cualquier valor manual, el global es el
+ * promedio ponderado (mismos `PILLARS.weight`) de las barras resultantes, SIN el
+ * piso por peor sección — así el "Estado general" cuadra con lo que el perito
+ * puso. Los gates se conservan (alimentan el bloque de avisos del PDF).
+ */
+export function applyManualPillarScores(
+  report: PillarReport,
+  scores: PillarScores | undefined,
+): PillarReport {
+  const manualKeys = PILLARS.filter((p) => typeof scores?.[p.key] === "number");
+  if (manualKeys.length === 0) return report;
+
+  const pillars = report.pillars.map((p) => {
+    const v = scores?.[p.key];
+    if (typeof v !== "number") return p;
+    return { ...p, healthPct: Math.max(0, Math.min(100, Math.round(v))) };
+  });
+  let weightedSum = 0;
+  let weightTotal = 0;
+  for (const p of pillars) {
+    if (p.healthPct === null) continue;
+    weightedSum += p.healthPct * p.weight;
+    weightTotal += p.weight;
+  }
+  const globalPct = weightTotal > 0 ? Math.round(weightedSum / weightTotal) : null;
+  return { ...report, pillars, globalPct, manual: true };
+}
+
 /**
  * Reglas que imponen un piso de riesgo sin importar el agregado de pilares. Cada
  * gate apunta al pilar responsable y declara su severidad (el piso que fuerza).
@@ -350,6 +397,44 @@ export function riskLevelFromPillars(
   const floor = gateRiskFloor(gates);
   if (floor !== null && RISK_ORDER[floor] > RISK_ORDER[fromPct]) return floor;
   return fromPct;
+}
+
+/* ============================================================
+ *  CONCEPTO DE ASEGURABILIDAD — veredicto binario SÍ/NO.
+ * ============================================================ */
+
+/**
+ * Umbral de aprobación del peritaje (%). Es el mismo corte que usa el PDF para
+ * pintar el tier de cada pilar y el que sugiere el concepto en el resumen:
+ * ≥55 aprobado, <55 rechazado. Vive acá para que el número de negocio tenga un
+ * solo dueño.
+ */
+export const APPROVAL_THRESHOLD = 55;
+
+/**
+ * Veredicto de asegurabilidad que SUGIERE el cálculo automático. Es solo una
+ * sugerencia: el concepto que sale en el informe es SIEMPRE el que el perito
+ * eligió a mano (igual que `generalCondition`). Si diverge, la UI avisa sin
+ * bloquear y el perito documenta el motivo en las observaciones.
+ *
+ * Criterio: cualquier gate alto o crítico (daño estructural, frenos, airbags,
+ * fuga crítica, 2+ llantas críticas) o una nota global por debajo del umbral de
+ * aprobación → "no". Sin peritaje suficiente para calificar (`globalPct` null)
+ * no se sugiere nada.
+ */
+export function suggestedInsurability(
+  globalPct: number | null,
+  gates: HardGate[],
+): InsurabilityVerdict | null {
+  if (globalPct === null) return null;
+  const hardGate = gates.some((g) => g.severity === "high" || g.severity === "critical");
+  if (hardGate || globalPct < APPROVAL_THRESHOLD) return "no";
+  return "yes";
+}
+
+/** Etiqueta en español del veredicto, tal como debe leerse en el informe. */
+export function insurabilityLabel(verdict: InsurabilityVerdict): string {
+  return verdict === "yes" ? "ASEGURABLE SÍ" : "ASEGURABLE NO";
 }
 
 /* ============================================================
