@@ -1,0 +1,285 @@
+{
+  "pages": [
+    {
+      "id": "page-1",
+      "name": "Operación diaria"
+    },
+    {
+      "id": "page-2",
+      "name": "Inspección"
+    },
+    {
+      "id": "page-3",
+      "name": "Gestión"
+    },
+    {
+      "id": "page-4",
+      "name": "Administrador y público"
+    }
+  ],
+  "artboards": [
+    {
+      "file": "Login.dc.html",
+      "x": 0,
+      "y": 0,
+      "w": 390,
+      "h": 844,
+      "title": "Iniciar sesión",
+      "page": "page-1"
+    },
+    {
+      "file": "Main.dc.html",
+      "x": 480,
+      "y": 0,
+      "w": 390,
+      "h": 1060,
+      "title": "Inicio (dashboard)",
+      "page": "page-1"
+    },
+    {
+      "file": "Agenda.dc.html",
+      "x": 960,
+      "y": 0,
+      "w": 390,
+      "h": 940,
+      "title": "Agenda",
+      "page": "page-1"
+    },
+    {
+      "file": "NuevoPeritaje.dc.html",
+      "x": 1440,
+      "y": 0,
+      "w": 390,
+      "h": 1000,
+      "title": "Nuevo peritaje",
+      "page": "page-1"
+    },
+    {
+      "file": "Peritajes.dc.html",
+      "x": 1920,
+      "y": 0,
+      "w": 390,
+      "h": 1060,
+      "title": "Peritajes",
+      "page": "page-1"
+    },
+    {
+      "file": "Mas.dc.html",
+      "x": 2400,
+      "y": 0,
+      "w": 390,
+      "h": 1040,
+      "title": "Más",
+      "page": "page-1"
+    },
+    {
+      "file": "PasoVehiculo.dc.html",
+      "x": 0,
+      "y": 0,
+      "w": 390,
+      "h": 1440,
+      "title": "1 · Vehículo",
+      "page": "page-2"
+    },
+    {
+      "file": "PasoRecorrido.dc.html",
+      "x": 480,
+      "y": 0,
+      "w": 390,
+      "h": 1180,
+      "title": "2 · Frente (ítem abierto)",
+      "page": "page-2"
+    },
+    {
+      "file": "PasoLlanta.dc.html",
+      "x": 960,
+      "y": 0,
+      "w": 390,
+      "h": 1000,
+      "title": "3 · Izquierda (llanta)",
+      "page": "page-2"
+    },
+    {
+      "file": "PasoFugas.dc.html",
+      "x": 1440,
+      "y": 0,
+      "w": 390,
+      "h": 960,
+      "title": "7 · Fugas",
+      "page": "page-2"
+    },
+    {
+      "file": "PasoFotos.dc.html",
+      "x": 1920,
+      "y": 0,
+      "w": 390,
+      "h": 1000,
+      "title": "11 · Fotos",
+      "page": "page-2"
+    },
+    {
+      "file": "PasoResumen.dc.html",
+      "x": 2400,
+      "y": 0,
+      "w": 390,
+      "h": 1560,
+      "title": "12 · Resumen",
+      "page": "page-2"
+    },
+    {
+      "file": "PasosDelPeritaje.dc.html",
+      "x": 2880,
+      "y": 0,
+      "w": 390,
+      "h": 844,
+      "title": "Pasos (hoja)",
+      "page": "page-2"
+    },
+    {
+      "file": "Vehiculos.dc.html",
+      "x": 0,
+      "y": 0,
+      "w": 390,
+      "h": 844,
+      "title": "Vehículos",
+      "page": "page-3"
+    },
+    {
+      "file": "Propietario.dc.html",
+      "x": 480,
+      "y": 0,
+      "w": 390,
+      "h": 900,
+      "title": "Ficha de propietario",
+      "page": "page-3"
+    },
+    {
+      "file": "Empleados.dc.html",
+      "x": 960,
+      "y": 0,
+      "w": 390,
+      "h": 960,
+      "title": "Empleados",
+      "page": "page-3"
+    },
+    {
+      "file": "EmpleadoAcciones.dc.html",
+      "x": 1440,
+      "y": 0,
+      "w": 390,
+      "h": 844,
+      "title": "Acciones de empleado",
+      "page": "page-3"
+    },
+    {
+      "file": "Empresa.dc.html",
+      "x": 1920,
+      "y": 0,
+      "w": 390,
+      "h": 1000,
+      "title": "Empresa",
+      "page": "page-3"
+    },
+    {
+      "file": "WhatsApp.dc.html",
+      "x": 2400,
+      "y": 0,
+      "w": 390,
+      "h": 844,
+      "title": "WhatsApp",
+      "page": "page-3"
+    },
+    {
+      "file": "MiCuenta.dc.html",
+      "x": 2880,
+      "y": 0,
+      "w": 390,
+      "h": 1200,
+      "title": "Mi cuenta",
+      "page": "page-3"
+    },
+    {
+      "file": "AdminPanel.dc.html",
+      "x": 0,
+      "y": 0,
+      "w": 390,
+      "h": 1000,
+      "title": "Panel admin",
+      "page": "page-4"
+    },
+    {
+      "file": "Clientes.dc.html",
+      "x": 480,
+      "y": 0,
+      "w": 390,
+      "h": 844,
+      "title": "Clientes",
+      "page": "page-4"
+    },
+    {
+      "file": "Auditoria.dc.html",
+      "x": 960,
+      "y": 0,
+      "w": 390,
+      "h": 900,
+      "title": "Auditoría",
+      "page": "page-4"
+    },
+    {
+      "file": "FirmaCliente.dc.html",
+      "x": 1440,
+      "y": 0,
+      "w": 390,
+      "h": 844,
+      "title": "Firma remota (cliente)",
+      "page": "page-4"
+    },
+    {
+      "file": "FirmaObligatoria.dc.html",
+      "x": 1920,
+      "y": 0,
+      "w": 390,
+      "h": 844,
+      "title": "Firma obligatoria del perito",
+      "page": "page-4"
+    }
+  ],
+  "annotations": [
+    {
+      "id": "nota-page-1",
+      "x": 0,
+      "y": -200,
+      "w": 520,
+      "text": "Rediseño tipo app nativa: barra inferior (Inicio · Agenda · Nuevo · Peritajes · Más) en vez del menú lateral.\nEl empleado no ve Inicio: su primera pestaña es Agenda.\nVehículos, Propietarios, Empresa, Empleados, WhatsApp y Mi cuenta viven en «Más».",
+      "page": "page-1"
+    },
+    {
+      "id": "nota-page-2",
+      "x": 0,
+      "y": -200,
+      "w": 520,
+      "text": "Wizard sin barra de pestañas: Atrás / Siguiente fijos abajo.\nEl encabezado muestra placa + estado de guardado; el ícono de lista abre la hoja de pasos.\nLos % por módulo se ponen a mano con − / + (pasos de 1).",
+      "page": "page-2"
+    },
+    {
+      "id": "nota-page-3",
+      "x": 0,
+      "y": -200,
+      "w": 520,
+      "text": "Las acciones por fila (contraseña, reset, desactivar) pasan a una hoja inferior en vez de 4 botones en línea.",
+      "page": "page-3"
+    },
+    {
+      "id": "nota-page-4",
+      "x": 0,
+      "y": -200,
+      "w": 520,
+      "text": "El admin tiene su propia barra: Panel · Clientes · Peritajes · Auditoría · Más (Backup y Configuración van en Más).\nLa firma remota del cliente es pública, sin barra de navegación.",
+      "page": "page-4"
+    }
+  ],
+  "launch": {
+    "view": "canvas",
+    "page": "page-1"
+  }
+}
