@@ -41,6 +41,12 @@ import { cn } from "@/lib/utils";
 // local. Sin el flag, todo corre 100% en el navegador como antes.
 const OCR_REMOTE = process.env.NEXT_PUBLIC_OCR_REMOTE === "1";
 
+/** OCR local si el modo remoto está apagado o si no hay red (el remoto
+ *  fallaría igual y caeríamos al local después de esperar). */
+function prefersLocalOcr(): boolean {
+  return !OCR_REMOTE || (typeof navigator !== "undefined" && navigator.onLine === false);
+}
+
 /**
  * Botón "Escanear tarjeta de propiedad" + flow de captura.
  *
@@ -500,7 +506,7 @@ export function OwnershipCardScanner({
     setOpen(true);
     // Pre-carga Tesseract en background mientras el perito elige la foto: así
     // cuando dispare el recognize, el wasm y el lang pack ya están listos.
-    if (runOcr && !OCR_REMOTE) warmUpOcr();
+    if (runOcr && prefersLocalOcr()) warmUpOcr();
   }
 
   async function handleFile(file: File) {
@@ -558,7 +564,9 @@ export function OwnershipCardScanner({
 
       let detected: ExtractedFields;
       let detectedSideResult: "front" | "back" | "unknown";
-      if (OCR_REMOTE) {
+      // Sin red ni lo intentamos con el servidor: directo al OCR local, sin
+      // esperar a que el fetch remoto se venza.
+      if (!prefersLocalOcr()) {
         // Modo servidor: subimos la foto A COLOR (previewUrl) al endpoint de
         // visión. Si falla (sin señal, quota, etc.) y no fue un abort, caemos a
         // Tesseract local para no dejar al perito sin OCR.
@@ -735,7 +743,7 @@ export function OwnershipCardScanner({
           e.target.value = "";
           if (file) {
             setOpen(true);
-            if (runOcr && !OCR_REMOTE) warmUpOcr();
+            if (runOcr && prefersLocalOcr()) warmUpOcr();
             void handleFile(file);
           }
         }}
@@ -753,7 +761,7 @@ export function OwnershipCardScanner({
           e.target.value = "";
           if (file) {
             setOpen(true);
-            if (runOcr && !OCR_REMOTE) warmUpOcr();
+            if (runOcr && prefersLocalOcr()) warmUpOcr();
             void handleFile(file);
           }
         }}

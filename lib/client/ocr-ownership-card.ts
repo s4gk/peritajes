@@ -16,6 +16,7 @@ import {
   toVehicleFormFields,
   type VehicleFormFields,
 } from "@/lib/licenciaTransitoParser";
+import { TESSERACT_BASE, TESSERACT_WORKER_FILE } from "@/lib/ocr-assets";
 
 // Alias retro-compatible: muchos callers todavía piensan en
 // `ExtractedOwnershipCard`. El parser nuevo devuelve la misma forma de campos
@@ -34,9 +35,9 @@ export type ExtractedOwnershipCard = VehicleFormFields;
  *  - El usuario ve % de progreso real, no un spinner indefinido.
  *
  * El lang pack `spa.traineddata.gz` se sirve desde /tessdata (public/ del
- * proyecto). El motor wasm de tesseract.js viene del CDN default — al ser
- * ~2MB y cacheable, el primer escaneo es lento (~5-8s) y los siguientes
- * arrancan en <1s.
+ * proyecto) y el worker + motor wasm desde /tesseract/<versión>/ (ver
+ * lib/ocr-assets.ts). Todo queda precacheado por el service worker, así que
+ * el OCR funciona sin internet.
  */
 
 export type OcrProgress = {
@@ -51,6 +52,12 @@ function getWorker(onProgress?: (p: OcrProgress) => void): Promise<TesseractWork
     workerPromise = (async () => {
       const w = await createWorker("spa", 1, {
         langPath: "/tessdata",
+        // Worker y core desde nuestro origen (no del CDN) para que el OCR
+        // funcione sin internet: el SW los precachea. Sin blob URL: así el
+        // worker queda bajo el control del SW y sus descargas salen del cache.
+        workerPath: `${TESSERACT_BASE}/${TESSERACT_WORKER_FILE}`,
+        corePath: TESSERACT_BASE,
+        workerBlobURL: false,
         logger: (m: { status?: string; progress?: number }) => {
           if (typeof m.progress === "number" && typeof m.status === "string") {
             onProgress?.({ status: m.status, progress: m.progress });

@@ -117,7 +117,7 @@ export function PushSubscriber() {
     <div className="fixed inset-x-3 bottom-3 z-40 mx-auto max-w-md rounded-lg border bg-card p-3 shadow-lg sm:bottom-4 sm:right-4 sm:left-auto">
       <div className="text-sm font-medium">Activar notificaciones</div>
       <p className="mt-1 text-xs text-muted-foreground">
-        Recibí avisos de citas, firmas y alertas en este dispositivo aunque
+        Recibe avisos de citas, firmas y alertas en este dispositivo aunque
         tengas la app cerrada.
       </p>
       <div className="mt-3 flex gap-2">

@@ -38,6 +38,8 @@ import {
   type WalkaroundStageStepId,
 } from "@/lib/constants";
 import { findOption, minPhotosFor } from "@/lib/findings-catalog";
+import { useOnline } from "@/lib/client/use-online";
+import { useHasPendingSync } from "@/lib/client/use-pending-sync";
 import { downloadStoredPdf } from "@/lib/pdf-client";
 import { cn, formatDate } from "@/lib/utils";
 import type { InspectionData, InspectionEntry } from "@/lib/types";
@@ -53,6 +55,7 @@ import { LeaksStep } from "./steps/leaks";
 import { CompressionStep } from "./steps/compression";
 import { WalkaroundStep } from "./steps/walkaround";
 import { SummaryStep } from "./steps/summary";
+import { navigateOfflineSafe } from "@/lib/client/offline-nav";
 
 function countFindingsInRecord(record: Record<string, InspectionEntry>): number {
   let count = 0;
@@ -140,14 +143,14 @@ function validateStep(step: StepId, data: InspectionData): ValidateResult {
       return {
         ok: false,
         message:
-          "La foto del frente de la tarjeta parece corrupta o muy pequeña. Tomala de nuevo.",
+          "La foto del frente de la tarjeta parece corrupta o muy pequeña. Tómala de nuevo.",
       };
     }
     if (!docs.ownershipCardBack.some(isImageEntryUsable)) {
       return {
         ok: false,
         message:
-          "La foto del reverso de la tarjeta parece corrupta o muy pequeña. Tomala de nuevo.",
+          "La foto del reverso de la tarjeta parece corrupta o muy pequeña. Tómala de nuevo.",
       };
     }
     // Warning suave: si el VIN está llenado pero no tiene 17 chars válidos,
@@ -351,7 +354,12 @@ function WizardInner() {
     editUnlocked,
     unlockEdit,
     id: inspectionId,
+    reportNumber,
   } = useInspection();
+  const online = useOnline();
+  const pendingSync = useHasPendingSync(inspectionId);
+  // Finalizado sin señal: todavía no hay PDF oficial en el server.
+  const awaitingServer = data.status === "completed" && !reportNumber && pendingSync;
   const [current, setCurrent] = React.useState<StepId>("vehicle");
   const [shortcutsOpen, setShortcutsOpen] = React.useState(false);
   const [pdfBusy, setPdfBusy] = React.useState(false);
@@ -542,7 +550,9 @@ function WizardInner() {
         <p className="text-sm text-muted-foreground">
           El peritaje que intentas abrir no existe o fue eliminado.
         </p>
-        <Button onClick={() => router.push("/peritajes")}>Volver a peritajes</Button>
+        <Button onClick={() => void navigateOfflineSafe(router, "/peritajes")}>
+          Volver a peritajes
+        </Button>
       </div>
     );
   }
@@ -554,7 +564,7 @@ function WizardInner() {
           <Button
             variant="ghost"
             size="sm"
-            onClick={() => router.push("/peritajes")}
+            onClick={() => void navigateOfflineSafe(router, "/peritajes")}
             className="-ml-2 mb-1 h-8 gap-1 px-2 text-xs text-muted-foreground"
           >
             <ChevronLeft className="h-3.5 w-3.5" />
@@ -624,6 +634,10 @@ function WizardInner() {
                 {data.completedAt
                   ? `Cerrado el ${formatDate(data.completedAt.slice(0, 10))}. `
                   : ""}
+                {reportNumber ? `Consecutivo ${reportNumber}. ` : ""}
+                {awaitingServer
+                  ? "Falta subirlo: el consecutivo y el PDF se generan al volver la señal. "
+                  : ""}
                 {!isReadOnly
                   ? "Al guardar los cambios se regenera el PDF oficial del cliente."
                   : canEditCompleted
@@ -638,7 +652,14 @@ function WizardInner() {
               variant="outline"
               size="sm"
               onClick={handleDownloadPdf}
-              disabled={pdfBusy}
+              disabled={pdfBusy || !online || awaitingServer}
+              title={
+                awaitingServer
+                  ? "El PDF se genera cuando el peritaje suba (al volver la señal)"
+                  : !online
+                    ? "Descargar el PDF necesita internet"
+                    : undefined
+              }
               className="h-9"
             >
               <Download className="mr-1.5 h-4 w-4" />

@@ -198,6 +198,8 @@ export function VehicleInfoStep() {
     }
     const ctrl = new AbortController();
     const timer = window.setTimeout(async () => {
+      // Sin red el lookup es imposible y es opcional: ni lo intentamos.
+      if (!navigator.onLine) return;
       try {
         const qs = new URLSearchParams();
         if (docDigits.length >= 6) qs.set("document", docDigits);

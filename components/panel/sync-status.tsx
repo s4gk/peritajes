@@ -12,6 +12,7 @@ import {
 
 import { Badge } from "@/components/ui/badge";
 import {
+  INITIAL_SYNC_STATE,
   subscribeSync,
   type SyncState,
 } from "@/lib/client/sync-queue";
@@ -33,16 +34,7 @@ import { cn } from "@/lib/utils";
  * offline con fotos full-res.
  */
 export function SyncStatus() {
-  const [state, setState] = React.useState<SyncState>({
-    pending: 0,
-    online: true,
-    syncing: false,
-    failed: 0,
-    lastErrorMessage: null,
-    firstFailedInspectionId: null,
-    firstFailedKind: null,
-    oldestPendingAt: null,
-  });
+  const [state, setState] = React.useState<SyncState>(INITIAL_SYNC_STATE);
   const [storagePct, setStoragePct] = React.useState<number | null>(null);
 
   React.useEffect(() => {

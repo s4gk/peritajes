@@ -4,9 +4,11 @@ import * as React from "react";
 import { LogOut, Menu } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { useConfirm } from "@/components/ui/confirm-dialog";
 import { useToast } from "@/components/ui/toast";
 import { ThemeToggle } from "@/components/wizard/theme-toggle";
 import { apiFetch } from "@/lib/client/api-client";
+import { idbListMutations } from "@/lib/client/idb";
 import { flushSyncQueue } from "@/lib/client/sync-queue";
 import { wipeLocalUserData } from "@/lib/inspections-store";
 
@@ -20,6 +22,7 @@ export type TopbarProps = {
 
 export function Topbar({ user, onMenuClick, title }: TopbarProps) {
   const toast = useToast();
+  const confirm = useConfirm();
   const [busy, setBusy] = React.useState(false);
 
   async function handleLogout() {
@@ -28,6 +31,26 @@ export function Topbar({ user, onMenuClick, title }: TopbarProps) {
       // 1. Subir lo pendiente mientras la sesión de este usuario sigue viva,
       //    así no perdemos peritajes sin sincronizar al limpiar la cola.
       await flushSyncQueue().catch(() => {});
+      // 1b. Si algo NO subió (sin señal, sesión vencida, server lo rechaza),
+      //     cerrar sesión lo borraría del celular para siempre: preguntamos.
+      const left = await idbListMutations().catch(() => []);
+      const count = new Set(left.map((m) => m.inspectionId)).size;
+      if (count > 0) {
+        const ok = await confirm({
+          title: "Tienes peritajes sin subir",
+          description:
+            count === 1
+              ? "1 peritaje tiene cambios que todavía no llegan al servidor. Si cierras sesión ahora se BORRAN de este celular y se pierden. Espera a tener señal para que suban."
+              : `${count} peritajes tienen cambios que todavía no llegan al servidor. Si cierras sesión ahora se BORRAN de este celular y se pierden. Espera a tener señal para que suban.`,
+          confirmLabel: "Cerrar sesión y perderlos",
+          cancelLabel: "No cerrar sesión",
+          variant: "danger",
+        });
+        if (!ok) {
+          setBusy(false);
+          return;
+        }
+      }
       // 2. Cerrar sesión en el server (borra cookie + fila de sesión).
       const res = await apiFetch("/api/auth/logout", { method: "POST" });
       if (!res.ok) throw new Error("Error al cerrar sesión");

@@ -23,11 +23,31 @@
 // existen en el server → login/SPA colgados). REGLA: todo deploy con cambios
 // de bundle debe venir con bump de VERSION, si no los celulares con la PWA
 // instalada nunca ven el banner de actualización.
-const VERSION = "v31";
+// v31 (sep 2026): modo 100% sin internet — cascarón del wizard, precache de
+// todos los assets del build y precalentamiento con la sesión del perito.
+// v32: + calificación manual por pilar en el PDF (ya en prod como v31).
+const VERSION = "v32";
 const STATIC_CACHE = `perito-static-${VERSION}`;
 const RUNTIME_CACHE = `perito-runtime-${VERSION}`;
 const API_CACHE = `perito-api-${VERSION}`;
 const OFFLINE_URL = "/offline.html";
+
+// Modo sin internet. Estos valores se repiten en lib/offline-routes.ts (el SW
+// no puede importar módulos): si cambias uno, cambia el otro.
+//   - SHELL_URL: el HTML de /inspection/<id> es igual para cualquier id (el
+//     wizard lee el id de la URL en el cliente), así que sin red servimos este
+//     cascarón para cualquier peritaje.
+//   - OFFLINE_MANIFEST_URL: lista de TODOS los assets del build (+ OCR local)
+//     para precachearlos aunque el perito nunca haya abierto esas pantallas.
+//   - UID_MARKER: entrada del cache runtime que dice de qué usuario es el HTML
+//     cacheado (lleva nombre, rol, etc.). Si llega otro usuario, se bota.
+const SHELL_URL = "/inspection/offline-shell";
+const OFFLINE_MANIFEST_URL = "/api/offline/manifest";
+const UID_MARKER = "/__perito/offline-uid";
+// Cache del OCR local (ver lib/ocr-assets.ts: OCR_CACHE_NAME).
+const OCR_CACHE_PREFIX = "perito-ocr-";
+// No re-precalentar más seguido que esto (cada carga del panel lo pide).
+const WARM_MIN_INTERVAL_MS = 10 * 60_000;
 
 // Rutas del panel que tratamos como "entry points" cuando el browser pide la
 // start_url offline y no hay match exacto. Si alguna de estas está cacheada
@@ -64,7 +84,109 @@ const PRECACHE_NAVIGATIONS = [
   "/intake",
   "/peritajes",
   "/agenda",
+  SHELL_URL,
 ];
+
+/** Baja las páginas del panel con la cookie de sesión y las guarda en el cache
+ *  runtime. Si no hay sesión (307 a /login) o falla la red, no guarda nada. */
+async function precacheNavigations() {
+  const runtime = await caches.open(RUNTIME_CACHE);
+  let ok = 0;
+  await Promise.all(
+    PRECACHE_NAVIGATIONS.map(async (url) => {
+      try {
+        const res = await fetch(url, {
+          credentials: "include",
+          redirect: "manual",
+          cache: "no-store",
+        });
+        if (res.ok && res.type !== "opaqueredirect") {
+          await runtime.put(url, res.clone());
+          ok += 1;
+        }
+      } catch {
+        /* sin red — el runtime se encarga después */
+      }
+    }),
+  );
+  return ok;
+}
+
+/** Baja a `cacheName` las URLs que todavía no estén. De a pocas para no
+ *  saturar un celular con señal regular. */
+async function cacheMissing(cacheName, urls) {
+  const cache = await caches.open(cacheName);
+  for (let i = 0; i < urls.length; i += 6) {
+    await Promise.all(
+      urls.slice(i, i + 6).map(async (url) => {
+        try {
+          if (await cache.match(url)) return;
+          const res = await fetch(url);
+          if (res.ok) await cache.put(url, res);
+        } catch {
+          /* best-effort */
+        }
+      }),
+    );
+  }
+}
+
+/** Precachea todos los assets estáticos del build actual (JS/CSS/fuentes;
+ *  inmutables, llevan hash) y, si `ocrCore` viene, el OCR local: worker, el
+ *  core wasm que usa ESTE celular (lo detecta la página) y el lang pack. El
+ *  OCR va en su propio cache (OCR_CACHE_PREFIX + versión de tesseract.js) que
+ *  no se borra al cambiar VERSION: pesa ~12 MB. */
+async function precacheStaticAssets(ocrCore) {
+  let json;
+  try {
+    const res = await fetch(OFFLINE_MANIFEST_URL, { cache: "no-store" });
+    if (!res.ok) return;
+    json = await res.json();
+  } catch {
+    return;
+  }
+  await cacheMissing(STATIC_CACHE, Array.isArray(json.assets) ? json.assets : []);
+  const ocr = json.ocr;
+  if (!ocrCore || !ocr || typeof ocr.cache !== "string" || !Array.isArray(ocr.assets)) return;
+  if (!ocr.cache.startsWith(OCR_CACHE_PREFIX)) return;
+  const wanted = ocr.assets.filter(
+    (u) => !/\/tesseract-core-/.test(u) || u.endsWith(`/${ocrCore}`),
+  );
+  await cacheMissing(ocr.cache, wanted);
+  // OCR de versiones anteriores de tesseract.js: ya no sirve.
+  const keys = await caches.keys();
+  await Promise.all(
+    keys
+      .filter((k) => k.startsWith(OCR_CACHE_PREFIX) && k !== ocr.cache)
+      .map((k) => caches.delete(k)),
+  );
+}
+
+let lastWarmAt = 0;
+let warming = null;
+
+/** Deja lista la app para trabajar sin red con la sesión del usuario `uid`. */
+async function warmOffline(uid, ocrCore) {
+  const runtime = await caches.open(RUNTIME_CACHE);
+  const marker = await runtime.match(UID_MARKER);
+  const prevUid = marker ? await marker.text() : null;
+  if (uid && prevUid && prevUid !== uid) {
+    // Otro usuario en este navegador: el HTML cacheado tiene la identidad del
+    // anterior. Lo botamos antes de guardar nada nuevo.
+    await caches.delete(RUNTIME_CACHE);
+    await caches.delete(API_CACHE);
+  }
+  // Solo frenamos si el cache sigue siendo de este usuario: si no hay marcador
+  // (primer uso, o `wipeLocalUserData` lo borró al cerrar sesión) re-precalentamos.
+  if (prevUid === uid && Date.now() - lastWarmAt < WARM_MIN_INTERVAL_MS) return;
+  lastWarmAt = Date.now();
+  const ok = await precacheNavigations();
+  if (ok > 0 && uid) {
+    const fresh = await caches.open(RUNTIME_CACHE);
+    await fresh.put(UID_MARKER, new Response(uid));
+  }
+  await precacheStaticAssets(ocrCore);
+}
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
@@ -81,28 +203,13 @@ self.addEventListener("install", (event) => {
           }
         }),
       );
-      // Pre-cache best-effort de las navegaciones más importantes. Usamos un
-      // GET con credentials:include para enviar la cookie de sesión y traer
-      // el HTML autenticado (no el 307 a /login). Si el server devuelve algo
-      // distinto de 200, no lo metemos al cache — el runtime se encargará
-      // cuando el perito visite la ruta con red. Esto reduce drásticamente
-      // el caso "instalé y abro offline → pantalla blanca".
-      const runtime = await caches.open(RUNTIME_CACHE);
-      await Promise.all(
-        PRECACHE_NAVIGATIONS.map(async (url) => {
-          try {
-            const res = await fetch(url, {
-              credentials: "include",
-              redirect: "manual",
-            });
-            if (res.ok && res.type !== "opaqueredirect") {
-              await runtime.put(url, res.clone());
-            }
-          } catch {
-            /* sin red durante install — el runtime se encarga después */
-          }
-        }),
-      );
+      // Pre-cache best-effort de las navegaciones más importantes (con la
+      // cookie de sesión, si la hay) y de TODOS los assets del build, para que
+      // el wizard abra sin red aunque el perito nunca lo haya abierto con esta
+      // versión. Si el SW se instala sin sesión (en /login), el panel manda
+      // WARM_OFFLINE al cargar y esto se repite con la sesión viva.
+      await precacheNavigations();
+      await precacheStaticAssets();
       // Tras instalar tomamos control inmediatamente para que la próxima
       // navegación use el bundle nuevo, no el caché del SW anterior.
       await self.skipWaiting();
@@ -117,6 +224,8 @@ self.addEventListener("activate", (event) => {
       await Promise.all(
         keys
           .filter((k) => ![STATIC_CACHE, RUNTIME_CACHE, API_CACHE].includes(k))
+          // El OCR tiene su propio versionado (ver precacheStaticAssets).
+          .filter((k) => !k.startsWith(OCR_CACHE_PREFIX))
           .map((k) => caches.delete(k)),
       );
       await self.clients.claim();
@@ -132,6 +241,16 @@ self.addEventListener("activate", (event) => {
 self.addEventListener("message", (event) => {
   if (event.data && event.data.type === "SKIP_WAITING") {
     self.skipWaiting();
+  }
+  if (event.data && event.data.type === "WARM_OFFLINE") {
+    if (!warming) {
+      warming = warmOffline(event.data.uid || null, event.data.ocrCore || null)
+        .catch(() => {})
+        .finally(() => {
+          warming = null;
+        });
+    }
+    event.waitUntil(warming);
   }
 });
 
@@ -212,6 +331,8 @@ function isStaticAsset(url) {
   // El lang pack de Tesseract pesa ~8MB — lo cacheamos como cualquier otro
   // asset estático para que el segundo escaneo no vuelva a bajarlo.
   if (url.pathname.startsWith("/tessdata/")) return true;
+  // Worker y core wasm del OCR local (ver lib/ocr-assets.ts).
+  if (url.pathname.startsWith("/tesseract/")) return true;
   if (/\.(png|jpg|jpeg|svg|webp|woff2?|ttf)$/i.test(url.pathname)) return true;
   return false;
 }
@@ -247,10 +368,15 @@ async function networkFirstNavigation(event) {
   const req = event.request;
   const cache = await caches.open(RUNTIME_CACHE);
 
-  // Primer intento de red con timeout corto.
+  // Primer intento de red con timeout corto. Para el wizard, si ya tenemos
+  // el cascarón, esperamos mucho menos: con "señal fantasma" (el celular dice
+  // que hay red pero no carga) el perito no tiene por qué quedarse 12 s
+  // mirando la pantalla — el cascarón sirve igual para cualquier peritaje.
+  const isWizard = new URL(req.url).pathname.startsWith("/inspection/");
+  const hasShell = isWizard && !!(await cache.match(SHELL_URL));
   let lastErr;
   try {
-    const fresh = await fetchWithTimeout(req, 12_000);
+    const fresh = await fetchWithTimeout(req, hasShell ? 4_000 : 12_000);
     if (fresh.ok) cache.put(req, fresh.clone()).catch(() => {});
     return fresh;
   } catch (err) {
@@ -268,15 +394,27 @@ async function networkFirstNavigation(event) {
   if (cached) return cached;
 
   const url = new URL(req.url);
-  if (url.pathname === "/" || url.pathname === "") {
+  // Pantallas de inicio: "/" y el start_url de la PWA (/dashboard?source=pwa).
+  // El perito (employee) no tiene dashboard — el server lo manda a /peritajes
+  // y por eso /dashboard nunca queda cacheado para él. Sin esto, abrir la app
+  // desde el ícono sin red caía en offline.html. Redirigimos (en vez de servir
+  // otro HTML bajo esta URL) para que Next hidrate la página correcta.
+  if (url.pathname === "/" || url.pathname === "" || url.pathname === "/dashboard") {
     for (const fallback of NAVIGATION_FALLBACKS) {
-      cached = await cache.match(fallback);
-      if (cached) return cached;
+      if (fallback === url.pathname) continue;
+      if (await cache.match(fallback)) return Response.redirect(fallback, 302);
     }
   }
 
   cached = await cache.match(url.pathname);
   if (cached) return cached;
+
+  // Wizard sin red: cualquier /inspection/<id> se atiende con el cascarón (el
+  // wizard lee el id de la URL y carga el peritaje desde IndexedDB).
+  if (url.pathname.startsWith("/inspection/")) {
+    cached = await cache.match(SHELL_URL);
+    if (cached) return cached;
+  }
 
   // Sin cache, segundo intento de red — un mini-retry barato. Esto es lo que
   // resuelve el caso típico "celular con señal débil tira el primer fetch":
@@ -298,7 +436,8 @@ async function networkFirstNavigation(event) {
 
 async function cacheFirst(event) {
   const cache = await caches.open(STATIC_CACHE);
-  const cached = await cache.match(event.request);
+  // caches.match busca en todos los caches: el OCR vive en el suyo propio.
+  const cached = await caches.match(event.request);
   if (cached) return cached;
   const fresh = await fetch(event.request);
   if (fresh.ok) cache.put(event.request, fresh.clone()).catch(() => {});
@@ -460,7 +599,19 @@ async function replayMutation(mutation, csrf) {
   }
 }
 
+// Mismo nombre que SYNC_LOCK_NAME en lib/client/sync-queue.ts: la cola de la
+// página y este replay nunca corren a la vez (si no, mandaban el mismo
+// create/update dos veces y podían desordenarse).
+const SYNC_LOCK_NAME = "perito-sync-queue";
+
 async function flushPendingMutations() {
+  if (self.navigator && self.navigator.locks && self.navigator.locks.request) {
+    return self.navigator.locks.request(SYNC_LOCK_NAME, flushPendingMutationsLocked);
+  }
+  return flushPendingMutationsLocked();
+}
+
+async function flushPendingMutationsLocked() {
   let db;
   try {
     db = await openMutationsDb();
@@ -480,11 +631,15 @@ async function flushPendingMutations() {
         }
       } else {
         // Frenamos para no martillar el server. La próxima sync (o el cliente
-        // al volver a abrirse) retoma desde acá.
+        // al volver a abrirse) retoma desde acá. Sin red (status 0) o con la
+        // sesión vencida (401/403) no sumamos intento: no es culpa de la
+        // mutación (ver flushLocked en sync-queue.ts).
+        const counts = result.status >= 400 && result.status !== 401 && result.status !== 403;
         await idbPut(db, "mutations", {
           ...mutation,
-          attempts: (mutation.attempts || 0) + 1,
+          attempts: (mutation.attempts || 0) + (counts ? 1 : 0),
           lastError: `${result.status}`,
+          lastAttemptAt: new Date().toISOString(),
         }).catch(() => {});
         break;
       }

@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils";
 import {
   flushSyncQueue,
   refreshPending,
+  INITIAL_SYNC_STATE,
   subscribeSync,
   type SyncState,
 } from "@/lib/client/sync-queue";
@@ -18,16 +19,7 @@ import {
  *   - offline → "Sin conexión"
  */
 export function OnlineIndicator() {
-  const [state, setState] = React.useState<SyncState>({
-    online: true,
-    pending: 0,
-    syncing: false,
-    failed: 0,
-    lastErrorMessage: null,
-    firstFailedInspectionId: null,
-    firstFailedKind: null,
-    oldestPendingAt: null,
-  });
+  const [state, setState] = React.useState<SyncState>(INITIAL_SYNC_STATE);
 
   React.useEffect(() => {
     const unsub = subscribeSync(setState);

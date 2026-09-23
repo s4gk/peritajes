@@ -59,6 +59,8 @@ import { apiFetch } from "@/lib/client/api-client";
 
 import { BackupControls } from "./backup-controls";
 import { UIPreferencesProvider } from "./ui-preferences";
+import { navigateOfflineSafe } from "@/lib/client/offline-nav";
+import { inspectionUrl } from "@/lib/offline-routes";
 
 type TeamMember = { id: string; fullName: string; active: boolean };
 
@@ -208,12 +210,12 @@ function InspectionsInner() {
   }, [refresh]);
 
   function handleNew() {
-    router.push("/intake");
+    void navigateOfflineSafe(router, "/intake");
   }
 
   function handleDuplicate(id: string) {
     const copy = duplicateInspection(id);
-    if (copy) router.push(`/inspection/${copy.id}`);
+    if (copy) void navigateOfflineSafe(router, inspectionUrl(copy.id));
   }
 
   function requestDelete(item: StoredInspection) {
@@ -410,7 +412,7 @@ function InspectionsInner() {
               assigneeName={
                 item.userId ? memberById.get(item.userId)?.fullName ?? null : null
               }
-              onOpen={() => router.push(`/inspection/${item.id}`)}
+              onOpen={() => void navigateOfflineSafe(router, inspectionUrl(item.id))}
               onDuplicate={() => handleDuplicate(item.id)}
               onDelete={() => requestDelete(item)}
               onReassign={() => {

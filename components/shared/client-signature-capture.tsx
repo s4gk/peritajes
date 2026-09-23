@@ -20,6 +20,7 @@ import {
 import { SignaturePad } from "@/components/shared/signature-pad";
 import { useToast } from "@/components/ui/toast";
 import { apiFetch } from "@/lib/client/api-client";
+import { useOnline } from "@/lib/client/use-online";
 import { cn } from "@/lib/utils";
 
 type SessionContext = {
@@ -60,6 +61,7 @@ export function ClientSignatureCapture({
   const [creating, setCreating] = React.useState(false);
   const [pollState, setPollState] = React.useState<"waiting" | "received">("waiting");
   const toast = useToast();
+  const online = useOnline();
 
   // Cleanup on unmount
   React.useEffect(() => {
@@ -227,6 +229,8 @@ export function ClientSignatureCapture({
               onClick={startQrFlow}
               size="sm"
               className="gap-1.5"
+              disabled={!online}
+              title={online ? undefined : "La firma por QR necesita internet"}
             >
               <QrCode className="h-4 w-4" />
               Firmar con QR
@@ -241,6 +245,12 @@ export function ClientSignatureCapture({
               {mode === "manual" ? "Ocultar firma manual" : "Firmar en esta pantalla"}
             </Button>
           </div>
+          {!online && (
+            <p className="text-xs text-muted-foreground">
+              Sin señal la firma por QR no funciona: el cliente puede firmar en
+              esta pantalla.
+            </p>
+          )}
         </div>
       )}
 

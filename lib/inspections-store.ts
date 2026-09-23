@@ -68,6 +68,44 @@ let initPromise: Promise<void> | null = null;
  *  como fallback si el ID que buscan no está en IDB. */
 let serverFetchPromise: Promise<void> | null = null;
 
+/** Escrituras locales (IDB + cola) todavía en vuelo. Las escrituras son
+ *  fire-and-forget para no frenar la UI, pero antes de una navegación dura
+ *  sin red hay que esperarlas (ver `flushLocalWrites`). */
+const pendingWrites = new Set<Promise<unknown>>();
+function trackWrite<T>(p: Promise<T>): Promise<T> {
+  pendingWrites.add(p);
+  const done = () => pendingWrites.delete(p);
+  p.then(done, (err) => {
+    done();
+    reportIfQuotaError(err);
+  });
+  return p;
+}
+
+/** Evento que se dispara cuando el celular se queda sin espacio y una
+ *  escritura local falla (ver StorageFullBanner). */
+export const STORAGE_FULL_EVENT = "perito:storage-full";
+
+export function isQuotaError(err: unknown): boolean {
+  const e = err as { name?: string; message?: string; inner?: { name?: string } } | null;
+  if (!e) return false;
+  if (e.name === "QuotaExceededError" || e.inner?.name === "QuotaExceededError") return true;
+  return /quota/i.test(e.message ?? "");
+}
+
+function reportIfQuotaError(err: unknown) {
+  if (typeof window === "undefined" || !isQuotaError(err)) return;
+  window.dispatchEvent(new CustomEvent(STORAGE_FULL_EVENT));
+}
+
+/** Espera a que terminen las escrituras locales en vuelo (IDB + encolado de
+ *  mutaciones). No espera a la red. */
+export async function flushLocalWrites(): Promise<void> {
+  while (pendingWrites.size > 0) {
+    await Promise.allSettled([...pendingWrites]);
+  }
+}
+
 /** True si el peritaje ya fue finalizado y es inmutable: el lock se determina
  *  por `lockedAt` (campo nuevo) o por `data.status === "completed"` (fallback
  *  para filas legacy). Lo usamos del lado del cliente para no encolar
@@ -191,6 +229,10 @@ export function initStore(): Promise<void> {
       return;
     }
 
+    // Pedimos almacenamiento persistente: sin esto el navegador puede borrar
+    // IndexedDB (con peritajes sin subir) cuando le falta espacio.
+    void requestPersistentStorage();
+
     // Paso 1: cargar IDB → memory. Esto siempre debe correr aunque no haya red.
     try {
       const local = await idbListInspections();
@@ -243,6 +285,40 @@ export function initStore(): Promise<void> {
   return initPromise;
 }
 
+async function requestPersistentStorage(): Promise<void> {
+  try {
+    const storage = navigator.storage;
+    if (!storage?.persist || !storage.persisted) return;
+    if (await storage.persisted()) return;
+    await storage.persist();
+  } catch {
+    /* no soportado — seguimos con almacenamiento "best effort" */
+  }
+}
+
+/**
+ * Regla de conflictos al refrescar desde el server (documentada en
+ * docs/offline/REPORTE.md):
+ *  1. Si el peritaje tiene cambios en la cola de ESTE celular, gana la copia
+ *     local: es lo que el perito está viendo y lo que la cola va a subir (al
+ *     subir, reemplaza lo del server — última escritura gana). Mostrar la del
+ *     server mientras la cola sube la local sería mostrar algo que se va a
+ *     pisar. (Excepción manejada en la cola: un informe finalizado que el
+ *     perito ya no puede editar → el server responde con su versión y esa gana.)
+ *  2. Sin cambios pendientes, gana el server si es más nuevo. Si la copia
+ *     local está al día y tiene las fotos (el listado viene `partial`, sin
+ *     fotos), nos quedamos con la local para no botar las fotos ya bajadas.
+ */
+export function pickSyncWinner(
+  local: StoredInspection | undefined,
+  incoming: StoredInspection,
+  hasPendingLocalChanges: boolean,
+): StoredInspection {
+  if (!local) return incoming;
+  if (hasPendingLocalChanges) return local;
+  return local.updatedAt < incoming.updatedAt ? incoming : local;
+}
+
 async function refreshFromServer(): Promise<void> {
   if (typeof window === "undefined") return;
   try {
@@ -251,23 +327,22 @@ async function refreshFromServer(): Promise<void> {
     };
     const serverIds = new Set<string>();
     const merged: StoredInspection[] = [];
+    const pending = new Set(
+      (await idbListMutations()).map((m) => m.inspectionId),
+    );
     for (const row of json.inspections ?? []) {
       const incoming = mergeDefaults(row);
       serverIds.add(incoming.id);
-      const local = memory.get(incoming.id);
-      // `incoming` viene del listado y es `partial`: trae todo menos los blobs
-      // base64. Si la copia local está al día y SÍ tiene las fotos, nos
-      // quedamos con ella — si no, cada refresh borraría las imágenes que ya
-      // teníamos bajadas. Solo cuando el server es estrictamente más nuevo la
-      // local quedó obsoleta y la reemplazamos (las fotos se vuelven a pedir
-      // con `ensureFullInspection` al abrir el peritaje).
-      const winner =
-        !local || local.updatedAt < incoming.updatedAt ? incoming : local;
+      const winner = pickSyncWinner(
+        memory.get(incoming.id),
+        incoming,
+        pending.has(incoming.id),
+      );
       memory.set(winner.id, winner);
       merged.push(winner);
     }
     if (merged.length > 0) {
-      idbPutInspections(merged).catch(() => {});
+      trackWrite(idbPutInspections(merged)).catch(() => {});
     }
     // Reconciliar borrados hechos en otro dispositivo (o server-side): filas
     // que viven en el cache local pero el server ya no reporta. Solo se quitan
@@ -275,9 +350,6 @@ async function refreshFromServer(): Promise<void> {
     // sincronizadas, así que su ausencia = eliminación real. Las que sí tienen
     // mutación pendiente son drafts offline aún sin subir: se conservan para
     // que el sync los suba (si no, se perderían al perder red y refrescar).
-    const pending = new Set(
-      (await idbListMutations()).map((m) => m.inspectionId),
-    );
     for (const id of [...memory.keys()]) {
       if (serverIds.has(id) || pending.has(id)) continue;
       memory.delete(id);
@@ -314,16 +386,70 @@ export async function ensureFullInspection(
       inspection: StoredInspection;
     };
     if (!json?.inspection) return local ?? null;
+    // Si mientras bajaba el perito editó el peritaje, la copia local ya es
+    // completa y más nueva: no la pisamos con la del server.
+    const current = memory.get(id);
+    if (current && !current.partial) return current;
     const full = mergeDefaults(json.inspection);
     delete full.partial;
     memory.set(full.id, full);
-    idbPutInspection(full).catch(() => {});
+    await trackWrite(idbPutInspection(full)).catch(() => {});
     return full;
   } catch {
     // Sin red: devolvemos lo que haya. El caller decide si puede seguir con
     // la versión liviana o si tiene que avisar que faltan las fotos.
     return local ?? null;
   }
+}
+
+/** Máximo de borradores que se bajan completos. El store mantiene en memoria
+ *  todo lo que hay en IndexedDB y un borrador con fotos pesa varios MB: en un
+ *  celular de gama baja no conviene tener decenas. */
+const PREFETCH_MAX_DRAFTS = 8;
+/** Solo borradores tocados en este lapso (los viejos casi nunca se retoman). */
+const PREFETCH_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+
+/** Borradores del usuario que vale la pena bajar completos (con fotos) para
+ *  poder abrirlos sin red: los suyos, sin finalizar, recientes, que todavía
+ *  son la versión liviana del listado. Los más recientes primero, hasta `max`. */
+export function pickDraftsToPrefetch(
+  list: StoredInspection[],
+  userId: string,
+  max = PREFETCH_MAX_DRAFTS,
+  now: number = Date.now(),
+): StoredInspection[] {
+  return list
+    .filter(
+      (i) =>
+        i.partial &&
+        i.userId === userId &&
+        i.data?.status !== "completed" &&
+        !i.lockedAt &&
+        now - new Date(i.updatedAt).getTime() <= PREFETCH_MAX_AGE_MS,
+    )
+    .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1))
+    .slice(0, max);
+}
+
+/**
+ * Con red, baja completos (con fotos) los borradores abiertos del usuario para
+ * que se puedan abrir sin internet. De a uno, y se corta si se va la señal.
+ * Devuelve cuántos quedaron completos.
+ */
+export async function prefetchOwnDrafts(
+  userId: string,
+  max = PREFETCH_MAX_DRAFTS,
+): Promise<number> {
+  if (typeof window === "undefined") return 0;
+  await initStore();
+  await awaitServerFetch();
+  let done = 0;
+  for (const row of pickDraftsToPrefetch(listInspections(), userId, max)) {
+    if (!navigator.onLine) break;
+    const full = await ensureFullInspection(row.id);
+    if (full && !full.partial) done += 1;
+  }
+  return done;
 }
 
 /** Espera al fetch del server. Útil para callers que detectan que su ID no
@@ -344,6 +470,15 @@ export function listInspections(): StoredInspection[] {
 
 export function getInspection(id: string): StoredInspection | null {
   return memory.get(id) ?? null;
+}
+
+/** Encola la mutación (esperable vía `flushLocalWrites`) y dispara el sync en
+ *  segundo plano. */
+function enqueueAndSync(m: Parameters<typeof idbEnqueueMutation>[0]) {
+  trackWrite(idbEnqueueMutation(m).then(refreshPending))
+    .then(flushSyncQueue)
+    .then(requestBackgroundSync)
+    .catch(() => {});
 }
 
 export function createInspection(seed?: InspectionSeed): StoredInspection {
@@ -368,12 +503,8 @@ export function createInspection(seed?: InspectionSeed): StoredInspection {
   // Persistir local + encolar create. El IDB write es fire-and-forget para no
   // bloquear el navigate; si falla se va a ver al recargar (no estará en la
   // lista) y el perito puede recrear. En la práctica nunca falla.
-  idbPutInspection(insp).catch(() => {});
-  idbEnqueueMutation({ kind: "create", inspectionId: insp.id, data: insp.data })
-    .then(refreshPending)
-    .then(flushSyncQueue)
-    .then(requestBackgroundSync)
-    .catch(() => {});
+  trackWrite(idbPutInspection(insp)).catch(() => {});
+  enqueueAndSync({ kind: "create", inspectionId: insp.id, data: insp.data });
   return insp;
 }
 
@@ -397,24 +528,22 @@ export function saveInspectionData(id: string, data: InspectionData) {
     partial: undefined,
   };
   memory.set(id, updated);
-  idbPutInspection(updated).catch(() => {});
+  trackWrite(idbPutInspection(updated)).catch(() => {});
   // La queue coalesa updates al mismo id, así que tipear rápido no apila
   // mutations — solo pisa el último payload.
-  idbEnqueueMutation({ kind: "update", inspectionId: id, data })
-    .then(refreshPending)
-    .then(flushSyncQueue)
-    .then(requestBackgroundSync)
-    .catch(() => {});
+  enqueueAndSync({ kind: "update", inspectionId: id, data });
 }
 
 export function deleteInspection(id: string) {
   memory.delete(id);
-  idbDeleteInspection(id).catch(() => {});
+  trackWrite(idbDeleteInspection(id)).catch(() => {});
   // Limpiamos todas las mutations previas (updates/creates) para este ID
   // antes de encolar el delete — así no quedan huérfanas en la cola.
-  idbRemoveMutationsForInspection(id)
-    .then(() => idbEnqueueMutation({ kind: "delete", inspectionId: id }))
-    .then(refreshPending)
+  trackWrite(
+    idbRemoveMutationsForInspection(id)
+      .then(() => idbEnqueueMutation({ kind: "delete", inspectionId: id }))
+      .then(refreshPending),
+  )
     .then(flushSyncQueue)
     .then(requestBackgroundSync)
     .catch(() => {});
@@ -436,12 +565,8 @@ export function duplicateInspection(id: string): StoredInspection | null {
     },
   };
   memory.set(copy.id, copy);
-  idbPutInspection(copy).catch(() => {});
-  idbEnqueueMutation({ kind: "create", inspectionId: copy.id, data: copy.data })
-    .then(refreshPending)
-    .then(flushSyncQueue)
-    .then(requestBackgroundSync)
-    .catch(() => {});
+  trackWrite(idbPutInspection(copy)).catch(() => {});
+  enqueueAndSync({ kind: "create", inspectionId: copy.id, data: copy.data });
   return copy;
 }
 
