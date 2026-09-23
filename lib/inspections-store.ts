@@ -296,6 +296,29 @@ async function requestPersistentStorage(): Promise<void> {
   }
 }
 
+/**
+ * Regla de conflictos al refrescar desde el server (documentada en
+ * docs/offline/REPORTE.md):
+ *  1. Si el peritaje tiene cambios en la cola de ESTE celular, gana la copia
+ *     local: es lo que el perito está viendo y lo que la cola va a subir (al
+ *     subir, reemplaza lo del server — última escritura gana). Mostrar la del
+ *     server mientras la cola sube la local sería mostrar algo que se va a
+ *     pisar. (Excepción manejada en la cola: un informe finalizado que el
+ *     perito ya no puede editar → el server responde con su versión y esa gana.)
+ *  2. Sin cambios pendientes, gana el server si es más nuevo. Si la copia
+ *     local está al día y tiene las fotos (el listado viene `partial`, sin
+ *     fotos), nos quedamos con la local para no botar las fotos ya bajadas.
+ */
+export function pickSyncWinner(
+  local: StoredInspection | undefined,
+  incoming: StoredInspection,
+  hasPendingLocalChanges: boolean,
+): StoredInspection {
+  if (!local) return incoming;
+  if (hasPendingLocalChanges) return local;
+  return local.updatedAt < incoming.updatedAt ? incoming : local;
+}
+
 async function refreshFromServer(): Promise<void> {
   if (typeof window === "undefined") return;
   try {
@@ -304,18 +327,17 @@ async function refreshFromServer(): Promise<void> {
     };
     const serverIds = new Set<string>();
     const merged: StoredInspection[] = [];
+    const pending = new Set(
+      (await idbListMutations()).map((m) => m.inspectionId),
+    );
     for (const row of json.inspections ?? []) {
       const incoming = mergeDefaults(row);
       serverIds.add(incoming.id);
-      const local = memory.get(incoming.id);
-      // `incoming` viene del listado y es `partial`: trae todo menos los blobs
-      // base64. Si la copia local está al día y SÍ tiene las fotos, nos
-      // quedamos con ella — si no, cada refresh borraría las imágenes que ya
-      // teníamos bajadas. Solo cuando el server es estrictamente más nuevo la
-      // local quedó obsoleta y la reemplazamos (las fotos se vuelven a pedir
-      // con `ensureFullInspection` al abrir el peritaje).
-      const winner =
-        !local || local.updatedAt < incoming.updatedAt ? incoming : local;
+      const winner = pickSyncWinner(
+        memory.get(incoming.id),
+        incoming,
+        pending.has(incoming.id),
+      );
       memory.set(winner.id, winner);
       merged.push(winner);
     }
@@ -328,9 +350,6 @@ async function refreshFromServer(): Promise<void> {
     // sincronizadas, así que su ausencia = eliminación real. Las que sí tienen
     // mutación pendiente son drafts offline aún sin subir: se conservan para
     // que el sync los suba (si no, se perderían al perder red y refrescar).
-    const pending = new Set(
-      (await idbListMutations()).map((m) => m.inspectionId),
-    );
     for (const id of [...memory.keys()]) {
       if (serverIds.has(id) || pending.has(id)) continue;
       memory.delete(id);

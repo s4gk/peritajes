@@ -63,3 +63,17 @@
   con una bandera en sessionStorage (ver scripts/e2e-lib.mjs).
 
 ### Siguiente: Fase 4 (401 ya se maneja en la cola; falta UI de re-login, guardia al cerrar sesión, iOS)
+
+### Fase 4 — HECHA (E2E 46/46, 06:15 CEST)
+- 401 / 403 csrf_invalid: la cola se conserva sin sumar intentos, `authRequired` → `PendingSyncBanner`
+  "Tu sesión se venció… inicia sesión otra vez" (E2E: se borra la sesión en BD, se edita, aparece el aviso,
+  se vuelve a entrar y el cambio llega a la BD).
+- Cerrar sesión con cambios sin subir → confirmación "Tienes peritajes sin subir" (antes se borraban en
+  silencio con wipeLocalUserData).
+- iOS: flush en `visibilitychange`/`pageshow` + banner "Tienes N peritajes sin subir" (en celular el sidebar
+  con el estado va escondido). `startSyncWatcher` ya no duplica listeners si initStore corre de nuevo.
+- Conflictos: `pickSyncWinner` — con cambios pendientes en el celular gana la copia local; sin pendientes gana
+  el server si es más nuevo. CAMBIO DE SEMÁNTICA (antes: por updatedAt aunque hubiera pendientes) → REPORTE.
+- 403 genérico ya no se descarta (cambio de semántica) → REPORTE.
+
+### Siguiente: Fase 5 (casi todo hecho; falta repasar criterios y REPORTE.md)

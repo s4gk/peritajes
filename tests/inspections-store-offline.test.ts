@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 
-import { isQuotaError, pickDraftsToPrefetch } from "@/lib/inspections-store";
+import { isQuotaError, pickDraftsToPrefetch, pickSyncWinner } from "@/lib/inspections-store";
 import type { StoredInspection } from "@/lib/types";
 
 function row(
@@ -47,5 +47,24 @@ describe("isQuotaError", () => {
     expect(isQuotaError(new Error("The quota has been exceeded."))).toBe(true);
     expect(isQuotaError(new Error("network"))).toBe(false);
     expect(isQuotaError(null)).toBe(false);
+  });
+});
+
+describe("pickSyncWinner (regla de conflictos)", () => {
+  const local = row("x", { updatedAt: "2026-09-10T00:00:00Z", partial: undefined });
+  const newerServer = row("x", { updatedAt: "2026-09-20T00:00:00Z" });
+  const olderServer = row("x", { updatedAt: "2026-09-01T00:00:00Z" });
+
+  test("con cambios pendientes en el celular gana la copia local aunque el server sea más nuevo", () => {
+    expect(pickSyncWinner(local, newerServer, true)).toBe(local);
+  });
+  test("sin pendientes gana el server si es más nuevo", () => {
+    expect(pickSyncWinner(local, newerServer, false)).toBe(newerServer);
+  });
+  test("sin pendientes y local al día: se queda la local (conserva fotos)", () => {
+    expect(pickSyncWinner(local, olderServer, false)).toBe(local);
+  });
+  test("si no hay copia local, la del server", () => {
+    expect(pickSyncWinner(undefined, newerServer, false)).toBe(newerServer);
   });
 });

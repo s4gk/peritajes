@@ -532,6 +532,7 @@ try {
   await page.reload({ waitUntil: "load" });
   check(!/Sin conexión/.test(await page.title()), "la recarga sin red no cae en offline.html");
   check(await waitForText(page, /BBB222/, 20_000), "el wizard recargado muestra la placa BBB222");
+  check(await waitForText(page, /Tienes \d+ peritajes? sin subir/, 10_000), "aviso visible 'Tienes N peritajes sin subir'");
   const { rows: preB } = await db.query("SELECT id FROM inspections WHERE id = $1", [idB]);
   check(preB.length === 0, "B todavía NO está en la BD (no hubo red)");
 
@@ -556,6 +557,52 @@ try {
   check(!(await waitForText(page, /PDF pendiente/, 1000)), "el aviso de PDF pendiente desaparece");
   const finalState = await idbInspection(page, idB);
   check(finalState.pending === 0, "la cola del celular quedó vacía");
+
+  step("Sesión vencida al sincronizar: la cola no se pierde y sube al volver a entrar");
+  await page.goto(`${BASE}/inspection/${idA}`, { waitUntil: "networkidle0" });
+  await page.waitForSelector("#owner", { timeout: 20_000 });
+  await db.query("DELETE FROM sessions WHERE user_id = (SELECT id FROM users WHERE username = 'perito')");
+  await typeInto(page, "owner", "Cliente Sesion Vencida");
+  check(await waitForText(page, /Tu sesión se venció/, 20_000), "aparece 'Tu sesión se venció' con el botón para entrar");
+  const q401 = await page.evaluate(async () => {
+    const db = await new Promise((res) => { const r = indexedDB.open("perito-offline"); r.onsuccess = () => res(r.result); });
+    const muts = await new Promise((res) => { const r = db.transaction("mutations").objectStore("mutations").getAll(); r.onsuccess = () => res(r.result); });
+    db.close();
+    return muts.map((m) => ({ attempts: m.attempts, lastError: m.lastError }));
+  });
+  check(q401.length === 1 && q401[0].attempts === 0, `el cambio sigue en la cola sin contar como fallo (${JSON.stringify(q401)})`);
+  await clickByText(page, "button", /^Iniciar sesión$/);
+  await page.waitForFunction(() => location.pathname === "/login", { timeout: 20_000 });
+  await login(page, PERITO.username, PERITO.password);
+  await page.goto(`${BASE}/peritajes`, { waitUntil: "networkidle0" });
+  let ownerNow = null;
+  for (let i = 0; i < 40; i++) {
+    const { rows } = await db.query("SELECT data->'vehicle'->>'owner' AS owner FROM inspections WHERE id = $1", [idA]);
+    ownerNow = rows[0]?.owner;
+    if (/SESION VENCIDA/i.test(ownerNow ?? "")) break;
+    await sleep(500);
+  }
+  check(/SESION VENCIDA/i.test(ownerNow ?? ""), "tras volver a entrar, el cambio llegó a la BD");
+
+  step("Cerrar sesión con cambios sin subir pide confirmación");
+  await page.goto(`${BASE}/inspection/${idA}`, { waitUntil: "networkidle0" });
+  await page.waitForSelector("#owner", { timeout: 20_000 });
+  await setOffline(page, true);
+  await typeInto(page, "owner", "Cliente Antes De Salir");
+  await sleep(1000);
+  await clickByText(page, "button", /Salir/);
+  check(await waitForText(page, /Tienes peritajes sin subir/, 10_000), "sale el aviso 'Tienes peritajes sin subir'");
+  await clickByText(page, "[role=dialog] button", /No cerrar sesión/);
+  await sleep(500);
+  check(page.url().includes(`/inspection/${idA}`), "al cancelar sigue en la app");
+  await setOffline(page, false);
+  for (let i = 0; i < 40; i++) {
+    const { rows } = await db.query("SELECT data->'vehicle'->>'owner' AS owner FROM inspections WHERE id = $1", [idA]);
+    if (/ANTES DE SALIR/i.test(rows[0]?.owner ?? "")) break;
+    await sleep(500);
+  }
+  const { rows: rowsSalir } = await db.query("SELECT data->'vehicle'->>'owner' AS owner FROM inspections WHERE id = $1", [idA]);
+  check(/ANTES DE SALIR/i.test(rowsSalir[0]?.owner ?? ""), "con señal, el cambio subió");
 
   step("Sin fugas entre usuarios: cerrar sesión y entrar con otro");
   const cacheInfo = () =>

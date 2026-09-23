@@ -3,6 +3,7 @@
 import * as React from "react";
 
 import { OfflineWarmup } from "@/components/shared/offline-warmup";
+import { PendingSyncBanner } from "@/components/shared/pending-sync-banner";
 import { StorageFullBanner } from "@/components/shared/storage-full-banner";
 import { UIPreferencesProvider } from "@/components/wizard/ui-preferences";
 
@@ -38,6 +39,7 @@ export function PanelShell({
             <div className="flex min-w-0 flex-1 flex-col">
               <Topbar user={user} onMenuClick={() => setOpen(true)} />
               <main className="flex-1 px-4 sm:px-6 lg:px-12 xl:px-20">
+                <PendingSyncBanner />
                 <SignatureGate user={user}>{children}</SignatureGate>
               </main>
             </div>

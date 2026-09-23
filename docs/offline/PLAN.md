@@ -46,11 +46,11 @@ que el SW no atiende → offline cae en `offline.html`.
 - [x] Vista previa PDF y firma remota deshabilitadas offline con mensaje claro.
 
 ### Fase 4 — Robustez
-- [ ] Sesión expirada al sincronizar (401/403): la cola NO se pierde; se pide re-login y
+- [x] Sesión expirada al sincronizar (401/403): la cola NO se pierde; se pide re-login y
       se reintenta después.
-- [ ] iOS no tiene Background Sync: sync al abrir/volver a foreground + aviso visible
+- [x] iOS no tiene Background Sync: sync al abrir/volver a foreground + aviso visible
       "tienes X peritajes sin subir".
-- [ ] Conflictos: documentar y aplicar regla clara (hoy: server gana en filas sin
+- [x] Conflictos: documentar y aplicar regla clara (hoy: server gana en filas sin
       mutación pendiente). No cambiar semántica sin dejarla escrita en el reporte.
 
 ### Fase 5 — Pruebas

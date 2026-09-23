@@ -50,6 +50,7 @@ let retryTimer: ReturnType<typeof setInterval> | null = null;
  *  estado inicial para que el primer render coincida con el HTML del server. */
 export const INITIAL_SYNC_STATE: SyncState = {
   pending: 0,
+  pendingInspections: 0,
   online: true,
   syncing: false,
   failed: 0,
@@ -64,6 +65,9 @@ let lastState: SyncState = INITIAL_SYNC_STATE;
 export type SyncState = {
   /** Cantidad total de mutations en cola (incluye las marcadas como failed). */
   pending: number;
+  /** Cuántos peritajes distintos tienen cambios sin subir (lo que se le
+   *  muestra al perito: "tienes 2 peritajes sin subir"). */
+  pendingInspections: number;
   /** Estado de conectividad reportado por el browser. */
   online: boolean;
   /** True mientras una corrida de flush está activa. */
@@ -171,6 +175,7 @@ export async function refreshPending(): Promise<void> {
     }
     notify({
       pending: list.length,
+      pendingInspections: new Set(list.map((m) => m.inspectionId)).size,
       failed,
       oldestPendingAt: oldest,
       lastErrorMessage: failed > 0 ? lastErr : lastState.lastErrorMessage,
@@ -467,10 +472,19 @@ async function flushLocked(): Promise<void> {
   }
 }
 
+let watching = false;
+
 export function startSyncWatcher() {
   if (typeof window === "undefined") return;
   notify({ online: navigator.onLine });
   refreshPending();
+  // initStore() puede volver a correr (p.ej. tras wipeLocalUserData): los
+  // listeners se instalan una sola vez, si no cada evento dispara N flushes.
+  if (watching) {
+    if (navigator.onLine) flushSyncQueue();
+    return;
+  }
+  watching = true;
 
   const onOnline = () => {
     notify({ online: true });
@@ -480,6 +494,13 @@ export function startSyncWatcher() {
 
   window.addEventListener("online", onOnline);
   window.addEventListener("offline", onOffline);
+  // iOS no tiene Background Sync: la cola solo avanza con la app abierta.
+  // Reintentamos cada vez que el perito vuelve a la app (primer plano).
+  const onVisible = () => {
+    if (document.visibilityState === "visible" && navigator.onLine) flushSyncQueue();
+  };
+  document.addEventListener("visibilitychange", onVisible);
+  window.addEventListener("pageshow", onVisible);
 
   if (retryTimer) clearInterval(retryTimer);
   retryTimer = setInterval(() => {
