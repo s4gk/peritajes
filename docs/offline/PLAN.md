@@ -32,12 +32,12 @@ que el SW no atiende → offline cae en `offline.html`.
       cerrar sesión (`wipeLocalUserData`) debe borrar caches del SW.
 
 ### Fase 2 — Datos y OCR disponibles offline
-- [ ] Con red, descargar completos (con fotos) los borradores abiertos del perito para
+- [x] Con red, descargar completos (con fotos) los borradores abiertos del perito para
       que se puedan abrir offline (hoy la lista trae `partial`).
-- [ ] `navigator.storage.persist()` y manejo de `QuotaExceededError` con aviso.
-- [ ] Precache del OCR local (tesseract worker/core wasm + `/tessdata/spa.traineddata.gz`);
+- [x] `navigator.storage.persist()` y manejo de `QuotaExceededError` con aviso.
+- [x] Precache del OCR local (tesseract worker/core wasm + `/tessdata/spa.traineddata.gz`);
       offline usa el OCR local directo sin esperar timeouts.
-- [ ] `/api/owners/lookup` y cualquier fetch del wizard fallan en silencio offline.
+- [x] `/api/owners/lookup` y cualquier fetch del wizard fallan en silencio offline.
 
 ### Fase 3 — Finalizar offline
 - [ ] Finalizar funciona offline; UI muestra "PDF pendiente: se genera al volver la señal".

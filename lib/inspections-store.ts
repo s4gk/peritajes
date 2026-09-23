@@ -75,8 +75,27 @@ const pendingWrites = new Set<Promise<unknown>>();
 function trackWrite<T>(p: Promise<T>): Promise<T> {
   pendingWrites.add(p);
   const done = () => pendingWrites.delete(p);
-  p.then(done, done);
+  p.then(done, (err) => {
+    done();
+    reportIfQuotaError(err);
+  });
   return p;
+}
+
+/** Evento que se dispara cuando el celular se queda sin espacio y una
+ *  escritura local falla (ver StorageFullBanner). */
+export const STORAGE_FULL_EVENT = "perito:storage-full";
+
+export function isQuotaError(err: unknown): boolean {
+  const e = err as { name?: string; message?: string; inner?: { name?: string } } | null;
+  if (!e) return false;
+  if (e.name === "QuotaExceededError" || e.inner?.name === "QuotaExceededError") return true;
+  return /quota/i.test(e.message ?? "");
+}
+
+function reportIfQuotaError(err: unknown) {
+  if (typeof window === "undefined" || !isQuotaError(err)) return;
+  window.dispatchEvent(new CustomEvent(STORAGE_FULL_EVENT));
 }
 
 /** Espera a que terminen las escrituras locales en vuelo (IDB + encolado de
@@ -210,6 +229,10 @@ export function initStore(): Promise<void> {
       return;
     }
 
+    // Pedimos almacenamiento persistente: sin esto el navegador puede borrar
+    // IndexedDB (con peritajes sin subir) cuando le falta espacio.
+    void requestPersistentStorage();
+
     // Paso 1: cargar IDB → memory. Esto siempre debe correr aunque no haya red.
     try {
       const local = await idbListInspections();
@@ -262,6 +285,17 @@ export function initStore(): Promise<void> {
   return initPromise;
 }
 
+async function requestPersistentStorage(): Promise<void> {
+  try {
+    const storage = navigator.storage;
+    if (!storage?.persist || !storage.persisted) return;
+    if (await storage.persisted()) return;
+    await storage.persist();
+  } catch {
+    /* no soportado — seguimos con almacenamiento "best effort" */
+  }
+}
+
 async function refreshFromServer(): Promise<void> {
   if (typeof window === "undefined") return;
   try {
@@ -286,7 +320,7 @@ async function refreshFromServer(): Promise<void> {
       merged.push(winner);
     }
     if (merged.length > 0) {
-      idbPutInspections(merged).catch(() => {});
+      trackWrite(idbPutInspections(merged)).catch(() => {});
     }
     // Reconciliar borrados hechos en otro dispositivo (o server-side): filas
     // que viven en el cache local pero el server ya no reporta. Solo se quitan
@@ -333,16 +367,58 @@ export async function ensureFullInspection(
       inspection: StoredInspection;
     };
     if (!json?.inspection) return local ?? null;
+    // Si mientras bajaba el perito editó el peritaje, la copia local ya es
+    // completa y más nueva: no la pisamos con la del server.
+    const current = memory.get(id);
+    if (current && !current.partial) return current;
     const full = mergeDefaults(json.inspection);
     delete full.partial;
     memory.set(full.id, full);
-    idbPutInspection(full).catch(() => {});
+    await trackWrite(idbPutInspection(full)).catch(() => {});
     return full;
   } catch {
     // Sin red: devolvemos lo que haya. El caller decide si puede seguir con
     // la versión liviana o si tiene que avisar que faltan las fotos.
     return local ?? null;
   }
+}
+
+/** Borradores del usuario que vale la pena bajar completos (con fotos) para
+ *  poder abrirlos sin red: los suyos, sin finalizar, que todavía son la versión
+ *  liviana del listado. Los más recientes primero, hasta `max`. */
+export function pickDraftsToPrefetch(
+  list: StoredInspection[],
+  userId: string,
+  max = 15,
+): StoredInspection[] {
+  return list
+    .filter(
+      (i) =>
+        i.partial &&
+        i.userId === userId &&
+        i.data?.status !== "completed" &&
+        !i.lockedAt,
+    )
+    .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1))
+    .slice(0, max);
+}
+
+/**
+ * Con red, baja completos (con fotos) los borradores abiertos del usuario para
+ * que se puedan abrir sin internet. De a uno, y se corta si se va la señal.
+ * Devuelve cuántos quedaron completos.
+ */
+export async function prefetchOwnDrafts(userId: string, max = 15): Promise<number> {
+  if (typeof window === "undefined") return 0;
+  await initStore();
+  await awaitServerFetch();
+  let done = 0;
+  for (const row of pickDraftsToPrefetch(listInspections(), userId, max)) {
+    if (!navigator.onLine) break;
+    const full = await ensureFullInspection(row.id);
+    if (full && !full.partial) done += 1;
+  }
+  return done;
 }
 
 /** Espera al fetch del server. Útil para callers que detectan que su ID no

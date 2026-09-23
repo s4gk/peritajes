@@ -1,0 +1,51 @@
+import { describe, expect, test } from "vitest";
+
+import { isQuotaError, pickDraftsToPrefetch } from "@/lib/inspections-store";
+import type { StoredInspection } from "@/lib/types";
+
+function row(
+  id: string,
+  opts: Partial<StoredInspection> & { status?: "draft" | "completed" } = {},
+): StoredInspection {
+  const { status = "draft", ...rest } = opts;
+  return {
+    id,
+    createdAt: "2026-09-01T00:00:00Z",
+    updatedAt: "2026-09-01T00:00:00Z",
+    userId: "u1",
+    partial: true,
+    data: { status } as StoredInspection["data"],
+    ...rest,
+  };
+}
+
+describe("pickDraftsToPrefetch", () => {
+  test("solo borradores livianos del usuario, los más recientes primero", () => {
+    const list = [
+      row("viejo", { updatedAt: "2026-09-01T00:00:00Z" }),
+      row("nuevo", { updatedAt: "2026-09-20T00:00:00Z" }),
+      row("ajeno", { userId: "u2" }),
+      row("finalizado", { status: "completed" }),
+      row("bloqueado", { lockedAt: "2026-09-02T00:00:00Z" }),
+      row("ya-completo", { partial: undefined }),
+    ];
+    expect(pickDraftsToPrefetch(list, "u1").map((r) => r.id)).toEqual(["nuevo", "viejo"]);
+  });
+
+  test("respeta el máximo", () => {
+    const list = Array.from({ length: 30 }, (_, i) =>
+      row(`d${i}`, { updatedAt: `2026-09-${String(1 + (i % 28)).padStart(2, "0")}T00:00:00Z` }),
+    );
+    expect(pickDraftsToPrefetch(list, "u1", 5)).toHaveLength(5);
+  });
+});
+
+describe("isQuotaError", () => {
+  test("reconoce QuotaExceededError directo, envuelto o por mensaje", () => {
+    expect(isQuotaError({ name: "QuotaExceededError" })).toBe(true);
+    expect(isQuotaError({ name: "AbortError", inner: { name: "QuotaExceededError" } })).toBe(true);
+    expect(isQuotaError(new Error("The quota has been exceeded."))).toBe(true);
+    expect(isQuotaError(new Error("network"))).toBe(false);
+    expect(isQuotaError(null)).toBe(false);
+  });
+});

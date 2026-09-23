@@ -3,6 +3,7 @@
 import * as React from "react";
 
 import { OfflineWarmup } from "@/components/shared/offline-warmup";
+import { StorageFullBanner } from "@/components/shared/storage-full-banner";
 import { UIPreferencesProvider } from "@/components/wizard/ui-preferences";
 
 import {
@@ -42,6 +43,7 @@ export function PanelShell({
             </div>
             <ProductTour setDrawerOpen={setOpen} />
             <OfflineWarmup userId={user.id} />
+            <StorageFullBanner />
           </div>
         </UIPreferencesProvider>
       </OrgFeaturesProvider>

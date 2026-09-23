@@ -3,11 +3,13 @@
 import * as React from "react";
 
 import { detectOcrCoreFile } from "@/lib/client/ocr-core";
+import { prefetchOwnDrafts } from "@/lib/inspections-store";
 
 /**
  * Le pide al service worker que deje lista la app para trabajar sin red:
  * cascarón del wizard, páginas del panel, todos los assets del build y el OCR
- * local de la tarjeta.
+ * local de la tarjeta. También baja completos (con fotos) los borradores
+ * abiertos del perito, para que los pueda abrir sin señal.
  *
  * Se hace desde el panel (y no solo en el `install` del SW) porque el SW
  * suele instalarse en /login, ANTES de que exista la sesión: ahí el panel
@@ -33,6 +35,8 @@ export function OfflineWarmup({ userId }: { userId: string }) {
       } catch {
         /* sin SW (dev) — nada que hacer */
       }
+      // Borradores propios completos (con fotos) para abrirlos sin red.
+      if (!cancelled) void prefetchOwnDrafts(userId).catch(() => {});
     };
     void warm();
     window.addEventListener("online", warm);

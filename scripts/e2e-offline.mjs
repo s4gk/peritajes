@@ -126,7 +126,7 @@ async function seedUsers() {
   }
   // Arrancamos limpios: peritajes de corridas anteriores del perito de prueba.
   await db.query(
-    "DELETE FROM inspections WHERE user_id IN (SELECT id FROM users WHERE username = 'perito')",
+    "DELETE FROM inspections WHERE user_id IN (SELECT id FROM users WHERE username IN ('perito', 'dueno'))",
   );
   // La firma del perito es requisito de cuenta (SignatureGate).
   const sig = await sharp({ create: { width: 60, height: 20, channels: 3, background: "#fff" } }).png().toBuffer();
@@ -315,12 +315,61 @@ try {
   const { rows: rowsA0 } = await db.query("SELECT plate, status FROM inspections WHERE id = $1", [idA]);
   check(rowsA0[0]?.plate === "AAA111", `borrador A ${idA} está en la BD con placa AAA111`);
 
+  step("Con red: un borrador con fotos hecho en OTRO dispositivo se baja completo");
+  const other = await api("/api/auth/login", { method: "POST", body: PERITO });
+  const cardDataUrl = `data:image/jpeg;base64,${readFileSync(photo1).toString("base64")}`;
+  const idC = `e2e${Date.now().toString(36)}`;
+  // Datos completos de un peritaje real (el A) como base.
+  const { rows: baseRows } = await db.query("SELECT data FROM inspections WHERE id = $1", [idA]);
+  const baseData = baseRows[0].data;
+  const created = await api("/api/inspections", {
+    method: "POST",
+    cookie: cookieJar(other.setCookies),
+    body: {
+      id: idC,
+      data: {
+        ...baseData,
+        vehicle: { ...baseData.vehicle, plate: "CCC333" },
+        documents: { ownershipCardFront: [{ id: "f1", dataUrl: cardDataUrl }], ownershipCardBack: [] },
+      },
+    },
+  });
+  check(created.res.ok, `borrador C creado por API (HTTP ${created.res.status} ${created.res.ok ? "" : JSON.stringify(created.json)})`);
+  // Recargar el panel = el perito abre la app con señal: baja el listado y
+  // precarga completos sus borradores.
+  await page.goto(`${BASE}/peritajes`, { waitUntil: "networkidle0" });
+  let fullC = false;
+  for (let i = 0; i < 60 && !fullC; i++) {
+    fullC = await page.evaluate(async (id) => {
+      const db = await new Promise((res) => { const r = indexedDB.open("perito-offline"); r.onsuccess = () => res(r.result); });
+      const row = await new Promise((res) => { const r = db.transaction("inspections").objectStore("inspections").get(id); r.onsuccess = () => res(r.result); });
+      db.close();
+      return !!row && !row.partial && (row.data?.documents?.ownershipCardFront?.length ?? 0) > 0;
+    }, idC);
+    if (!fullC) await sleep(500);
+  }
+  check(fullC, "C quedó en el celular completo (con su foto), no la versión liviana");
+
   step("SIN RED: abrir el borrador A desde /peritajes");
   await setOffline(page, true);
   await page.goto(`${BASE}/peritajes`, { waitUntil: "load" });
   check(!/Sin conexión/.test(await page.title()), "/peritajes abre sin red (no offline.html)");
   check(await waitForText(page, /AAA111/), "la lista muestra el borrador A");
-  await clickByText(page, "button, a", /^Abrir$/);
+  // "Abrir" de la tarjeta que tiene la placa AAA111 (la lista trae varios).
+  const opened = await page.evaluate(() => {
+    const buttons = [...document.querySelectorAll("button, a")].filter((b) => /^Abrir$/.test(b.innerText.trim()));
+    for (const b of buttons) {
+      let el = b;
+      for (let i = 0; i < 8 && el; i++, el = el.parentElement) {
+        if (/AAA111/.test(el.innerText) && !/CCC333/.test(el.innerText)) {
+          b.click();
+          return true;
+        }
+      }
+    }
+    return false;
+  });
+  check(opened, "botón Abrir de A encontrado");
   await page.waitForFunction((id) => location.pathname === `/inspection/${id}`, { timeout: 20_000 }, idA);
   await page.waitForSelector("#owner", { timeout: 20_000 });
   check(true, "el wizard de A abrió sin red");
@@ -338,6 +387,19 @@ try {
   }
   const afterA = await idbInspection(page, idA);
   check(afterA.insp?.owner?.toUpperCase() === "CLIENTE OFFLINE A", "la edición de A quedó guardada en el celular");
+
+  step("SIN RED: abrir C (bajado de otro dispositivo) muestra su foto");
+  await page.goto(`${BASE}/inspection/${idC}`, { waitUntil: "load" });
+  await page.waitForSelector("#plate", { timeout: 20_000 });
+  const cImg = await page
+    .waitForFunction(
+      () => [...document.querySelectorAll('img[alt="Tarjeta de propiedad — Frente"]')].some((i) => i.src.startsWith("data:image")),
+      { timeout: 10_000 },
+    )
+    .then(() => true)
+    .catch(() => false);
+  check(cImg, "la foto de la tarjeta de C se ve sin red");
+  await page.goto(`${BASE}/peritajes`, { waitUntil: "load" });
 
   step("SIN RED: crear peritaje B desde /intake");
   await clickByText(page, "button, a", /Nuevo peritaje|Nuevo/);
@@ -511,6 +573,28 @@ try {
   const { rows: duenoRows } = await db.query("SELECT id FROM users WHERE username = 'dueno'");
   const second = await cacheInfo();
   check(second.shellUser === "otro" && second.marker === duenoRows[0].id, "el cascarón nuevo es del dueño (no hereda al perito)");
+
+  step("Celular sin espacio: la app avisa en vez de perder el cambio en silencio");
+  await page.goto(`${BASE}/intake`, { waitUntil: "networkidle0" });
+  await pickFirstOption(page, await page.waitForSelector("button[role=combobox]"));
+  await (await page.$$("button[aria-pressed]"))[0].evaluate((b) => b.click());
+  await sleep(200);
+  await (await page.$("[data-tour=intake-start]")).evaluate((b) => b.click());
+  await page.waitForSelector("#plate", { timeout: 20_000 });
+  // Chrome headless no hace cumplir la cuota emulada por CDP en IndexedDB
+  // (probado: escribe 8 MB con cuota de 20 KB), así que simulamos lo que ve
+  // la app cuando el disco se llena: put() lanza QuotaExceededError.
+  await page.evaluate(() => {
+    const orig = IDBObjectStore.prototype.put;
+    IDBObjectStore.prototype.put = function (...args) {
+      if (this.name === "inspections") throw new DOMException("Sin espacio", "QuotaExceededError");
+      return orig.apply(this, args);
+    };
+  });
+  await goToStep(page, /Fotografías adicionales/);
+  await page.waitForSelector("input[type=file][multiple]", { timeout: 10_000 });
+  await (await page.$$("input[type=file][multiple]"))[0].uploadFile(photo1);
+  check(await waitForText(page, /se quedó sin espacio/, 15_000), "aparece el aviso 'El celular se quedó sin espacio'");
 } catch (err) {
   exitCode = 1;
   console.error("\nFALLÓ:", err?.message ?? err);

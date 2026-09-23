@@ -192,6 +192,11 @@ export function SummaryStep() {
     let timeout: ReturnType<typeof setTimeout> | null = null;
 
     async function tick() {
+      if (!navigator.onLine) {
+        // Sin red no hay estado que consultar; volvemos a mirar en un rato.
+        if (!cancelled) timeout = setTimeout(tick, 10_000);
+        return;
+      }
       try {
         const res = await apiFetch(
           `/api/inspections/${encodeURIComponent(inspectionId)}/wa-status`,

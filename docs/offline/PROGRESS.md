@@ -33,3 +33,19 @@
 - E2E `node scripts/e2e-offline.mjs` → 28/28 OK (05:20 CEST).
 
 ### Siguiente: Fase 2
+
+### Fase 2 — HECHA (E2E 34/34, 05:45 CEST)
+- OCR: `lib/ocr-assets.ts` + ruta `app/tesseract/[version]/[file]/route.ts` (lee node_modules, lista blanca).
+  `createWorker` con `workerPath`/`corePath` propios y `workerBlobURL:false`. SW: cache `perito-ocr-<ver>`
+  que sobrevive a los bumps; `WARM_OFFLINE` trae `ocrCore` (detectado con WebAssembly.validate,
+  `lib/client/ocr-core.ts`) para bajar solo 1 core (~4 MB) + worker + lang pack (8,4 MB).
+  Sin red, el escáner va directo a local (`prefersLocalOcr`). NOTA: el camino con
+  `NEXT_PUBLIC_OCR_REMOTE=1` + sin red se revisó en código, el E2E corre con OCR remoto apagado.
+- Borradores completos: `prefetchOwnDrafts(userId)` (desde OfflineWarmup) baja con fotos los borradores
+  propios livianos (máx 15, más recientes). `ensureFullInspection` ya no pisa una copia local editada.
+- `navigator.storage.persist()` al iniciar el store (no verificable en headless: Chrome decide por heurística).
+- Cuota: `trackWrite` detecta `QuotaExceededError` → evento `perito:storage-full` → `StorageFullBanner`.
+  En E2E se simula parcheando `IDBObjectStore.put` (la cuota emulada por CDP no se aplica a IDB en headless).
+- Lookup de propietario y polling de wa-status no disparan sin red (ya tenían try/catch).
+
+### Siguiente: Fase 3
