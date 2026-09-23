@@ -24,7 +24,8 @@ function buildPool(): Pool {
   }
   return new Pool({
     connectionString: url,
-    max: 10,
+    // Postgres compartido: permitimos achicar el pool por env (pruebas E2E).
+    max: Number(process.env.PG_POOL_MAX) || 10,
     idleTimeoutMillis: 30_000,
   });
 }
