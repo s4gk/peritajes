@@ -10,7 +10,7 @@ import type { PendingMutation } from "@/lib/client/idb";
  * module-level, así que cada test resetea el "almacén" mock antes de correr.
  */
 
-type MockApiResponse = { status: number; body?: unknown };
+type MockApiResponse = { status: number; body?: unknown; networkError?: boolean };
 
 const fakeQueue: Map<number, PendingMutation> = new Map();
 let nextId = 1;
@@ -37,17 +37,21 @@ vi.mock("@/lib/client/idb", () => ({
 vi.mock("@/lib/client/api-client", () => ({
   apiFetch: vi.fn(async () => {
     const r = apiResponses.shift() ?? { status: 200, body: { ok: true } };
-    return {
+    if (r.networkError) throw new TypeError("Failed to fetch");
+    const res = {
       ok: r.status >= 200 && r.status < 300,
       status: r.status,
       statusText: "TEST",
       json: async () => r.body ?? {},
+      clone: () => res,
     };
+    return res;
   }),
 }));
 
 // Importamos DESPUÉS de declarar los mocks — vi.mock se hoistea por encima,
 // así sync-queue carga las versiones mockeadas de sus deps.
+const { apiFetch } = await import("@/lib/client/api-client");
 const {
   flushSyncQueue,
   refreshPending,
@@ -78,6 +82,7 @@ function seed(
 }
 
 beforeEach(() => {
+  vi.mocked(apiFetch).mockClear();
   fakeQueue.clear();
   fakeInspections.clear();
   nextId = 1;
@@ -193,5 +198,105 @@ describe("sync-queue · refreshPending / SyncState", () => {
     unsub();
     await refreshPending();
     expect(fn).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("sync-queue · sin red, sesión vencida y orden", () => {
+  test("un error de red NO suma intento (horas sin señal no marcan 'fallido')", async () => {
+    seed({ kind: "update", inspectionId: "abc", data: {} as never });
+    apiResponses.push({ status: 0, networkError: true });
+
+    await flushSyncQueue();
+
+    const m = fakeQueue.get(1)!;
+    expect(m.attempts).toBe(0);
+    expect(m.lastError).toMatch(/Failed to fetch/);
+  });
+
+  test("401 (sesión vencida): la mutación se queda, sin sumar intento, y se pide re-login", async () => {
+    seed({ kind: "create", inspectionId: "abc", data: {} as never });
+    seed({ kind: "update", inspectionId: "abc", data: {} as never });
+    apiResponses.push({ status: 401, body: { error: "No autenticado" } });
+
+    await flushSyncQueue();
+
+    expect(fakeQueue.size).toBe(2);
+    expect(fakeQueue.get(1)!.attempts).toBe(0);
+    expect(getSyncState().authRequired).toBe(true);
+
+    // Vuelve a iniciar sesión → la próxima corrida sube todo y limpia el aviso.
+    apiResponses.push({ status: 200 }, { status: 200, body: {} });
+    await flushSyncQueue();
+    expect(fakeQueue.size).toBe(0);
+    expect(getSyncState().authRequired).toBe(false);
+  });
+
+  test("403 csrf_invalid también es problema de sesión, no se descarta", async () => {
+    seed({ kind: "update", inspectionId: "abc", data: {} as never });
+    apiResponses.push({ status: 403, body: { error: "csrf_invalid" } });
+
+    await flushSyncQueue();
+
+    expect(fakeQueue.size).toBe(1);
+    expect(fakeQueue.get(1)!.attempts).toBe(0);
+    expect(getSyncState().authRequired).toBe(true);
+  });
+
+  test("403 genérico sin versión canónica NO se descarta (queda como fallo)", async () => {
+    seed({ kind: "update", inspectionId: "abc", data: {} as never });
+    apiResponses.push({ status: 403, body: { error: "Sin permisos" } });
+
+    await flushSyncQueue();
+
+    expect(fakeQueue.size).toBe(1);
+    expect(fakeQueue.get(1)!.attempts).toBe(1);
+  });
+
+  test("403 con la versión canónica (finalizado, sin permiso) sí se descarta", async () => {
+    seed({ kind: "update", inspectionId: "abc", data: {} as never });
+    apiResponses.push({ status: 403, body: { error: "x", inspection: { id: "abc", data: {} } } });
+
+    await flushSyncQueue();
+
+    expect(fakeQueue.size).toBe(0);
+  });
+
+  test("nunca se adelanta una mutación a otra anterior del mismo peritaje", async () => {
+    // El create de "b" está en enfriamiento (12 fallos recientes): su update
+    // NO debe salir (recibiría 404). "a" es otro peritaje y sí sube.
+    seed({
+      kind: "create",
+      inspectionId: "b",
+      data: {} as never,
+      attempts: 12,
+      lastAttemptAt: new Date().toISOString(),
+    });
+    seed({ kind: "update", inspectionId: "b", data: { status: "completed" } as never });
+    seed({ kind: "update", inspectionId: "a", data: {} as never });
+
+    await flushSyncQueue();
+
+    const calls = vi.mocked(apiFetch).mock.calls.map((c) => String(c[0]));
+    expect(calls).toEqual(["/api/inspections/a"]);
+    expect([...fakeQueue.keys()]).toEqual([1, 2]);
+  });
+
+  test("404 en un update finalizado recrea la fila como BORRADOR y reintenta", async () => {
+    seed({
+      kind: "update",
+      inspectionId: "abc",
+      data: { status: "completed", completedAt: "2026-09-23T00:00:00Z" } as never,
+    });
+    apiResponses.push({ status: 404 }, { status: 200 });
+
+    await flushSyncQueue();
+
+    const calls = vi.mocked(apiFetch).mock.calls;
+    expect(calls[1][0]).toBe("/api/inspections");
+    const body = JSON.parse(String((calls[1][1] as RequestInit).body));
+    expect(body.data.status).toBe("draft");
+    expect(body.data.completedAt).toBeUndefined();
+    // El update sigue en cola: la próxima vuelta lo manda y el server finaliza.
+    expect(fakeQueue.size).toBe(1);
   });
 });

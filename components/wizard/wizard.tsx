@@ -141,14 +141,14 @@ function validateStep(step: StepId, data: InspectionData): ValidateResult {
       return {
         ok: false,
         message:
-          "La foto del frente de la tarjeta parece corrupta o muy pequeña. Tomala de nuevo.",
+          "La foto del frente de la tarjeta parece corrupta o muy pequeña. Tómala de nuevo.",
       };
     }
     if (!docs.ownershipCardBack.some(isImageEntryUsable)) {
       return {
         ok: false,
         message:
-          "La foto del reverso de la tarjeta parece corrupta o muy pequeña. Tomala de nuevo.",
+          "La foto del reverso de la tarjeta parece corrupta o muy pequeña. Tómala de nuevo.",
       };
     }
     // Warning suave: si el VIN está llenado pero no tiene 17 chars válidos,

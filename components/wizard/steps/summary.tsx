@@ -451,7 +451,7 @@ export function SummaryStep() {
         title: phoneRaw ? "Teléfono del cliente inválido" : "Falta el teléfono del cliente",
         description: phoneRaw
           ? `"${phoneRaw}" no es un celular colombiano válido. Debe tener 10 dígitos y empezar por 3 (ej: 3138807390). Corrígelo en el paso "Vehículo / Propietario".`
-          : "Capturá el celular del cliente (10 dígitos, empieza por 3) en el paso Vehículo. Sin teléfono no se puede entregar el PDF.",
+          : "Captura el celular del cliente (10 dígitos, empieza por 3) en el paso Vehículo. Sin teléfono no se puede entregar el PDF.",
         variant: "warning",
       });
       return;

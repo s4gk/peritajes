@@ -560,7 +560,19 @@ async function replayMutation(mutation, csrf) {
   }
 }
 
+// Mismo nombre que SYNC_LOCK_NAME en lib/client/sync-queue.ts: la cola de la
+// página y este replay nunca corren a la vez (si no, mandaban el mismo
+// create/update dos veces y podían desordenarse).
+const SYNC_LOCK_NAME = "perito-sync-queue";
+
 async function flushPendingMutations() {
+  if (self.navigator && self.navigator.locks && self.navigator.locks.request) {
+    return self.navigator.locks.request(SYNC_LOCK_NAME, flushPendingMutationsLocked);
+  }
+  return flushPendingMutationsLocked();
+}
+
+async function flushPendingMutationsLocked() {
   let db;
   try {
     db = await openMutationsDb();
@@ -580,11 +592,15 @@ async function flushPendingMutations() {
         }
       } else {
         // Frenamos para no martillar el server. La próxima sync (o el cliente
-        // al volver a abrirse) retoma desde acá.
+        // al volver a abrirse) retoma desde acá. Sin red (status 0) o con la
+        // sesión vencida (401/403) no sumamos intento: no es culpa de la
+        // mutación (ver flushLocked en sync-queue.ts).
+        const counts = result.status >= 400 && result.status !== 401 && result.status !== 403;
         await idbPut(db, "mutations", {
           ...mutation,
-          attempts: (mutation.attempts || 0) + 1,
+          attempts: (mutation.attempts || 0) + (counts ? 1 : 0),
           lastError: `${result.status}`,
+          lastAttemptAt: new Date().toISOString(),
         }).catch(() => {});
         break;
       }
