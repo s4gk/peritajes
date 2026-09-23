@@ -173,7 +173,7 @@ export async function waitForOfflineReady(page, timeoutMs = 60_000) {
         ocr = (await c.keys()).length;
       }
       return { shell, cached, total: man.assets.length, ocr };
-    });
+    }).catch(() => last); // la app puede recargarse sola (controllerchange)
     if (last.shell && last.total > 0 && last.cached === last.total && last.ocr >= 3) return last;
     await sleep(1000);
   }

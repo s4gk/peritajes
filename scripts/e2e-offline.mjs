@@ -260,6 +260,7 @@ const cardPhoto = await makeCard(path.join(OUT_DIR, "tarjeta.jpg"));
 
 let browser;
 let page;
+const consoleTail = [];
 let exitCode = 0;
 const t0 = Date.now();
 try {
@@ -272,6 +273,10 @@ try {
   page = await browser.newPage();
   await page.setViewport({ width: 412, height: 915, isMobile: true, hasTouch: false });
   await installOnlineOverride(page);
+  page.on("console", (m) => {
+    consoleTail.push(`${m.type()}: ${m.text().slice(0, 200)}`);
+    if (consoleTail.length > 50) consoleTail.shift();
+  });
   // Recorridos de bienvenida como ya vistos: tapan la pantalla y se roban clics.
   await page.evaluateOnNewDocument(() => {
     const paths = ["/dashboard", "/peritajes", "/agenda", "/vehiculos", "/propietarios", "/intake"];
@@ -457,6 +462,10 @@ try {
         if (/Aplicar datos|No detecté|No se pudo procesar/.test(dialogText)) break;
         await sleep(500);
       }
+      if (!/Aplicar datos|No detecté/.test(dialogText)) {
+        console.log("   OCR colgado; diálogo:", JSON.stringify(dialogText.slice(0, 400)));
+        console.log("   consola:", JSON.stringify(consoleTail.slice(-15)));
+      }
       check(!/No se pudo procesar/.test(dialogText) && /Aplicar datos|No detecté/.test(dialogText),
         `el OCR local corrió sin red (${Math.round((Date.now() - t) / 1000)}s)`);
       console.log("   OCR →", JSON.stringify(dialogText.replace(/\s+/g, " ").slice(0, 300)));
@@ -533,6 +542,18 @@ try {
   check(!/Sin conexión/.test(await page.title()), "la recarga sin red no cae en offline.html");
   check(await waitForText(page, /BBB222/, 20_000), "el wizard recargado muestra la placa BBB222");
   check(await waitForText(page, /Tienes \d+ peritajes? sin subir/, 10_000), "aviso visible 'Tienes N peritajes sin subir'");
+  step("SIN RED: abrir la app desde el ícono (start_url) en una pestaña nueva");
+  {
+    const cold = await browser.newPage();
+    await installOnlineOverride(cold);
+    await cold.setViewport({ width: 412, height: 915, isMobile: true });
+    await cold.evaluateOnNewDocument(() => sessionStorage.setItem("__e2e_offline", "1"));
+    await cold.setOfflineMode(true);
+    await cold.goto(`${BASE}/dashboard?source=pwa`, { waitUntil: "load" });
+    check(!/Sin conexión/.test(await cold.title()), `abre sin offline.html (terminó en ${new URL(cold.url()).pathname})`);
+    check(await waitForText(cold, /BBB222/, 20_000), "muestra la lista con los peritajes del celular");
+    await cold.close();
+  }
   const { rows: preB } = await db.query("SELECT id FROM inspections WHERE id = $1", [idB]);
   check(preB.length === 0, "B todavía NO está en la BD (no hubo red)");
 
@@ -638,6 +659,19 @@ try {
   const { rows: duenoRows } = await db.query("SELECT id FROM users WHERE username = 'dueno'");
   const second = await cacheInfo();
   check(second.shellUser === "otro" && second.marker === duenoRows[0].id, "el cascarón nuevo es del dueño (no hereda al perito)");
+  {
+    // El dueño sí tiene dashboard: abrir desde el ícono sin red lo muestra.
+    await stopServer();
+    const cold = await browser.newPage();
+    await installOnlineOverride(cold);
+    await cold.evaluateOnNewDocument(() => sessionStorage.setItem("__e2e_offline", "1"));
+    await cold.setOfflineMode(true);
+    await cold.goto(`${BASE}/dashboard?source=pwa`, { waitUntil: "load" });
+    const where = new URL(cold.url()).pathname;
+    check(!/Sin conexión/.test(await cold.title()) && where === "/dashboard", `dueño: el ícono abre el dashboard sin red (${where})`);
+    await cold.close();
+    await startServer();
+  }
 
   step("Celular sin espacio: la app avisa en vez de perder el cambio en silencio");
   await page.goto(`${BASE}/intake`, { waitUntil: "networkidle0" });

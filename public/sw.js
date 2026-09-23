@@ -388,10 +388,15 @@ async function networkFirstNavigation(event) {
   if (cached) return cached;
 
   const url = new URL(req.url);
-  if (url.pathname === "/" || url.pathname === "") {
+  // Pantallas de inicio: "/" y el start_url de la PWA (/dashboard?source=pwa).
+  // El perito (employee) no tiene dashboard — el server lo manda a /peritajes
+  // y por eso /dashboard nunca queda cacheado para él. Sin esto, abrir la app
+  // desde el ícono sin red caía en offline.html. Redirigimos (en vez de servir
+  // otro HTML bajo esta URL) para que Next hidrate la página correcta.
+  if (url.pathname === "/" || url.pathname === "" || url.pathname === "/dashboard") {
     for (const fallback of NAVIGATION_FALLBACKS) {
-      cached = await cache.match(fallback);
-      if (cached) return cached;
+      if (fallback === url.pathname) continue;
+      if (await cache.match(fallback)) return Response.redirect(fallback, 302);
     }
   }
 
