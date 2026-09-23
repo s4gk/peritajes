@@ -458,7 +458,11 @@ try {
       const t = Date.now();
       let dialogText = "";
       while (Date.now() - t < 90_000) {
-        dialogText = await page.$eval("[role=dialog]", (d) => d.innerText).catch(() => "");
+        // Todos los diálogos: el aviso "Instalar Peritajes del Llano" también
+        // es un [role=dialog] y puede estar abierto al mismo tiempo.
+        dialogText = await page
+          .$$eval("[role=dialog]", (ds) => ds.map((d) => d.innerText).join("\n"))
+          .catch(() => "");
         if (/Aplicar datos|No detecté|No se pudo procesar/.test(dialogText)) break;
         await sleep(500);
       }

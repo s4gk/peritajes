@@ -88,3 +88,10 @@
 - Intermitencias vistas: 1 vez el OCR colgado 90 s (sin causa clara aún; el E2E imprime diálogo+consola si
   pasa), 1 vez "Execution context destroyed" por recarga de controllerchange (arreglado en el helper).
 - REPORTE.md escrito (06:35 CEST). Repeticiones del E2E corriendo para medir la intermitencia.
+
+### Cierre de la sesión 1 (~06:55 CEST)
+- Tanda de 6 corridas: 1 falla del test (leía el diálogo "Instalar" en vez del escáner → falso "OCR colgado";
+  corregido), 5 OK. Más 2 corridas finales OK → 7 seguidas 49/49. No hay cuelgue del OCR.
+- Precarga de borradores: tope 8 y solo últimos 30 días (memoria en celulares de gama baja).
+- SW: timeout de red de 4 s (en vez de 12) para /inspection/* cuando hay cascarón (señal fantasma). Solo revisado en código.
+- Todo el PLAN marcado. Server 3460 apagado. DONE creado.

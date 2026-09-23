@@ -367,10 +367,15 @@ async function networkFirstNavigation(event) {
   const req = event.request;
   const cache = await caches.open(RUNTIME_CACHE);
 
-  // Primer intento de red con timeout corto.
+  // Primer intento de red con timeout corto. Para el wizard, si ya tenemos
+  // el cascarón, esperamos mucho menos: con "señal fantasma" (el celular dice
+  // que hay red pero no carga) el perito no tiene por qué quedarse 12 s
+  // mirando la pantalla — el cascarón sirve igual para cualquier peritaje.
+  const isWizard = new URL(req.url).pathname.startsWith("/inspection/");
+  const hasShell = isWizard && !!(await cache.match(SHELL_URL));
   let lastErr;
   try {
-    const fresh = await fetchWithTimeout(req, 12_000);
+    const fresh = await fetchWithTimeout(req, hasShell ? 4_000 : 12_000);
     if (fresh.ok) cache.put(req, fresh.clone()).catch(() => {});
     return fresh;
   } catch (err) {

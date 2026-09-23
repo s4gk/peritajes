@@ -23,7 +23,7 @@ servidor le asigna el consecutivo y genera el PDF. Esto se probó de punta a pun
 4. **OCR de la tarjeta sin internet.** El lector de la tarjeta (Tesseract) ya no se baja de internet cada
    vez: queda guardado en el celular (~12 MB, una sola vez; no se vuelve a bajar en cada actualización).
 5. **Borradores completos para trabajar sin señal.** Con señal, la app baja con fotos los borradores
-   abiertos del perito (hasta 15), así puede abrirlos después en un sitio sin cobertura.
+   abiertos del perito de los últimos 30 días (hasta 8), así puede abrirlos después en un sitio sin cobertura.
 6. **Finalizar sin red.** Queda finalizado en el celular con el aviso *"PDF pendiente: se genera al volver
    la señal"*. Al volver la señal aparece el consecutivo sin tener que recargar.
 7. **Lo que necesita internet lo dice claro** en vez de fallar: vista previa del PDF, descargar PDF, firma
@@ -67,12 +67,13 @@ servidor le asigna el consecutivo y genera el PDF. Esto se probó de punta a pun
   6. Cerrar sesión con cambios sin subir pide confirmación.
   7. Cerrar sesión borra lo guardado; al entrar el dueño no ve nada del perito.
   8. Celular sin espacio: aparece el aviso (simulado, ver riesgos).
-- **Pruebas unitarias:** `npm run test` → 238 pruebas OK (se agregaron 19: cola de subida, sesión vencida,
+- **Pruebas unitarias:** `npm run test` → 239 pruebas OK (se agregaron 20: cola de subida, sesión vencida,
   orden, regla de conflictos, manifiesto de archivos, OCR).
 - `npm run typecheck` y `npm run lint`: sin errores.
-- Intermitencia observada: en ~15 corridas, **una vez** el OCR se quedó "pensando" 90 s y **una vez** el
-  robot falló por una recarga automática de la app (esto último era del robot y ya se corrigió). Ver riesgos.
-  <!-- RESULTADO_REPETICIONES -->
+- **Estabilidad:** se corrió la prueba completa más de 15 veces. Hubo dos fallas, las dos del robot y no
+  de la app (una recarga automática de la app lo interrumpía, y otra vez leyó el aviso "Instalar Peritajes
+  del Llano" en vez del diálogo del escáner y creyó que el OCR se había colgado). Ambas corregidas; después
+  de eso, **7 corridas seguidas 49/49**.
 
 ## Sigue necesitando internet (y lo avisa)
 
@@ -95,11 +96,12 @@ al día (sin red muestra lo último que vio).
 
 ## Riesgos y limitaciones
 
-- **Señal "fantasma"** (el celular dice que tiene red pero no carga): la app espera hasta ~12 s antes de usar
-  lo guardado. Con modo avión o sin cobertura real es inmediato.
+- **Señal "fantasma"** (el celular dice que tiene red pero no carga): al abrir un peritaje la app espera
+  hasta ~4 s antes de usar lo guardado (otras pantallas, hasta ~12 s). Con modo avión o sin cobertura real
+  es inmediato. Este caso se revisó en código; la prueba automática no simula señal fantasma.
 - **iPhone:** no sube nada en segundo plano; sube al abrir la app o volver a ella con señal (hay aviso).
-- **OCR:** en una de ~15 corridas se quedó cargando 90 s (el perito puede cancelar y guardar la foto sin
-  OCR). No se logró reproducir para ver la causa; el robot deja el diagnóstico si vuelve a pasar.
+- **OCR:** se probó con una tarjeta sintética (texto impreso limpio); leyó marca, línea y modelo. Con fotos
+  reales la calidad es la misma de antes (mismo motor), solo cambia que ya no necesita internet.
 - **Espacio lleno:** el aviso se probó simulando el error (Chrome de pruebas no aplica la cuota real).
   `navigator.storage.persist()` se pide, pero el navegador decide si lo concede.
 - **OCR con IA + sin red:** revisado en código (va directo al OCR del celular); la prueba automática corre

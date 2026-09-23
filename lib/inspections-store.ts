@@ -402,13 +402,21 @@ export async function ensureFullInspection(
   }
 }
 
+/** Máximo de borradores que se bajan completos. El store mantiene en memoria
+ *  todo lo que hay en IndexedDB y un borrador con fotos pesa varios MB: en un
+ *  celular de gama baja no conviene tener decenas. */
+const PREFETCH_MAX_DRAFTS = 8;
+/** Solo borradores tocados en este lapso (los viejos casi nunca se retoman). */
+const PREFETCH_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+
 /** Borradores del usuario que vale la pena bajar completos (con fotos) para
- *  poder abrirlos sin red: los suyos, sin finalizar, que todavía son la versión
- *  liviana del listado. Los más recientes primero, hasta `max`. */
+ *  poder abrirlos sin red: los suyos, sin finalizar, recientes, que todavía
+ *  son la versión liviana del listado. Los más recientes primero, hasta `max`. */
 export function pickDraftsToPrefetch(
   list: StoredInspection[],
   userId: string,
-  max = 15,
+  max = PREFETCH_MAX_DRAFTS,
+  now: number = Date.now(),
 ): StoredInspection[] {
   return list
     .filter(
@@ -416,7 +424,8 @@ export function pickDraftsToPrefetch(
         i.partial &&
         i.userId === userId &&
         i.data?.status !== "completed" &&
-        !i.lockedAt,
+        !i.lockedAt &&
+        now - new Date(i.updatedAt).getTime() <= PREFETCH_MAX_AGE_MS,
     )
     .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1))
     .slice(0, max);
@@ -427,7 +436,10 @@ export function pickDraftsToPrefetch(
  * que se puedan abrir sin internet. De a uno, y se corta si se va la señal.
  * Devuelve cuántos quedaron completos.
  */
-export async function prefetchOwnDrafts(userId: string, max = 15): Promise<number> {
+export async function prefetchOwnDrafts(
+  userId: string,
+  max = PREFETCH_MAX_DRAFTS,
+): Promise<number> {
   if (typeof window === "undefined") return 0;
   await initStore();
   await awaitServerFetch();

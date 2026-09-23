@@ -29,14 +29,22 @@ describe("pickDraftsToPrefetch", () => {
       row("bloqueado", { lockedAt: "2026-09-02T00:00:00Z" }),
       row("ya-completo", { partial: undefined }),
     ];
-    expect(pickDraftsToPrefetch(list, "u1").map((r) => r.id)).toEqual(["nuevo", "viejo"]);
+    const now = new Date("2026-09-23T00:00:00Z").getTime();
+    expect(pickDraftsToPrefetch(list, "u1", 8, now).map((r) => r.id)).toEqual(["nuevo", "viejo"]);
   });
 
   test("respeta el máximo", () => {
     const list = Array.from({ length: 30 }, (_, i) =>
       row(`d${i}`, { updatedAt: `2026-09-${String(1 + (i % 28)).padStart(2, "0")}T00:00:00Z` }),
     );
-    expect(pickDraftsToPrefetch(list, "u1", 5)).toHaveLength(5);
+    const now = new Date("2026-09-23T00:00:00Z").getTime();
+    expect(pickDraftsToPrefetch(list, "u1", 5, now)).toHaveLength(5);
+  });
+
+  test("no baja borradores de hace más de 30 días", () => {
+    const now = new Date("2026-09-23T00:00:00Z").getTime();
+    const list = [row("reciente", { updatedAt: "2026-09-10T00:00:00Z" }), row("abandonado", { updatedAt: "2026-06-01T00:00:00Z" })];
+    expect(pickDraftsToPrefetch(list, "u1", 8, now).map((r) => r.id)).toEqual(["reciente"]);
   });
 });
 
