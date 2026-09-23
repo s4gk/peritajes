@@ -54,14 +54,14 @@ que el SW no atiende → offline cae en `offline.html`.
       mutación pendiente). No cambiar semántica sin dejarla escrita en el reporte.
 
 ### Fase 5 — Pruebas
-- [ ] Tests unitarios (vitest) para la lógica nueva (cola, 401, helpers de SW si se extraen).
-- [ ] Script E2E Puppeteer `scripts/e2e-offline.mjs` contra build de producción local
+- [x] Tests unitarios (vitest) para la lógica nueva (cola, 401, helpers de SW si se extraen).
+- [x] Script E2E Puppeteer `scripts/e2e-offline.mjs` contra build de producción local
       (`next build && next start -p 3460` en el worktree, BD `perito_offline_e2e`):
       login → ir offline (`page.setOfflineMode(true)`) → crear peritaje → llenar datos
       mínimos + fotos → firma → finalizar → recargar offline (debe seguir ahí) → volver
       online → verificar en BD que subió, status completed y PDF generado.
-- [ ] `npm run typecheck` y `npm run test` verdes.
-- [ ] Bump de `VERSION` en `public/sw.js`.
+- [x] `npm run typecheck` y `npm run test` verdes.
+- [x] Bump de `VERSION` en `public/sw.js`.
 
 ## Fuera de alcance esta noche
 Deploy a producción, merge a main/feat/mobile, push, app nativa, PDF en el celular.

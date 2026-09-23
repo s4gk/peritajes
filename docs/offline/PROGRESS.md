@@ -77,3 +77,14 @@
 - 403 genérico ya no se descarta (cambio de semántica) → REPORTE.
 
 ### Siguiente: Fase 5 (casi todo hecho; falta repasar criterios y REPORTE.md)
+
+### Fase 5 — HECHA
+- Unit tests nuevos: tests/sync-queue.test.ts (+7), tests/offline-routes.test.ts, tests/inspections-store-offline.test.ts.
+  `npm run test` 238 OK, typecheck y lint limpios.
+- E2E `scripts/e2e-offline.mjs` 49/49 (incluye arranque en frío desde el ícono sin red para perito y dueño).
+- SW `VERSION = "v31"`.
+- Extra encontrado: al perito (employee) `/dashboard` lo redirige a `/peritajes` → nunca se cacheaba → el
+  start_url de la PWA sin red caía en offline.html. Arreglado en el SW (redirect a la pantalla de inicio cacheada).
+- Intermitencias vistas: 1 vez el OCR colgado 90 s (sin causa clara aún; el E2E imprime diálogo+consola si
+  pasa), 1 vez "Execution context destroyed" por recarga de controllerchange (arreglado en el helper).
+- REPORTE.md escrito (06:35 CEST). Repeticiones del E2E corriendo para medir la intermitencia.
