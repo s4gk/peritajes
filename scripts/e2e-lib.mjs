@@ -1,8 +1,8 @@
 // Helpers compartidos por los scripts E2E offline (Puppeteer).
 //
-// "Sin red" se simula de dos formas a la vez:
-//   1. page.setOfflineMode(true): navigator.onLine=false y los fetch de la
-//      página fallan.
+// "Sin red" se simula de tres formas a la vez:
+//   1. page.setOfflineMode(true): los fetch de la página fallan.
+//   1b. navigator.onLine=false forzado (ver installOnlineOverride).
 //   2. Se APAGA el server de pruebas: page.setOfflineMode NO afecta al service
 //      worker (es otro target) y emularlo por CDP no es fiable porque el
 //      worker se reinicia y pierde la emulación. Con el server abajo, todo
@@ -56,13 +56,47 @@ export async function stopServer() {
   }
 }
 
+/**
+ * Instalar UNA vez por página, antes de navegar. `page.setOfflineMode` deja
+ * `navigator.onLine` en true tras navegar a otra página (probado: el documento
+ * nuevo no hereda la emulación), así que lo forzamos con una bandera en
+ * sessionStorage que sobrevive a las navegaciones de la pestaña.
+ */
+export async function installOnlineOverride(page) {
+  await page.evaluateOnNewDocument(() => {
+    const desc = Object.getOwnPropertyDescriptor(Navigator.prototype, "onLine");
+    Object.defineProperty(Navigator.prototype, "onLine", {
+      configurable: true,
+      get() {
+        try {
+          if (sessionStorage.getItem("__e2e_offline") === "1") return false;
+        } catch {
+          /* about:blank u origen opaco */
+        }
+        return desc.get.call(this);
+      },
+    });
+  });
+}
+
+async function flagOffline(page, on) {
+  await page
+    .evaluate((on) => {
+      sessionStorage.setItem("__e2e_offline", on ? "1" : "0");
+      window.dispatchEvent(new Event(on ? "offline" : "online"));
+    }, on)
+    .catch(() => {});
+}
+
 export async function setOffline(page, on) {
   if (on) {
+    await flagOffline(page, true);
     await page.setOfflineMode(true);
     await stopServer();
   } else {
     await startServer();
     await page.setOfflineMode(false);
+    await flagOffline(page, false);
   }
 }
 

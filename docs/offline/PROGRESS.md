@@ -49,3 +49,17 @@
 - Lookup de propietario y polling de wa-status no disparan sin red (ya tenían try/catch).
 
 ### Siguiente: Fase 3
+
+### Fase 3 — HECHA (E2E 39/39, 06:00 CEST)
+- `lib/client/use-online.ts` (useSyncExternalStore, `true` en server/hidratación) y
+  `lib/client/use-pending-sync.ts` (¿hay cambios en cola para este peritaje?).
+- "Pendiente de subir" = completed && sin consecutivo && con cambios en cola (no solo "sin consecutivo":
+  hay finalizados viejos sin consecutivo). Resumen: banner "PDF pendiente: se genera al volver la señal"
+  (con red: "Subiendo el peritaje…"). Encabezado del wizard: "Falta subirlo…" y "Consecutivo X".
+- Sin red: "Previsualizar PDF", "Descargar PDF", "Firmar con QR" deshabilitados con texto; el panel de
+  firma remota muestra "Firma remota no disponible sin señal" y no hace polling. Toast de finalizar sin red.
+- Camino del PUT completed tardío: verificado en E2E (consecutivo + PDF en BD).
+- E2E: `page.setOfflineMode` deja `navigator.onLine=true` tras navegar → `installOnlineOverride` lo fuerza
+  con una bandera en sessionStorage (ver scripts/e2e-lib.mjs).
+
+### Siguiente: Fase 4 (401 ya se maneja en la cola; falta UI de re-login, guardia al cerrar sesión, iOS)

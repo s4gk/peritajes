@@ -38,6 +38,8 @@ import {
   type WalkaroundStageStepId,
 } from "@/lib/constants";
 import { findOption, minPhotosFor } from "@/lib/findings-catalog";
+import { useOnline } from "@/lib/client/use-online";
+import { useHasPendingSync } from "@/lib/client/use-pending-sync";
 import { downloadStoredPdf } from "@/lib/pdf-client";
 import { cn, formatDate } from "@/lib/utils";
 import type { InspectionData, InspectionEntry } from "@/lib/types";
@@ -352,7 +354,12 @@ function WizardInner() {
     editUnlocked,
     unlockEdit,
     id: inspectionId,
+    reportNumber,
   } = useInspection();
+  const online = useOnline();
+  const pendingSync = useHasPendingSync(inspectionId);
+  // Finalizado sin señal: todavía no hay PDF oficial en el server.
+  const awaitingServer = data.status === "completed" && !reportNumber && pendingSync;
   const [current, setCurrent] = React.useState<StepId>("vehicle");
   const [shortcutsOpen, setShortcutsOpen] = React.useState(false);
   const [pdfBusy, setPdfBusy] = React.useState(false);
@@ -627,6 +634,10 @@ function WizardInner() {
                 {data.completedAt
                   ? `Cerrado el ${formatDate(data.completedAt.slice(0, 10))}. `
                   : ""}
+                {reportNumber ? `Consecutivo ${reportNumber}. ` : ""}
+                {awaitingServer
+                  ? "Falta subirlo: el consecutivo y el PDF se generan al volver la señal. "
+                  : ""}
                 {!isReadOnly
                   ? "Al guardar los cambios se regenera el PDF oficial del cliente."
                   : canEditCompleted
@@ -641,7 +652,14 @@ function WizardInner() {
               variant="outline"
               size="sm"
               onClick={handleDownloadPdf}
-              disabled={pdfBusy}
+              disabled={pdfBusy || !online || awaitingServer}
+              title={
+                awaitingServer
+                  ? "El PDF se genera cuando el peritaje suba (al volver la señal)"
+                  : !online
+                    ? "Descargar el PDF necesita internet"
+                    : undefined
+              }
               className="h-9"
             >
               <Download className="mr-1.5 h-4 w-4" />

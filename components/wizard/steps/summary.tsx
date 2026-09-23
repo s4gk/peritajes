@@ -4,6 +4,7 @@ import * as React from "react";
 import {
   AlertTriangle,
   CheckCircle2,
+  CloudOff,
   Download,
   Eye,
   FileText,
@@ -47,6 +48,8 @@ import { useCanManage, useCurrentUser } from "@/components/panel/current-user";
 import { useOrgFeatures } from "@/components/panel/org-features";
 import { useToast } from "@/components/ui/toast";
 import { apiFetch } from "@/lib/client/api-client";
+import { useOnline } from "@/lib/client/use-online";
+import { useHasPendingSync } from "@/lib/client/use-pending-sync";
 import { downloadInspectionPdf, downloadStoredPdf } from "@/lib/pdf-client";
 import { analyze, computeHealth } from "@/lib/rules-engine";
 import {
@@ -93,6 +96,12 @@ const CONDITION_OPTIONS = [
 
 export function SummaryStep() {
   const { data, setData, id: inspectionId, reportNumber } = useInspection();
+  const online = useOnline();
+  const pendingSync = useHasPendingSync(inspectionId);
+  // Finalizado en el celular pero todavía sin subir: el consecutivo y el PDF
+  // oficial se generan en el server cuando llega. (Miramos la cola y no solo
+  // el consecutivo: hay finalizados viejos que nunca tuvieron consecutivo.)
+  const awaitingServer = data.status === "completed" && !reportNumber && pendingSync;
   const currentUser = useCurrentUser();
   // Dueño/admin pueden bajar el borrador sin marca de agua; el employee no.
   const canDownloadDraft = useCanManage();
@@ -475,7 +484,9 @@ export function SummaryStep() {
     }));
     toast.show({
       title: "Peritaje finalizado",
-      description: !data.conclusion.clientSignature
+      description: !online
+        ? "Quedó guardado en este celular. Sin señal: el consecutivo y el PDF se generan cuando vuelva la conexión (se sube solo)."
+        : !data.conclusion.clientSignature
         ? "Cerrado en solo lectura. Como no quedó firma del cliente, el PDF NO se envía por WhatsApp: descárgalo y mándalo tú."
         : data.vehicle.ownerPhone
           ? "Cerrado en solo lectura. Enviando el PDF al cliente por WhatsApp."
@@ -497,6 +508,29 @@ export function SummaryStep() {
           <code className="rounded border bg-background px-2 py-1 font-mono text-sm font-semibold tracking-wide">
             {reportNumber}
           </code>
+        </div>
+      )}
+
+      {awaitingServer && (
+        <div
+          data-testid="pdf-pending-offline"
+          className="flex items-start gap-3 rounded-lg border border-warning/40 bg-warning/10 px-4 py-3 text-sm"
+        >
+          {online ? (
+            <RefreshCw className="mt-0.5 h-4 w-4 shrink-0 animate-spin text-warning" />
+          ) : (
+            <CloudOff className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
+          )}
+          <div>
+            <div className="font-semibold text-warning">
+              {online ? "Subiendo el peritaje…" : "PDF pendiente: se genera al volver la señal"}
+            </div>
+            <div className="text-xs text-muted-foreground">
+              {online
+                ? "En unos segundos queda con su consecutivo oficial y el PDF listo."
+                : "El peritaje quedó finalizado y guardado en este celular. Cuando vuelva la conexión se sube solo, se le asigna el consecutivo y se genera el PDF. No cierres sesión hasta que suba."}
+            </div>
+          </div>
         </div>
       )}
 
@@ -534,7 +568,7 @@ export function SummaryStep() {
         </div>
       )}
 
-      {data.status === "completed" && data.vehicle.ownerPhone?.trim() && (
+      {data.status === "completed" && !awaitingServer && data.vehicle.ownerPhone?.trim() && (
         <WaDeliveryStatus
           status={waStatus}
           ownerPhone={data.vehicle.ownerPhone}
@@ -890,11 +924,18 @@ export function SummaryStep() {
             común — la única vía para entregar el PDF al cliente es cerrar el
             peritaje (que dispara el envío automático por WhatsApp). El admin
             (Vestel) mantiene el preview de borrador por debajo. */}
+        {!online && (
+          <p className="text-xs text-muted-foreground sm:mr-auto">
+            {data.status === "completed"
+              ? "Descargar el PDF necesita internet."
+              : "La vista previa del PDF necesita internet. Puedes finalizar igual: el PDF se genera cuando vuelva la señal."}
+          </p>
+        )}
         {data.status === "completed" && (
           <Button
             type="button"
             onClick={downloadOfficialPdf}
-            disabled={generating}
+            disabled={generating || !online || awaitingServer}
             size="lg"
             variant="outline"
           >
@@ -915,7 +956,7 @@ export function SummaryStep() {
           <Button
             type="button"
             onClick={downloadDraftPdf}
-            disabled={generating}
+            disabled={generating || !online}
             size="lg"
             variant="outline"
             title="Descargar el PDF sin marca de agua, sin cerrar el peritaje (aún sin consecutivo oficial)"
@@ -937,7 +978,7 @@ export function SummaryStep() {
           <Button
             type="button"
             onClick={generatePreviewPdf}
-            disabled={generating}
+            disabled={generating || !online}
             size="lg"
             variant="outline"
             title="Ver el PDF antes de finalizar (sale con marca de agua de previsualización)"
@@ -1137,6 +1178,7 @@ function RemoteSignaturePanel({
   const [state, setState] = React.useState<RemoteState | null>(null);
   const [busy, setBusy] = React.useState(false);
   const appliedOnceRef = React.useRef(false);
+  const online = useOnline();
 
   const phoneClean = ownerPhone.replace(/\D/g, "");
   const phoneValid =
@@ -1144,6 +1186,7 @@ function RemoteSignaturePanel({
     (phoneClean.length === 12 && phoneClean.startsWith("573"));
 
   async function fetchStatus() {
+    if (!navigator.onLine) return;
     try {
       const res = await apiFetch(
         `/api/inspections/${encodeURIComponent(inspectionId)}/request-remote-signature`,
@@ -1234,6 +1277,19 @@ function RemoteSignaturePanel({
         <strong className="text-foreground">¿Cliente no presente?</strong>{" "}
         Carga el teléfono del cliente en el paso <em>Vehículo</em> para
         habilitar el envío de un link de firma remota por WhatsApp.
+      </div>
+    );
+  }
+
+  if (!online) {
+    return (
+      <div className="flex items-start gap-2 rounded-md border border-dashed border-border bg-muted/30 p-3 text-xs text-muted-foreground">
+        <CloudOff className="mt-0.5 h-4 w-4 shrink-0" />
+        <div>
+          <strong className="text-foreground">Firma remota no disponible sin señal.</strong>{" "}
+          El link por WhatsApp se puede enviar cuando vuelva la conexión. Mientras
+          tanto, el cliente puede firmar aquí en pantalla.
+        </div>
       </div>
     );
   }

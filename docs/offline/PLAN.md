@@ -40,10 +40,10 @@ que el SW no atiende → offline cae en `offline.html`.
 - [x] `/api/owners/lookup` y cualquier fetch del wizard fallan en silencio offline.
 
 ### Fase 3 — Finalizar offline
-- [ ] Finalizar funciona offline; UI muestra "PDF pendiente: se genera al volver la señal".
-- [ ] Al sincronizar, el server asigna consecutivo y genera el PDF (verificar el camino
+- [x] Finalizar funciona offline; UI muestra "PDF pendiente: se genera al volver la señal".
+- [x] Al sincronizar, el server asigna consecutivo y genera el PDF (verificar el camino
       del PUT con status completed que llega tarde).
-- [ ] Vista previa PDF y firma remota deshabilitadas offline con mensaje claro.
+- [x] Vista previa PDF y firma remota deshabilitadas offline con mensaje claro.
 
 ### Fase 4 — Robustez
 - [ ] Sesión expirada al sincronizar (401/403): la cola NO se pierde; se pide re-login y

@@ -23,6 +23,7 @@ import sharp from "sharp";
 import {
   BASE,
   bodyText,
+  installOnlineOverride,
   login,
   pickFirstOption,
   setOffline,
@@ -270,6 +271,7 @@ try {
   browser = await puppeteer.launch({ headless: true, args: ["--no-sandbox"] });
   page = await browser.newPage();
   await page.setViewport({ width: 412, height: 915, isMobile: true, hasTouch: false });
+  await installOnlineOverride(page);
   // Recorridos de bienvenida como ya vistos: tapan la pantalla y se roban clics.
   await page.evaluateOnNewDocument(() => {
     const paths = ["/dashboard", "/peritajes", "/agenda", "/vehiculos", "/propietarios", "/intake"];
@@ -401,6 +403,7 @@ try {
   check(cImg, "la foto de la tarjeta de C se ve sin red");
   await page.goto(`${BASE}/peritajes`, { waitUntil: "load" });
 
+  if (process.env.E2E_DEBUG) console.log("   navigator.onLine (C) =", await page.evaluate(() => navigator.onLine));
   step("SIN RED: crear peritaje B desde /intake");
   await clickByText(page, "button, a", /Nuevo peritaje|Nuevo/);
   await page.waitForFunction(() => location.pathname === "/intake", { timeout: 20_000 });
@@ -485,6 +488,18 @@ try {
   // Condición general y (si está activo) concepto de asegurabilidad: Selects de Radix.
   const combos = await page.$$("button[role=combobox]");
   for (const c of combos) await pickFirstOption(page, c);
+  if (process.env.E2E_DEBUG) console.log("   navigator.onLine =", await page.evaluate(() => navigator.onLine));
+  const offlineUi = await page.evaluate(() => {
+    const btn = (re) => [...document.querySelectorAll("button")].find((b) => re.test(b.innerText));
+    return {
+      preview: btn(/Previsualizar PDF/)?.disabled ?? null,
+      qr: btn(/Firmar con QR/)?.disabled ?? null,
+      remoteMsg: /Firma remota no disponible sin señal/.test(document.body.innerText),
+      previewMsg: /vista previa del PDF necesita internet/.test(document.body.innerText),
+    };
+  });
+  check(offlineUi.preview === true && offlineUi.previewMsg, "sin red, 'Previsualizar PDF' está deshabilitado y lo explica");
+  check(offlineUi.qr === true && offlineUi.remoteMsg, "sin red, firma por QR y link remoto deshabilitados con mensaje");
   await clickByText(page, "button", /Firmar en esta pantalla/);
   // El canvas del pad de firma (el resumen tiene otros canvas de gráficos).
   await page.waitForSelector("canvas.touch-none", { timeout: 10_000 });
@@ -506,6 +521,7 @@ try {
   await clickByText(page, "button", /Finalizar peritaje/);
   await clickByText(page, "[role=dialog] button", /Sí, finalizar/);
   check(await waitForText(page, /Peritaje finalizado/), "la UI muestra 'Peritaje finalizado'");
+  check(await waitForText(page, /PDF pendiente: se genera al volver la señal/), "la UI avisa 'PDF pendiente: se genera al volver la señal'");
   await sleep(1200);
   const localB = await idbInspection(page, idB);
   check(localB.insp?.status === "completed", "B quedó completed en el celular");
@@ -536,6 +552,8 @@ try {
   check(!!rowB?.pdf_path && rowB.pdf_size > 0, `PDF generado (${rowB?.pdf_size} bytes)`);
   const { rows: rowsA } = await db.query("SELECT data->'vehicle'->>'owner' AS owner FROM inspections WHERE id = $1", [idA]);
   check(rowsA[0]?.owner?.toUpperCase() === "CLIENTE OFFLINE A", "la edición offline de A llegó a la BD");
+  check(await waitForText(page, new RegExp(rowB?.report_number ?? "PER-"), 30_000), "sin recargar, la pantalla muestra el consecutivo");
+  check(!(await waitForText(page, /PDF pendiente/, 1000)), "el aviso de PDF pendiente desaparece");
   const finalState = await idbInspection(page, idB);
   check(finalState.pending === 0, "la cola del celular quedó vacía");
 
