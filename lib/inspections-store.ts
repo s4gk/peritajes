@@ -68,6 +68,25 @@ let initPromise: Promise<void> | null = null;
  *  como fallback si el ID que buscan no está en IDB. */
 let serverFetchPromise: Promise<void> | null = null;
 
+/** Escrituras locales (IDB + cola) todavía en vuelo. Las escrituras son
+ *  fire-and-forget para no frenar la UI, pero antes de una navegación dura
+ *  sin red hay que esperarlas (ver `flushLocalWrites`). */
+const pendingWrites = new Set<Promise<unknown>>();
+function trackWrite<T>(p: Promise<T>): Promise<T> {
+  pendingWrites.add(p);
+  const done = () => pendingWrites.delete(p);
+  p.then(done, done);
+  return p;
+}
+
+/** Espera a que terminen las escrituras locales en vuelo (IDB + encolado de
+ *  mutaciones). No espera a la red. */
+export async function flushLocalWrites(): Promise<void> {
+  while (pendingWrites.size > 0) {
+    await Promise.allSettled([...pendingWrites]);
+  }
+}
+
 /** True si el peritaje ya fue finalizado y es inmutable: el lock se determina
  *  por `lockedAt` (campo nuevo) o por `data.status === "completed"` (fallback
  *  para filas legacy). Lo usamos del lado del cliente para no encolar
@@ -346,6 +365,15 @@ export function getInspection(id: string): StoredInspection | null {
   return memory.get(id) ?? null;
 }
 
+/** Encola la mutación (esperable vía `flushLocalWrites`) y dispara el sync en
+ *  segundo plano. */
+function enqueueAndSync(m: Parameters<typeof idbEnqueueMutation>[0]) {
+  trackWrite(idbEnqueueMutation(m).then(refreshPending))
+    .then(flushSyncQueue)
+    .then(requestBackgroundSync)
+    .catch(() => {});
+}
+
 export function createInspection(seed?: InspectionSeed): StoredInspection {
   const now = new Date().toISOString();
   const base = emptyInspection();
@@ -368,12 +396,8 @@ export function createInspection(seed?: InspectionSeed): StoredInspection {
   // Persistir local + encolar create. El IDB write es fire-and-forget para no
   // bloquear el navigate; si falla se va a ver al recargar (no estará en la
   // lista) y el perito puede recrear. En la práctica nunca falla.
-  idbPutInspection(insp).catch(() => {});
-  idbEnqueueMutation({ kind: "create", inspectionId: insp.id, data: insp.data })
-    .then(refreshPending)
-    .then(flushSyncQueue)
-    .then(requestBackgroundSync)
-    .catch(() => {});
+  trackWrite(idbPutInspection(insp)).catch(() => {});
+  enqueueAndSync({ kind: "create", inspectionId: insp.id, data: insp.data });
   return insp;
 }
 
@@ -397,24 +421,22 @@ export function saveInspectionData(id: string, data: InspectionData) {
     partial: undefined,
   };
   memory.set(id, updated);
-  idbPutInspection(updated).catch(() => {});
+  trackWrite(idbPutInspection(updated)).catch(() => {});
   // La queue coalesa updates al mismo id, así que tipear rápido no apila
   // mutations — solo pisa el último payload.
-  idbEnqueueMutation({ kind: "update", inspectionId: id, data })
-    .then(refreshPending)
-    .then(flushSyncQueue)
-    .then(requestBackgroundSync)
-    .catch(() => {});
+  enqueueAndSync({ kind: "update", inspectionId: id, data });
 }
 
 export function deleteInspection(id: string) {
   memory.delete(id);
-  idbDeleteInspection(id).catch(() => {});
+  trackWrite(idbDeleteInspection(id)).catch(() => {});
   // Limpiamos todas las mutations previas (updates/creates) para este ID
   // antes de encolar el delete — así no quedan huérfanas en la cola.
-  idbRemoveMutationsForInspection(id)
-    .then(() => idbEnqueueMutation({ kind: "delete", inspectionId: id }))
-    .then(refreshPending)
+  trackWrite(
+    idbRemoveMutationsForInspection(id)
+      .then(() => idbEnqueueMutation({ kind: "delete", inspectionId: id }))
+      .then(refreshPending),
+  )
     .then(flushSyncQueue)
     .then(requestBackgroundSync)
     .catch(() => {});
@@ -436,12 +458,8 @@ export function duplicateInspection(id: string): StoredInspection | null {
     },
   };
   memory.set(copy.id, copy);
-  idbPutInspection(copy).catch(() => {});
-  idbEnqueueMutation({ kind: "create", inspectionId: copy.id, data: copy.data })
-    .then(refreshPending)
-    .then(flushSyncQueue)
-    .then(requestBackgroundSync)
-    .catch(() => {});
+  trackWrite(idbPutInspection(copy)).catch(() => {});
+  enqueueAndSync({ kind: "create", inspectionId: copy.id, data: copy.data });
   return copy;
 }
 

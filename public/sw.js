@@ -23,11 +23,28 @@
 // existen en el server → login/SPA colgados). REGLA: todo deploy con cambios
 // de bundle debe venir con bump de VERSION, si no los celulares con la PWA
 // instalada nunca ven el banner de actualización.
-const VERSION = "v30";
+// v31 (sep 2026): modo 100% sin internet — cascarón del wizard, precache de
+// todos los assets del build y precalentamiento con la sesión del perito.
+const VERSION = "v31";
 const STATIC_CACHE = `perito-static-${VERSION}`;
 const RUNTIME_CACHE = `perito-runtime-${VERSION}`;
 const API_CACHE = `perito-api-${VERSION}`;
 const OFFLINE_URL = "/offline.html";
+
+// Modo sin internet. Estos valores se repiten en lib/offline-routes.ts (el SW
+// no puede importar módulos): si cambias uno, cambia el otro.
+//   - SHELL_URL: el HTML de /inspection/<id> es igual para cualquier id (el
+//     wizard lee el id de la URL en el cliente), así que sin red servimos este
+//     cascarón para cualquier peritaje.
+//   - OFFLINE_MANIFEST_URL: lista de TODOS los assets del build (+ OCR local)
+//     para precachearlos aunque el perito nunca haya abierto esas pantallas.
+//   - UID_MARKER: entrada del cache runtime que dice de qué usuario es el HTML
+//     cacheado (lleva nombre, rol, etc.). Si llega otro usuario, se bota.
+const SHELL_URL = "/inspection/offline-shell";
+const OFFLINE_MANIFEST_URL = "/api/offline/manifest";
+const UID_MARKER = "/__perito/offline-uid";
+// No re-precalentar más seguido que esto (cada carga del panel lo pide).
+const WARM_MIN_INTERVAL_MS = 10 * 60_000;
 
 // Rutas del panel que tratamos como "entry points" cuando el browser pide la
 // start_url offline y no hay match exacto. Si alguna de estas está cacheada
@@ -64,7 +81,88 @@ const PRECACHE_NAVIGATIONS = [
   "/intake",
   "/peritajes",
   "/agenda",
+  SHELL_URL,
 ];
+
+/** Baja las páginas del panel con la cookie de sesión y las guarda en el cache
+ *  runtime. Si no hay sesión (307 a /login) o falla la red, no guarda nada. */
+async function precacheNavigations() {
+  const runtime = await caches.open(RUNTIME_CACHE);
+  let ok = 0;
+  await Promise.all(
+    PRECACHE_NAVIGATIONS.map(async (url) => {
+      try {
+        const res = await fetch(url, {
+          credentials: "include",
+          redirect: "manual",
+          cache: "no-store",
+        });
+        if (res.ok && res.type !== "opaqueredirect") {
+          await runtime.put(url, res.clone());
+          ok += 1;
+        }
+      } catch {
+        /* sin red — el runtime se encarga después */
+      }
+    }),
+  );
+  return ok;
+}
+
+/** Precachea todos los assets estáticos del build actual (JS/CSS/fuentes) y el
+ *  OCR local. Son inmutables (llevan hash), así que solo baja los que falten. */
+async function precacheStaticAssets() {
+  let assets = [];
+  try {
+    const res = await fetch(OFFLINE_MANIFEST_URL, { cache: "no-store" });
+    if (!res.ok) return;
+    const json = await res.json();
+    assets = Array.isArray(json.assets) ? json.assets : [];
+  } catch {
+    return;
+  }
+  const cache = await caches.open(STATIC_CACHE);
+  // De a pocos para no saturar un celular con señal regular.
+  for (let i = 0; i < assets.length; i += 6) {
+    await Promise.all(
+      assets.slice(i, i + 6).map(async (url) => {
+        try {
+          if (await cache.match(url)) return;
+          const res = await fetch(url);
+          if (res.ok) await cache.put(url, res);
+        } catch {
+          /* best-effort */
+        }
+      }),
+    );
+  }
+}
+
+let lastWarmAt = 0;
+let warming = null;
+
+/** Deja lista la app para trabajar sin red con la sesión del usuario `uid`. */
+async function warmOffline(uid) {
+  const runtime = await caches.open(RUNTIME_CACHE);
+  const marker = await runtime.match(UID_MARKER);
+  const prevUid = marker ? await marker.text() : null;
+  if (uid && prevUid && prevUid !== uid) {
+    // Otro usuario en este navegador: el HTML cacheado tiene la identidad del
+    // anterior. Lo botamos antes de guardar nada nuevo.
+    await caches.delete(RUNTIME_CACHE);
+    await caches.delete(API_CACHE);
+  }
+  // Solo frenamos si el cache sigue siendo de este usuario: si no hay marcador
+  // (primer uso, o `wipeLocalUserData` lo borró al cerrar sesión) re-precalentamos.
+  if (prevUid === uid && Date.now() - lastWarmAt < WARM_MIN_INTERVAL_MS) return;
+  lastWarmAt = Date.now();
+  const ok = await precacheNavigations();
+  if (ok > 0 && uid) {
+    const fresh = await caches.open(RUNTIME_CACHE);
+    await fresh.put(UID_MARKER, new Response(uid));
+  }
+  await precacheStaticAssets();
+}
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
@@ -81,28 +179,13 @@ self.addEventListener("install", (event) => {
           }
         }),
       );
-      // Pre-cache best-effort de las navegaciones más importantes. Usamos un
-      // GET con credentials:include para enviar la cookie de sesión y traer
-      // el HTML autenticado (no el 307 a /login). Si el server devuelve algo
-      // distinto de 200, no lo metemos al cache — el runtime se encargará
-      // cuando el perito visite la ruta con red. Esto reduce drásticamente
-      // el caso "instalé y abro offline → pantalla blanca".
-      const runtime = await caches.open(RUNTIME_CACHE);
-      await Promise.all(
-        PRECACHE_NAVIGATIONS.map(async (url) => {
-          try {
-            const res = await fetch(url, {
-              credentials: "include",
-              redirect: "manual",
-            });
-            if (res.ok && res.type !== "opaqueredirect") {
-              await runtime.put(url, res.clone());
-            }
-          } catch {
-            /* sin red durante install — el runtime se encarga después */
-          }
-        }),
-      );
+      // Pre-cache best-effort de las navegaciones más importantes (con la
+      // cookie de sesión, si la hay) y de TODOS los assets del build, para que
+      // el wizard abra sin red aunque el perito nunca lo haya abierto con esta
+      // versión. Si el SW se instala sin sesión (en /login), el panel manda
+      // WARM_OFFLINE al cargar y esto se repite con la sesión viva.
+      await precacheNavigations();
+      await precacheStaticAssets();
       // Tras instalar tomamos control inmediatamente para que la próxima
       // navegación use el bundle nuevo, no el caché del SW anterior.
       await self.skipWaiting();
@@ -132,6 +215,16 @@ self.addEventListener("activate", (event) => {
 self.addEventListener("message", (event) => {
   if (event.data && event.data.type === "SKIP_WAITING") {
     self.skipWaiting();
+  }
+  if (event.data && event.data.type === "WARM_OFFLINE") {
+    if (!warming) {
+      warming = warmOffline(event.data.uid || null)
+        .catch(() => {})
+        .finally(() => {
+          warming = null;
+        });
+    }
+    event.waitUntil(warming);
   }
 });
 
@@ -277,6 +370,13 @@ async function networkFirstNavigation(event) {
 
   cached = await cache.match(url.pathname);
   if (cached) return cached;
+
+  // Wizard sin red: cualquier /inspection/<id> se atiende con el cascarón (el
+  // wizard lee el id de la URL y carga el peritaje desde IndexedDB).
+  if (url.pathname.startsWith("/inspection/")) {
+    cached = await cache.match(SHELL_URL);
+    if (cached) return cached;
+  }
 
   // Sin cache, segundo intento de red — un mini-retry barato. Esto es lo que
   // resuelve el caso típico "celular con señal débil tira el primer fetch":

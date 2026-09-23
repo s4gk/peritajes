@@ -35,6 +35,8 @@ import { compressImage } from "@/lib/client/image-compress";
 import { createInspection, initStore, saveInspectionData } from "@/lib/inspections-store";
 import { cn, makeId } from "@/lib/utils";
 import type { PeritajeKind, VehicleType } from "@/lib/types";
+import { navigateOfflineSafe } from "@/lib/client/offline-nav";
+import { inspectionUrl } from "@/lib/offline-routes";
 
 const KIND_ICONS: Record<PeritajeKind, React.ComponentType<{ className?: string }>> = {
   plus: ClipboardList,
@@ -104,7 +106,7 @@ export default function IntakePage() {
           ...created.data,
           extraPhotos: photos,
         });
-        router.replace(`/inspection/${created.id}`);
+        await navigateOfflineSafe(router, inspectionUrl(created.id), { replace: true });
       } catch (err) {
         console.error("[share-target] failed:", err);
       }
@@ -117,7 +119,7 @@ export default function IntakePage() {
   function startInspection() {
     if (!vehicleType || !kind) return;
     const created = createInspection({ kind, vehicleType });
-    router.push(`/inspection/${created.id}`);
+    void navigateOfflineSafe(router, inspectionUrl(created.id));
   }
 
   const canStart = !!vehicleType && !!kind;
@@ -129,7 +131,7 @@ export default function IntakePage() {
           <Button
             type="button"
             variant="ghost"
-            onClick={() => router.push("/peritajes")}
+            onClick={() => void navigateOfflineSafe(router, "/peritajes")}
             className="h-9 px-2 text-muted-foreground"
           >
             <ArrowLeft className="mr-1 h-4 w-4" /> Volver

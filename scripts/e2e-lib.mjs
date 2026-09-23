@@ -79,15 +79,22 @@ export async function login(page, username, password) {
   if (status !== 200) throw new Error(`login ${username} → ${status}`);
 }
 
-/** Espera a que el SW esté activo y controlando la página. */
+/** Espera a que el SW esté activo y controlando la página. La app puede
+ *  recargar sola al tomar control el SW (controllerchange), así que toleramos
+ *  que el contexto se destruya a mitad de camino. */
 export async function waitForSw(page) {
-  await page.evaluate(async () => {
-    await navigator.serviceWorker.ready;
-  });
-  if (!(await page.evaluate(() => !!navigator.serviceWorker.controller))) {
-    await page.reload({ waitUntil: "networkidle0" });
+  for (let i = 0; i < 20; i++) {
+    try {
+      await page.evaluate(async () => {
+        await navigator.serviceWorker.ready;
+      });
+      if (await page.evaluate(() => !!navigator.serviceWorker.controller)) return true;
+      await page.reload({ waitUntil: "networkidle0" });
+    } catch {
+      await sleep(500);
+    }
   }
-  return page.evaluate(() => !!navigator.serviceWorker.controller);
+  return false;
 }
 
 export const bodyText = (page, n = 400) =>
@@ -104,4 +111,31 @@ export async function pickFirstOption(page, trigger) {
   await sleep(300);
   await page.keyboard.press("Enter");
   await sleep(300);
+}
+
+/** Espera a que el SW deje la app lista sin red: cascarón del wizard en el
+ *  cache runtime y todos los assets del manifiesto en el cache static. */
+export async function waitForOfflineReady(page, timeoutMs = 60_000) {
+  const t0 = Date.now();
+  let last = null;
+  while (Date.now() - t0 < timeoutMs) {
+    last = await page.evaluate(async () => {
+      const keys = await caches.keys();
+      const runtimeKey = keys.find((k) => k.startsWith("perito-runtime-"));
+      const staticKey = keys.find((k) => k.startsWith("perito-static-"));
+      const shell = runtimeKey
+        ? !!(await (await caches.open(runtimeKey)).match("/inspection/offline-shell"))
+        : false;
+      const man = await fetch("/api/offline/manifest").then((r) => r.json()).catch(() => ({ assets: [] }));
+      let cached = 0;
+      if (staticKey) {
+        const c = await caches.open(staticKey);
+        for (const a of man.assets) if (await c.match(a)) cached++;
+      }
+      return { shell, cached, total: man.assets.length };
+    });
+    if (last.shell && last.total > 0 && last.cached === last.total) return last;
+    await sleep(1000);
+  }
+  throw new Error(`SW no quedó listo para offline: ${JSON.stringify(last)}`);
 }

@@ -53,6 +53,7 @@ import { LeaksStep } from "./steps/leaks";
 import { CompressionStep } from "./steps/compression";
 import { WalkaroundStep } from "./steps/walkaround";
 import { SummaryStep } from "./steps/summary";
+import { navigateOfflineSafe } from "@/lib/client/offline-nav";
 
 function countFindingsInRecord(record: Record<string, InspectionEntry>): number {
   let count = 0;
@@ -542,7 +543,9 @@ function WizardInner() {
         <p className="text-sm text-muted-foreground">
           El peritaje que intentas abrir no existe o fue eliminado.
         </p>
-        <Button onClick={() => router.push("/peritajes")}>Volver a peritajes</Button>
+        <Button onClick={() => void navigateOfflineSafe(router, "/peritajes")}>
+          Volver a peritajes
+        </Button>
       </div>
     );
   }
@@ -554,7 +557,7 @@ function WizardInner() {
           <Button
             variant="ghost"
             size="sm"
-            onClick={() => router.push("/peritajes")}
+            onClick={() => void navigateOfflineSafe(router, "/peritajes")}
             className="-ml-2 mb-1 h-8 gap-1 px-2 text-xs text-muted-foreground"
           >
             <ChevronLeft className="h-3.5 w-3.5" />

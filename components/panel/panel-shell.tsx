@@ -2,6 +2,7 @@
 
 import * as React from "react";
 
+import { OfflineWarmup } from "@/components/shared/offline-warmup";
 import { UIPreferencesProvider } from "@/components/wizard/ui-preferences";
 
 import {
@@ -40,6 +41,7 @@ export function PanelShell({
               </main>
             </div>
             <ProductTour setDrawerOpen={setOpen} />
+            <OfflineWarmup userId={user.id} />
           </div>
         </UIPreferencesProvider>
       </OrgFeaturesProvider>

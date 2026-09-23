@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { AlertTriangle, ChevronLeft, RefreshCw } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { navigateOfflineSafe } from "@/lib/client/offline-nav";
 
 export default function InspectionError({
   error,
@@ -44,7 +45,7 @@ export default function InspectionError({
           <RefreshCw className="h-4 w-4" />
           Reintentar
         </Button>
-        <Button variant="outline" onClick={() => router.push("/peritajes")} className="gap-1.5">
+        <Button variant="outline" onClick={() => void navigateOfflineSafe(router, "/peritajes")} className="gap-1.5">
           <ChevronLeft className="h-4 w-4" />
           Volver a peritajes
         </Button>

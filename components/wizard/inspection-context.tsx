@@ -25,6 +25,7 @@ import type {
   VehicleType,
 } from "@/lib/types";
 import { defaultOkValueFor } from "@/lib/findings-catalog";
+import { BEFORE_HARD_NAV_EVENT } from "@/lib/client/offline-nav";
 
 /** Merge una sección stored con su base aplicando backfill: si el stored tiene
  *  el item pero con `status` vacío (peritajes creados antes del default OK),
@@ -225,6 +226,26 @@ export function InspectionProvider({ id, children }: Props) {
   // Debounced persist with save-status indicator. Funciona igual para
   // borradores y finalizados — al editar un peritaje cerrado el server
   // conserva el estado "completed" y regenera el PDF oficial.
+  //
+  // `unsavedRef` guarda el último `data` que todavía no se persistió (dentro
+  // de la ventana del debounce). Si el perito sale del wizard antes de que
+  // venza — navegación SPA (desmontaje), navegación dura sin red o cierre de
+  // la pestaña — lo guardamos en ese momento para no perder el último cambio.
+  const unsavedRef = React.useRef<InspectionData | null>(null);
+  const persistNow = React.useCallback(() => {
+    const pending = unsavedRef.current;
+    if (!pending) return;
+    unsavedRef.current = null;
+    setSaveStatus("saving");
+    try {
+      saveInspectionData(id, pending);
+      setLastSavedAt(Date.now());
+      setSaveStatus("saved");
+    } catch {
+      setSaveStatus("idle");
+    }
+  }, [id]);
+
   React.useEffect(() => {
     if (!isHydrated || notFound) return;
     if (!dirtyRef.current) {
@@ -232,20 +253,21 @@ export function InspectionProvider({ id, children }: Props) {
       dirtyRef.current = true;
       return;
     }
+    unsavedRef.current = data;
     setSaveStatus("pending");
-    const timer = window.setTimeout(() => {
-      setSaveStatus("saving");
-      try {
-        saveInspectionData(id, data);
-        const now = Date.now();
-        setLastSavedAt(now);
-        setSaveStatus("saved");
-      } catch {
-        setSaveStatus("idle");
-      }
-    }, SAVE_DEBOUNCE_MS);
+    const timer = window.setTimeout(persistNow, SAVE_DEBOUNCE_MS);
     return () => window.clearTimeout(timer);
-  }, [id, data, isHydrated, notFound]);
+  }, [data, isHydrated, notFound, persistNow]);
+
+  React.useEffect(() => {
+    window.addEventListener(BEFORE_HARD_NAV_EVENT, persistNow);
+    window.addEventListener("pagehide", persistNow);
+    return () => {
+      window.removeEventListener(BEFORE_HARD_NAV_EVENT, persistNow);
+      window.removeEventListener("pagehide", persistNow);
+      persistNow();
+    };
+  }, [persistNow]);
 
   const setData = React.useCallback((updater: Updater<InspectionData>) => {
     setDataState((prev) => updater(prev));
