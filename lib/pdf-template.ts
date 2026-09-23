@@ -25,6 +25,7 @@ import { computeHealth, type HealthReport, type RiskReport, type SectionHealth }
 import {
   APPROVAL_THRESHOLD,
   applyManualPillarScores,
+  applyManualSectionScores,
   computePillars,
   insurabilityLabel,
   type PillarHealth,
@@ -1215,7 +1216,13 @@ function tireTone(pct: number): "success" | "warning" | "danger" {
   return "success";
 }
 
-function renderTires(data: InspectionData, headingHtml: string): string {
+function renderTires(
+  data: InspectionData,
+  headingHtml: string,
+  /** % manual del pilar "Llantas y accesorios". Si viene, es el número grande
+   *  del bloque; el promedio de labrado queda en la línea de detalle. */
+  manualPct?: number,
+): string {
   const t = data.tires;
   const positions: { key: string; label: string; pct: number }[] = [
     { key: "fl", label: "Delantera izq.", pct: t.frontLeft },
@@ -1277,7 +1284,7 @@ function renderTires(data: InspectionData, headingHtml: string): string {
           <span class="proc-hero-label">${escapeHtml(heroLabel)}</span>
           <span class="proc-hero-meta">${escapeHtml(heroMeta)}</span>
         </div>
-        <span class="proc-hero-pct">${avg}%</span>
+        <span class="proc-hero-pct">${typeof manualPct === "number" ? Math.max(0, Math.min(100, Math.round(manualPct))) : avg}%</span>
       </div>
       <div class="docs-grid tire-grid">${cells}</div>
       ${notesBlock}
@@ -1997,6 +2004,14 @@ export function renderReportHtml(
     computePillars(health, report),
     data.conclusion?.pillarScores,
   );
+  // El % del encabezado de cada sección también sale de la calificación manual
+  // del pilar al que pertenece; si no, el informe se contradice (78% en el
+  // resumen de Carrocería y 58% en la sección). Los pilares se arman ANTES con
+  // `health` (automático): ese queda como referencia y el manual lo pisa.
+  const sectionHealth = applyManualSectionScores(
+    health,
+    data.conclusion?.pillarScores,
+  );
   const findingsByLevel = {
     critical: report.findings.filter((f) => f.level === "critical"),
     warning: report.findings.filter((f) => f.level === "warning"),
@@ -2024,7 +2039,7 @@ export function renderReportHtml(
       heading(s.title),
       s.def,
       s.data,
-      health.bySection[s.sectionId],
+      sectionHealth.bySection[s.sectionId],
       s.sectionId,
       vehicleType,
     );
@@ -3669,7 +3684,7 @@ export function renderReportHtml(
   <!-- DETAILED SECTIONS -->
   ${sections.map(renderOneSection).join("")}
 
-  ${showTires ? renderTires(data, heading("Llantas")) : ""}
+  ${showTires ? renderTires(data, heading("Llantas"), data.conclusion?.pillarScores?.equipment) : ""}
 
   ${showAccessories ? renderAccessories(data, heading("Accesorios")) : ""}
 

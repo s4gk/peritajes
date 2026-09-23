@@ -288,6 +288,33 @@ export function applyManualPillarScores(
 }
 
 /**
+ * Lleva la calificación manual de cada pilar a las secciones que lo componen
+ * (`PILLARS[].sections`). El PDF pinta un % en el encabezado de cada sección;
+ * si ese número siguiera saliendo del cálculo automático, el informe mostraría
+ * 78% en el resumen de Carrocería y 58% en la sección Carrocería. Las secciones
+ * sin inspeccionar (healthPct null) siguen en null: no se inventa una nota
+ * donde no hubo captura. No muta el original.
+ */
+export function applyManualSectionScores(
+  health: HealthReport,
+  scores: PillarScores | undefined,
+): HealthReport {
+  let bySection: HealthReport["bySection"] | null = null;
+  for (const p of PILLARS) {
+    const v = scores?.[p.key];
+    if (typeof v !== "number") continue;
+    const pct = Math.max(0, Math.min(100, Math.round(v)));
+    for (const sectionKey of p.sections) {
+      const s = health.bySection[sectionKey];
+      if (!s || s.healthPct === null) continue;
+      bySection ??= { ...health.bySection };
+      bySection[sectionKey] = { ...s, healthPct: pct };
+    }
+  }
+  return bySection ? { ...health, bySection } : health;
+}
+
+/**
  * Reglas que imponen un piso de riesgo sin importar el agregado de pilares. Cada
  * gate apunta al pilar responsable y declara su severidad (el piso que fuerza).
  *
