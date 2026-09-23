@@ -442,6 +442,41 @@ try {
   check(rowsA[0]?.owner?.toUpperCase() === "CLIENTE OFFLINE A", "la edición offline de A llegó a la BD");
   const finalState = await idbInspection(page, idB);
   check(finalState.pending === 0, "la cola del celular quedó vacía");
+
+  step("Sin fugas entre usuarios: cerrar sesión y entrar con otro");
+  const cacheInfo = () =>
+    page.evaluate(async () => {
+      const keys = await caches.keys();
+      const rk = keys.find((k) => k.startsWith("perito-runtime-"));
+      if (!rk) return { runtime: false };
+      const c = await caches.open(rk);
+      const shell = await c.match("/inspection/offline-shell");
+      const marker = await c.match("/__perito/offline-uid");
+      return {
+        runtime: true,
+        shellUser: shell ? /Perito E2E/.test(await shell.text()) ? "perito" : "otro" : null,
+        marker: marker ? await marker.text() : null,
+      };
+    });
+  check((await cacheInfo()).shellUser === "perito", "antes de salir, el cascarón cacheado es del perito");
+  await page.goto(`${BASE}/peritajes`, { waitUntil: "networkidle0" });
+  await clickByText(page, "button", /Salir/);
+  await page.waitForFunction(() => location.pathname === "/login", { timeout: 20_000 });
+  const afterLogout = await cacheInfo();
+  check(!afterLogout.runtime || afterLogout.shellUser === null, "al cerrar sesión se borró el HTML cacheado (cascarón)");
+  const idbAfter = await page.evaluate(async () => {
+    const db = await new Promise((res) => { const r = indexedDB.open("perito-offline"); r.onsuccess = () => res(r.result); });
+    const n = await new Promise((res) => { const r = db.transaction("inspections").objectStore("inspections").count(); r.onsuccess = () => res(r.result); });
+    db.close();
+    return n;
+  });
+  check(idbAfter === 0, "al cerrar sesión se borraron los peritajes locales");
+  await login(page, "dueno", "dueno12345");
+  await page.goto(`${BASE}/peritajes`, { waitUntil: "networkidle0" });
+  await waitForOfflineReady(page);
+  const { rows: duenoRows } = await db.query("SELECT id FROM users WHERE username = 'dueno'");
+  const second = await cacheInfo();
+  check(second.shellUser === "otro" && second.marker === duenoRows[0].id, "el cascarón nuevo es del dueño (no hereda al perito)");
 } catch (err) {
   exitCode = 1;
   console.error("\nFALLÓ:", err?.message ?? err);

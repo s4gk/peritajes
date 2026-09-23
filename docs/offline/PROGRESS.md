@@ -14,3 +14,22 @@
   - `/intake` visitado con red → Iniciar → URL `/inspection/9qslhptr` pero muestra `offline.html`
     (Next intenta el RSC, falla y hace navegación dura; el SW no tiene esa URL).
   - `/inspection/abc123` directo → `offline.html`.
+
+### Fase 1 — HECHA (verificada con E2E)
+- Wizard: `app/(panel)/inspection/[id]/page.tsx` ya no lee `params`; `components/wizard/wizard-from-url.tsx`
+  toma el id de `usePathname()` (Next 14 inicializa el router desde `location.href`). Pinta
+  "Cargando inspección..." hasta montar para no romper la hidratación del cascarón.
+- SW v31: `SHELL_URL=/inspection/offline-shell` se sirve para cualquier `/inspection/*` sin red.
+  `precacheNavigations()` + `precacheStaticAssets()` en `install` y en el mensaje `WARM_OFFLINE`.
+- `/api/offline/manifest` (`lib/server/offline-manifest.ts`) lista `.next/static` + `public/tessdata`
+  + `public/tesseract`, codificando `[id]`→`%5Bid%5D` (sin eso el chunk del wizard no se encontraba).
+- `components/shared/offline-warmup.tsx` (en PanelShell) manda `WARM_OFFLINE` con el uid; el SW guarda
+  un marcador `/__perito/offline-uid` y bota el cache runtime si entra otro usuario. `wipeLocalUserData`
+  ya borraba `-runtime-`/`-api-` (el cascarón vive en runtime).
+- `lib/client/offline-nav.ts` `navigateOfflineSafe`: sin red → evento `perito:before-hard-nav`
+  (el wizard guarda lo del debounce) → `flushLocalWrites()` → navegación dura.
+- Bugs de la cola encontrados por el E2E y arreglados (ver commit 15dd286): orden por peritaje,
+  red/sesión no suman intentos, 404 recrea como borrador, Web Lock compartido con el SW.
+- E2E `node scripts/e2e-offline.mjs` → 28/28 OK (05:20 CEST).
+
+### Siguiente: Fase 2

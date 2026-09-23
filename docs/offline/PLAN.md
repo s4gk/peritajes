@@ -19,16 +19,16 @@ panel del dueño.
 ### Fase 1 — Abrir el wizard sin red (el bloqueo real)
 Hoy `/inspection/[id]` es SSR force-dynamic por id y `router.push` hace fetch RSC
 que el SW no atiende → offline cae en `offline.html`.
-- [ ] Que el wizard sea un shell que no dependa del id en el servidor (ej. leer el id
+- [x] Que el wizard sea un shell que no dependa del id en el servidor (ej. leer el id
       en cliente con `useParams`/`location`, y que el SW sirva un shell cacheado para
       cualquier `/inspection/*`), o solución equivalente.
-- [ ] Navegación offline hacia el wizard funciona desde `/intake` (nuevo) y desde la
+- [x] Navegación offline hacia el wizard funciona desde `/intake` (nuevo) y desde la
       lista `/peritajes` (existente): o el SW atiende las peticiones RSC con fallback,
       o se hace navegación dura cuando `!navigator.onLine`.
-- [ ] Precache en `install` del shell y de TODOS los chunks JS/CSS que necesita el
+- [x] Precache en `install` del shell y de TODOS los chunks JS/CSS que necesita el
       wizard (leer manifiestos de build de Next), para que funcione offline aunque el
       perito nunca haya abierto el wizard con esa versión.
-- [ ] Sin fugas entre usuarios: el shell cacheado lleva datos del usuario (PanelShell);
+- [x] Sin fugas entre usuarios: el shell cacheado lleva datos del usuario (PanelShell);
       cerrar sesión (`wipeLocalUserData`) debe borrar caches del SW.
 
 ### Fase 2 — Datos y OCR disponibles offline
