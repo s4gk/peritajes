@@ -136,6 +136,25 @@ async function seedUsers() {
   );
 }
 
+/** "Tarjeta de propiedad" sintética con texto, para que el OCR local tenga
+ *  algo que leer. */
+async function makeCard(file) {
+  const lines = [
+    "LICENCIA DE TRANSITO",
+    "PLACA  BBB222",
+    "MARCA  CHEVROLET",
+    "LINEA  ONIX",
+    "MODELO  2020",
+    "COLOR  BLANCO",
+  ];
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="760">
+    <rect width="100%" height="100%" fill="#ffffff"/>
+    ${lines.map((l, i) => `<text x="60" y="${110 + i * 105}" font-family="DejaVu Sans, Arial, sans-serif" font-size="64" fill="#000">${l}</text>`).join("")}
+  </svg>`;
+  await sharp(Buffer.from(svg)).jpeg({ quality: 90 }).toFile(file);
+  return file;
+}
+
 /** JPEG con ruido: pesa lo suficiente para pasar el chequeo de "foto usable". */
 async function makePhoto(file, seed) {
   const w = 640;
@@ -236,6 +255,7 @@ async function idbInspection(page, id) {
 const { mkdirSync } = await import("node:fs");
 mkdirSync(OUT_DIR, { recursive: true });
 const photo1 = await makePhoto(path.join(OUT_DIR, "foto1.jpg"), 1);
+const cardPhoto = await makeCard(path.join(OUT_DIR, "tarjeta.jpg"));
 
 let browser;
 let page;
@@ -273,7 +293,7 @@ try {
   await page.goto(`${BASE}/peritajes`, { waitUntil: "networkidle0" });
   check(await waitForSw(page), "el SW controla la página");
   const ready = await waitForOfflineReady(page);
-  ok(`cascarón del wizard y ${ready.cached}/${ready.total} assets precacheados`);
+  ok(`cascarón del wizard, ${ready.cached}/${ready.total} assets y ${ready.ocr} archivos del OCR precacheados`);
 
   step("Con red: crear borrador A (será el 'existente')");
   await page.goto(`${BASE}/intake`, { waitUntil: "networkidle0" });
@@ -350,10 +370,10 @@ try {
   }
   ok("campos llenados");
 
-  step("SIN RED: fotos de la tarjeta (frente y reverso)");
-  for (const [label, done] of [
-    [/Capturar reverso/, /Guardar reverso/],
-    [/Escanear frente/, /Guardar foto|Aplicar datos|Usar la foto/],
+  step("SIN RED: fotos de la tarjeta (frente con OCR local, reverso)");
+  for (const [label, done, file] of [
+    [/Capturar reverso/, /Guardar reverso/, photo1],
+    [/Escanear frente/, /Aplicar datos|Guardar foto|Usar la foto/, cardPhoto],
   ]) {
     await clickByText(page, "button", label);
     await sleep(500);
@@ -361,7 +381,21 @@ try {
       page.waitForFileChooser({ timeout: 10_000 }),
       clickByText(page, "[role=dialog] button", /Subir desde galer/, { trusted: true }),
     ]);
-    await chooser.accept([photo1]);
+    await chooser.accept([file]);
+    if (file === cardPhoto) {
+      // El OCR local tiene que correr sin red: o detecta campos o dice que no
+      // detectó nada — pero NO "No se pudo procesar la imagen" (motor caído).
+      const t = Date.now();
+      let dialogText = "";
+      while (Date.now() - t < 90_000) {
+        dialogText = await page.$eval("[role=dialog]", (d) => d.innerText).catch(() => "");
+        if (/Aplicar datos|No detecté|No se pudo procesar/.test(dialogText)) break;
+        await sleep(500);
+      }
+      check(!/No se pudo procesar/.test(dialogText) && /Aplicar datos|No detecté/.test(dialogText),
+        `el OCR local corrió sin red (${Math.round((Date.now() - t) / 1000)}s)`);
+      console.log("   OCR →", JSON.stringify(dialogText.replace(/\s+/g, " ").slice(0, 300)));
+    }
     await clickByText(page, "[role=dialog] button", done, { timeout: 90_000 });
     await sleep(600);
   }

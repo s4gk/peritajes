@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 
+import { OCR_CACHE_NAME, ocrAssetUrls } from "@/lib/ocr-assets";
 import { listOfflineAssets } from "@/lib/server/offline-manifest";
 
 export const dynamic = "force-dynamic";
@@ -12,7 +13,12 @@ export const dynamic = "force-dynamic";
 export async function GET() {
   const assets = await listOfflineAssets();
   return NextResponse.json(
-    { assets },
+    {
+      assets,
+      // OCR local: el SW lo guarda en un cache aparte que sobrevive a los
+      // cambios de VERSION del SW (pesa ~12 MB).
+      ocr: { cache: OCR_CACHE_NAME, assets: ocrAssetUrls() },
+    },
     { headers: { "cache-control": "no-store" } },
   );
 }

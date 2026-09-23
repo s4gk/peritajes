@@ -2,9 +2,12 @@
 
 import * as React from "react";
 
+import { detectOcrCoreFile } from "@/lib/client/ocr-core";
+
 /**
  * Le pide al service worker que deje lista la app para trabajar sin red:
- * cascarón del wizard, páginas del panel y todos los assets del build.
+ * cascarón del wizard, páginas del panel, todos los assets del build y el OCR
+ * local de la tarjeta.
  *
  * Se hace desde el panel (y no solo en el `install` del SW) porque el SW
  * suele instalarse en /login, ANTES de que exista la sesión: ahí el panel
@@ -21,7 +24,12 @@ export function OfflineWarmup({ userId }: { userId: string }) {
       try {
         const reg = await navigator.serviceWorker.ready;
         if (cancelled) return;
-        reg.active?.postMessage({ type: "WARM_OFFLINE", uid: userId });
+        reg.active?.postMessage({
+          type: "WARM_OFFLINE",
+          uid: userId,
+          // Qué core del OCR usa este celular: el SW precachea solo ese.
+          ocrCore: detectOcrCoreFile(),
+        });
       } catch {
         /* sin SW (dev) — nada que hacer */
       }

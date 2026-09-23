@@ -7,8 +7,8 @@ import path from "node:path";
  * Lista de URLs que el service worker precachea para que la app funcione sin
  * red aunque el perito nunca haya abierto una pantalla con esta versión:
  *   - todos los assets de `.next/static` del build actual (JS/CSS/fuentes; con
- *     hash, inmutables — pesan ~2 MB en total),
- *   - el OCR local: lang pack de Tesseract y archivos del worker/core.
+ *     hash, inmutables — pesan ~2 MB en total).
+ * El OCR local va aparte (ver lib/ocr-assets.ts): tiene su propio cache.
  *
  * Se lee del disco en cada request (es barato y así siempre corresponde al
  * build que está sirviendo el proceso).
@@ -19,12 +19,6 @@ export async function listOfflineAssets(rootDir: string = process.cwd()): Promis
   for (const rel of await walk(staticDir)) {
     if (rel.endsWith(".map")) continue;
     out.push(`/_next/static/${encodeAssetPath(rel)}`);
-  }
-  const publicDir = path.join(rootDir, "public");
-  for (const sub of ["tessdata", "tesseract"]) {
-    for (const rel of await walk(path.join(publicDir, sub))) {
-      out.push(`/${sub}/${encodeAssetPath(rel)}`);
-    }
   }
   return out.sort();
 }

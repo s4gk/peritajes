@@ -132,9 +132,15 @@ export async function waitForOfflineReady(page, timeoutMs = 60_000) {
         const c = await caches.open(staticKey);
         for (const a of man.assets) if (await c.match(a)) cached++;
       }
-      return { shell, cached, total: man.assets.length };
+      // OCR: worker + 1 core + lang pack en su cache propio.
+      let ocr = 0;
+      if (man.ocr && keys.includes(man.ocr.cache)) {
+        const c = await caches.open(man.ocr.cache);
+        ocr = (await c.keys()).length;
+      }
+      return { shell, cached, total: man.assets.length, ocr };
     });
-    if (last.shell && last.total > 0 && last.cached === last.total) return last;
+    if (last.shell && last.total > 0 && last.cached === last.total && last.ocr >= 3) return last;
     await sleep(1000);
   }
   throw new Error(`SW no quedó listo para offline: ${JSON.stringify(last)}`);
